@@ -1,0 +1,78 @@
+name: Build VoiceCut AAB for Play Store
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-aab:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+      
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      
+      - name: Install dependencies
+        working-directory: ./flutter_app
+        run: flutter pub get
+      
+      - name: Copy web app to assets
+        run: cp index.html flutter_app/assets/index.html
+      
+      - name: Build AAB (Release)
+        working-directory: ./flutter_app
+        run: flutter build appbundle --release --no-tree-shake-icons
+      
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: voicecut-studio-aab
+          path: flutter_app/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+      
+      - name: Create Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: flutter_app/build/app/outputs/bundle/release/app-release.aab
+          tag_name: v1.0.${{ github.run_number }}
+          name: VoiceCut Studio v1.0.${{ github.run_number }} - AAB for Play Store
+          body: |
+            ## VoiceCut Studio - Accessible Video Editor
+            
+            **Real AI Noise Reduction + Flutter AAB**
+            
+            This AAB is ready to upload to Google Play Console.
+            
+            ### What's included:
+            - Real AI noise reduction (RNNoise WASM + Dolby.io cloud fallback)
+            - Accessible video editor (TalkBack, VoiceOver, keyboard)
+            - Multi-track timeline, voice-over recording, export
+            
+            ### How to publish:
+            1. Download app-release.aab from artifacts
+            2. Go to https://play.google.com/console
+            3. Create app → Production → Upload AAB
+            4. See docs/PLAY_STORE_GUIDE.md
+            
+            ### Real AI:
+            - Local: RNNoise WASM (free, offline, no key)
+            - Cloud: Dolby.io (250 mins/month free, best quality) - add key in app Settings
+            
+            Built automatically via GitHub Actions.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
