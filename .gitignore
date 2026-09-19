@@ -1,0 +1,41 @@
+# VoiceCut Studio - Gitignore
+
+# Dependencies
+node_modules/
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.packages
+flutter_app/build/
+flutter_app/*.lock
+
+# API Keys - NEVER commit real keys
+server/.env
+server/uploads/
+server/enhanced/
+.env
+*.jks
+*.keystore
+android/key.properties
+android/app/upload-keystore.jks
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Flutter
+*.aab
+*.apk
+*.ipa
+.flutter/
+
+# Temp
+tmp/
+temp/

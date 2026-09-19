@@ -1,0 +1,10 @@
+# For Play Store AAB signing
+# 1. Generate keystore: keytool -genkey -v -keystore ~/voicecut-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias voicecut
+# 2. Copy this file to android/key.properties and fill passwords
+
+storePassword=YOUR_STORE_PASSWORD_HERE
+keyPassword=YOUR_KEY_PASSWORD_HERE
+keyAlias=voicecut
+storeFile=/home/user/voicecut-key.jks
+# For Windows: storeFile=C:\\Users\\YourName\\voicecut-key.jks
+# For Mac: storeFile=/Users/YourName/voicecut-key.jks
