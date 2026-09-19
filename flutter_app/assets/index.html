@@ -1043,6 +1043,16 @@
     $('#trimStartInput').value = formatTime(project.trimStart);
     $('#trimEndInput').value = formatTime(project.trimEnd || project.duration);
     $('#recordPosition').value = formatTime(video.currentTime || 0);
+    // FIX: Prevent double audio - mute video element when original audio muted or enhanced exists
+    if (video) {
+      video.muted = !!project.originalAudio.muted;
+      // If enhanced original exists, always mute video element to avoid double playback
+      if (project.originalAudio.enhanced) {
+        video.muted = true;
+      }
+      // Apply volume to video element as well
+      video.volume = project.originalAudio.muted ? 0 : project.originalAudio.volume / 100;
+    }
     renderTimeline();
     renderMusicTracks();
     renderVoiceoverTracks();
@@ -1414,6 +1424,14 @@
   }
 
   function syncAudioPlayback() {
+    // FIX: Ensure video element muted state matches project setting to prevent double audio
+    if (video) {
+      if (project.originalAudio.enhanced || project.originalAudio.muted) {
+        if (!video.muted) video.muted = true;
+      } else {
+        if (video.muted) video.muted = false;
+      }
+    }
     if (!project.clips.length) return;
     const currentTime = video.currentTime;
     const voiceActive = project.clips.some(c=>c.type==='voiceover' && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
