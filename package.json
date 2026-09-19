@@ -1,0 +1,27 @@
+{
+  "name": "voicecut-video-editor",
+  "version": "1.0.0",
+  "description": "VoiceCut Studio - Accessible video editor with real AI noise reduction, Flutter app, Play Store AAB",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx serve . -l 3000",
+    "dev": "npx serve . -l 3000",
+    "deploy": "gh-pages -d . --src \"index.html,README.md,flutter_app,server,docs\" -m \"Deploy VoiceCut Studio to GitHub Pages\"",
+    "deploy:server": "cd server && npm install && npm start",
+    "build": "echo 'Web app needs no build, open index.html'",
+    "build:flutter": "cd flutter_app && flutter pub get && flutter build appbundle --release",
+    "publish": "npm run deploy"
+  },
+  "keywords": ["video-editor", "accessible", "talkback", "voiceover", "ai", "noise-reduction", "flutter", "aab"],
+  "author": "VoiceCut Studio",
+  "license": "MIT",
+  "devDependencies": {
+    "gh-pages": "^6.1.1",
+    "serve": "^14.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mahicouragw/Voice-cut-video-editor-for-blinnds.git"
+  },
+  "homepage": "https://Mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/"
+}
