@@ -51,7 +51,8 @@ const path = require('node:path');
     const headers={'access-control-allow-origin':'*'};
     if(request.url().includes('/capabilities')){await route.fulfill({headers,contentType:'application/json',body:JSON.stringify({captions:true,isolation:true})});return;}
     if(request.url().includes('/api/isolate')){assert.equal(request.headers()['x-upload-consent'],'yes');await route.fulfill({headers,contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
-    captionCalls++;assert.equal(request.headers()['x-upload-consent'],'yes');
+    if(request.url().includes('/api/denoise-local')){assert.equal(request.headers()['x-upload-consent'],undefined);await route.fulfill({headers,contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
+    captionCalls++;assert.ok(request.url().includes('provider='));assert.equal(request.headers()['x-upload-consent'],'yes');
     if(providerFailure){await route.fulfill({status:503,headers,contentType:'application/json',body:JSON.stringify({error:'OpenAI quota reached. Check billing.'})});return;}
     await route.fulfill({headers,contentType:'application/json',body:JSON.stringify({language:'english',duration:3,cues:[{start:.2,end:2.7,text:'Hello from VoiceCut.'}]})});
   });
@@ -74,6 +75,11 @@ const path = require('node:path');
   await page.locator('#cleanupMethod').selectOption('elevenlabs');
   await page.locator('#btnAIEnhanceOriginal').click();await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor();
   assert.match(await page.locator('#aiResultText').textContent(),/ElevenLabs/);
+  await page.locator('#btnApplyEnhanced').click();
+  assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
+  await page.locator('#cleanupMethod').selectOption('deepfilter');
+  await page.locator('#btnAIEnhanceOriginal').click();await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor();
+  assert.match(await page.locator('#aiResultText').textContent(),/DeepFilterNet/);
   await page.locator('#btnApplyEnhanced').click();
   assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
   await page.locator('#btnSaveProject').click();await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('media saved'));
@@ -108,6 +114,6 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: upload, media persistence/reload, delete+undo, cleanup/apply, microphone recording, mocked cloud captions/isolation, caption edit/save/SRT/VTT, provider failure preservation, two real exports with verified caption burn-in, cancel, keyboard, filename escaping, delete storage');
+  console.log('PASS: upload, media persistence/reload, delete+undo, cleanup/apply, microphone recording, mocked cloud captions/isolation, local DeepFilterNet AI without cloud consent, caption provider selection, caption edit/save/SRT/VTT, provider failure preservation, two real exports with verified caption burn-in, cancel, keyboard, filename escaping, delete storage');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -91,7 +91,9 @@
     captionRequestBusy=true;$('#btnGenerateCaptions').disabled=true;$('#btnCancelCaptions').disabled=false;
     $('#captionStatus').textContent='Waiting for upload confirmation. Your existing captions are unchanged.';
     try{
-      const result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),file,'OpenAI automatic captions');
+      const provider=$('#captionProvider').value;
+      const providerNames={groq:'Groq Whisper automatic captions (free tier)',deepgram:'Deepgram Nova automatic captions',assemblyai:'AssemblyAI automatic captions',openai:'OpenAI automatic captions'};
+      const result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value)+'&provider='+encodeURIComponent(provider),file,providerNames[provider]||'automatic captions');
       if(epoch!==mediaEpoch||id!==project.id)throw new Error('Project changed during processing. Result was not applied.');
       let cues=VoiceCutCaptions.validate(result.cues,result.duration);
       if(clipSnapshot){
@@ -1321,7 +1323,7 @@
     $('#aiServerUrl').value = localStorage.getItem('voicecut_ai_server') || '';
   }
   setInterval(() => { if (Date.now() >= serverKeyExpiry) serverAccessKey = ''; }, 1000);
-  async function requestServer(endpoint,file=null,cloudName='') {
+  async function requestServer(endpoint,file=null,cloudName='',localName='ordinary FFmpeg filters (not AI)') {
     const server=localStorage.getItem('voicecut_ai_server');
     if(!server)throw new Error('Set your HTTPS server URL and SERVER_ACCESS_KEY in Settings first.');
     if(Date.now()>=serverKeyExpiry||!serverAccessKey)throw new Error('Enter your server access key in Settings again. Its browser copy expires after 15 minutes.');
@@ -1330,7 +1332,7 @@
     if(file){
       const message=cloudName
         ? `Upload this source file to your server and send its extracted audio to ${cloudName}? This may use paid API credits. Maximum 10 minutes and 100 MB. Server copies expire within 15 minutes; provider retention follows its own policy. Cancellation may not stop provider billing.`
-        : 'Upload this file to your server for ordinary FFmpeg filters (not AI)? Maximum 10 minutes and 100 MB. Server copies expire within 15 minutes.';
+        : `Upload this file to your server for ${localName}? Maximum 10 minutes and 100 MB. Server copies expire within 15 minutes.`;
       if(!confirm(message))throw new Error('Upload cancelled.');
     }
     const controller=new AbortController();currentRequest=controller;
@@ -1356,10 +1358,13 @@
     const method=$('#cleanupMethod').value;
     if(method==='local')return null;
     onProgress(5,'Waiting for server processing. No automatic paid retries.');
-    const blob=await requestServer(method==='elevenlabs'?'/api/isolate':'/enhance',file,method==='elevenlabs'?'ElevenLabs AI Voice Isolator':'');
+    const endpoint=method==='elevenlabs'?'/api/isolate':method==='deepfilter'?'/api/denoise-local':'/enhance';
+    const cloudName=method==='elevenlabs'?'ElevenLabs AI Voice Isolator':'';
+    const localName=method==='deepfilter'?'DeepFilterNet AI noise removal running on your own server (free, no provider key)':'ordinary FFmpeg filters (not AI)';
+    const blob=await requestServer(endpoint,file,cloudName,localName);
     if(!(blob instanceof Blob))throw new Error('The server did not return audio.');
     onProgress(100,'Processing complete. Compare with the original before applying.');
-    return {blob,provider:method==='elevenlabs'?'ElevenLabs AI Voice Isolator':'FFmpeg filters (not AI)'};
+    return {blob,provider:method==='elevenlabs'?'ElevenLabs AI Voice Isolator':method==='deepfilter'?'DeepFilterNet AI (free, your server)':'FFmpeg filters (not AI)'};
   }
   let currentRequest = null;
   // Project saving - SILENT auto-save to fix TalkBack chatter
@@ -1735,7 +1740,10 @@
       $('#apiKeysStatus').textContent='Checking server connection…';
       try {
         const status=await requestServer('/capabilities');
-        $('#apiKeysStatus').textContent=`Connected. OpenAI captions: ${status.captions?'key configured':'key missing'}. ElevenLabs isolation: ${status.isolation?'key configured':'key missing'}. This checks configuration only, not provider billing or key validity.`;
+        const configured=status.captionProviders||{openai:status.captions};
+        const names={groq:'Groq (free)',deepgram:'Deepgram',assemblyai:'AssemblyAI',openai:'OpenAI'};
+        const captions=Object.keys(names).map(id=>`${names[id]}: ${configured[id]?'key configured':'key missing'}`).join('. ');
+        $('#apiKeysStatus').textContent=`Connected. Captions — ${captions}. ElevenLabs isolation: ${status.isolation?'key configured':'key missing'}. DeepFilterNet local AI: ${status.deepFilterNet?'installed':'not installed'}. This checks configuration only, not provider billing or key validity.`;
       } catch(e) { $('#apiKeysStatus').textContent=e.message; }
     });
     $('#btnClearApiKeys').addEventListener('click', () => {

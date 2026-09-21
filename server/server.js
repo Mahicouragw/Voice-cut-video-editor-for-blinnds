@@ -6,9 +6,16 @@ const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
 const crypto=require('node:crypto');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const {createProviders,ServiceError}=require('./providers');
 const Captions=require('../web/captions');
+const VERSION='1.3.0';
+const CAPTION_LABELS={openai:'OpenAI whisper-1',groq:'Groq whisper-large-v3',deepgram:'Deepgram Nova-3',assemblyai:'AssemblyAI Universal'};
+const CAPTION_ENV={openai:'OPENAI_API_KEY',groq:'GROQ_API_KEY',deepgram:'DEEPGRAM_API_KEY',assemblyai:'ASSEMBLYAI_API_KEY'};
+function deepFilterAvailable() {
+  try{return spawnSync(process.env.DEEPFILTER_PATH||'deep_filter',['--version'],{timeout:10000,stdio:'ignore'}).status===0;}
+  catch{return false;}
+}
 const TTL=15*60*1000;
 const FORMATS='mov,matroska,webm,wav,mp3,flac,ogg,aac,aiff';
 function createApp(options={}) {
@@ -18,7 +25,7 @@ function createApp(options={}) {
   if(!origin||new URL(origin).origin!==origin||!origin.startsWith('https://')) throw new Error('ALLOWED_ORIGIN must be an exact HTTPS origin.');
   const origins=new Set([origin]);
   if(options.allowAndroid??process.env.ALLOW_ANDROID_APP==='true') origins.add('http://localhost:8080');
-  const providers=options.providers||createProviders({openaiKey:process.env.OPENAI_API_KEY,elevenKey:process.env.ELEVENLABS_API_KEY});
+  const providers=options.providers||createProviders({openaiKey:process.env.OPENAI_API_KEY,elevenKey:process.env.ELEVENLABS_API_KEY,groqKey:process.env.GROQ_API_KEY,deepgramKey:process.env.DEEPGRAM_API_KEY,assemblyKey:process.env.ASSEMBLYAI_API_KEY});
   const root=options.root||path.join(os.tmpdir(),'voicecut-temporary');
   const lifetime=Math.min(TTL,options.ttlMs||TTL); // Shorter deadline only used by tests.
   const jobsPerHour=Number(process.env.MAX_AI_REQUESTS_PER_HOUR||20);
@@ -43,18 +50,22 @@ function createApp(options={}) {
     if(a.length!==b.length||!crypto.timingSafeEqual(a,b)) return res.status(401).json({code:'ACCESS_KEY_REJECTED',error:'Server access key rejected. Re-enter the current SERVER_ACCESS_KEY in editor Settings.'});
     next();
   };
-  app.get('/health',(_,res)=>res.json({status:'ok',version:'1.2.0',temporaryFileTTLSeconds:900}));
-  app.get('/capabilities',authorized,(_,res)=>res.json({captions:providers.configured.captions,isolation:providers.configured.isolation,providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900}));
+  app.get('/health',(_,res)=>res.json({status:'ok',version:VERSION,temporaryFileTTLSeconds:900}));
+  app.get('/capabilities',authorized,(_,res)=>res.json({captions:providers.configured.captions,isolation:providers.configured.isolation,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900}));
   const storage=multer.diskStorage({destination:(req,_,cb)=>cb(null,req.workdir),filename:(_,__,cb)=>cb(null,'input')});
   const upload=multer({storage,limits:{fileSize:100*1024*1024,files:1,fields:0,parts:1}}).single('file');
   const job=(kind)=>async(req,res)=>{
     if(active) return res.status(429).json({code:'BUSY',error:'Another job is running. Wait before trying again.'});
-    const cloud=kind!=='filter';
+    const cloud=kind==='captions'||kind==='isolation';
     const language=String(req.query.language||'');
     if(language&&!/^[a-z]{2}$/.test(language)) return res.status(400).json({error:'Language must be blank for automatic detection or a two-letter code.'});
+    const provider=String(req.query.provider||'openai');
+    if(kind==='captions'&&!CAPTION_LABELS[provider]) return res.status(400).json({code:'UNKNOWN_PROVIDER',error:'Unknown caption provider.'});
     if(cloud) {
       if(req.headers['x-upload-consent']!=='yes') return res.status(400).json({code:'CONSENT_REQUIRED',error:'Explicit cloud-processing consent is required.'});
-      if(!providers.configured[kind==='captions'?'captions':'isolation']) return res.status(503).json({code:'KEY_NOT_CONFIGURED',error:(kind==='captions'?'OPENAI_API_KEY':'ELEVENLABS_API_KEY')+' is not configured on the server.'});
+      const captionKeys=providers.configured.captionProviders||{openai:providers.configured.captions};
+      const ready=kind==='captions'?captionKeys[provider]:providers.configured.isolation;
+      if(!ready) return res.status(503).json({code:'KEY_NOT_CONFIGURED',error:(kind==='captions'?CAPTION_ENV[provider]:'ELEVENLABS_API_KEY')+' is not configured on the server.'});
       attempts=attempts.filter(t=>Date.now()-t<3600000);
       if(attempts.length>=jobsPerHour) return res.status(429).json({code:'HOURLY_LIMIT',error:'The server hourly AI request limit was reached. Wait before retrying.'});
       attempts.push(Date.now());
@@ -100,14 +111,35 @@ function createApp(options={}) {
       const output=path.join(req.workdir,'processed.wav');
       if(kind==='filter') {
         await encode(req.file.path,output,['-af',align+',highpass=f=80,lowpass=f=12000,afftdn=nf=-25','-ar','48000','-ac','2','-c:a','pcm_s16le']);
+      } else if(kind==='deepfilter') {
+        // Free, keyless neural denoising that runs on your own server. No provider account or credits.
+        if(!deepFilterAvailable()) throw new ServiceError(503,'DEEPFILTER_MISSING','DeepFilterNet is not installed on this server. Rebuild the server image with deep_filter, or choose ElevenLabs cloud isolation instead.');
+        const noisy=path.join(req.workdir,'noisy.wav');
+        await encode(req.file.path,noisy,['-af',align,'-ar','48000','-ac','1','-c:a','pcm_s16le']);
+        const outdir=path.join(req.workdir,'df');fs.mkdirSync(outdir);
+        await new Promise((resolve,reject)=>{
+          if(signal.aborted) return reject(new ServiceError(408,'EXPIRED','Request expired.'));
+          const child=spawn(process.env.DEEPFILTER_PATH||'deep_filter',[noisy,'-o',outdir],{stdio:'ignore'});
+          children.add(child);
+          const onAbort=()=>child.kill('SIGKILL');
+          signal.addEventListener('abort',onAbort,{once:true});
+          child.on('error',()=>{children.delete(child);signal.removeEventListener('abort',onAbort);reject(new ServiceError(503,'DEEPFILTER_MISSING','DeepFilterNet could not start on this server.'));});
+          child.on('close',code=>{children.delete(child);signal.removeEventListener('abort',onAbort);code===0?resolve():reject(new ServiceError(502,'DENOISE_FAILED','DeepFilterNet could not process this audio. Your original media is unchanged.'));});
+        });
+        signal.throwIfAborted();
+        const found=fs.readdirSync(outdir).filter(f=>f.toLowerCase().endsWith('.wav')).map(f=>path.join(outdir,f)).sort((a,b)=>fs.statSync(b).size-fs.statSync(a).size);
+        if(!found.length) throw new ServiceError(502,'DENOISE_FAILED','DeepFilterNet produced no audio. Your original media is unchanged.');
+        await encode(found[0],output,['-ar','48000','-ac','2','-c:a','pcm_s16le']);
+        const denoised=Number(await run(process.env.FFPROBE_PATH||'ffprobe',['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',output]));
+        if(!Number.isFinite(denoised)||Math.abs(denoised-duration)>Math.max(0.5,duration*0.01))throw new ServiceError(502,'DURATION_MISMATCH','Denoised audio duration changed unexpectedly. Not applied; retain your original.');
       } else {
         const speech=path.join(req.workdir,'speech.mp3');
         await encode(req.file.path,speech,['-af',align,'-ar',kind==='captions'?'16000':'48000','-ac',kind==='captions'?'1':'2','-c:a','libmp3lame','-b:a',kind==='captions'?'64k':'192k']);
         if(kind==='captions') {
-          const transcript=await providers.transcribe(speech,language,signal);signal.throwIfAborted();
+          const transcript=await providers.transcribe(speech,language,signal,provider);signal.throwIfAborted();
           let cues;
           try {cues=Captions.fromTranscript(transcript,duration);}catch {throw new ServiceError(502,'INVALID_TIMESTAMPS','Provider returned invalid caption timestamps. Please retry or add captions manually.');}
-          res.json({provider:'OpenAI whisper-1',language:String(transcript.language||language||'und').slice(0,60),duration,cues,reviewRequired:true});cleanup();return;
+          res.json({provider:CAPTION_LABELS[provider],language:String(transcript.language||language||'und').slice(0,60),duration,cues,reviewRequired:true});cleanup();return;
         }
         const audio=await providers.isolate(speech,signal);signal.throwIfAborted();
         const isolated=path.join(req.workdir,'isolated-audio');fs.writeFileSync(isolated,audio);
@@ -117,7 +149,7 @@ function createApp(options={}) {
         if(!Number.isFinite(processed)||Math.abs(processed-duration)>Math.max(0.5,duration*0.01))throw new ServiceError(502,'DURATION_MISMATCH','Isolated audio duration changed unexpectedly. Not applied; retain your original.');
       }
       signal.throwIfAborted();
-      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':'ElevenLabs-Voice-Isolator');
+      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':kind==='deepfilter'?'DeepFilterNet-local-AI':'ElevenLabs-Voice-Isolator');
       res.download(output,'processed.wav',cleanup);
     }catch(e){
       if(!closed&&!res.headersSent)res.status(e instanceof ServiceError?e.status:502).json({code:e.code||'PROCESSING_FAILED',error:e instanceof ServiceError?e.message:'Processing failed or timed out. Your original media is unchanged. No automatic paid retry was made.'});
@@ -127,6 +159,7 @@ function createApp(options={}) {
   app.post('/enhance',authorized,job('filter'));
   app.post('/api/captions',authorized,job('captions'));
   app.post('/api/isolate',authorized,job('isolation'));
+  app.post('/api/denoise-local',authorized,job('deepfilter'));
   return app;
 }
 if(require.main===module){

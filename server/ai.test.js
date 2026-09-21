@@ -36,3 +36,29 @@ test('absolute deadline aborts pending provider request and removes files',async
 test('missing provider configuration gives actionable error without calling a provider',async()=>{
  const t=await setup({configured:{captions:false,isolation:false}});try{const r=await fetch(t.url+'/api/captions',upload(t.fixture));assert.equal(r.status,503);assert.match((await r.json()).error,/OPENAI_API_KEY/);assert.deepEqual(fs.readdirSync(t.root),[]);}finally{await t.close();}
 });
+test('caption provider selection passes through; unknown or unconfigured providers fail safely',async()=>{
+ let seen='';const p={configured:{captions:true,isolation:false,captionProviders:{openai:false,groq:true,deepgram:false,assemblyai:false}},async transcribe(file,language,signal,provider){seen=provider;assert.ok(fs.statSync(file).size>0);return {language:'english',words:[{word:'hello',start:.1,end:.8}]};}};
+ const t=await setup(p);try{
+  const capabilities=await(await fetch(t.url+'/capabilities',{headers:{Authorization:'Bearer '+KEY}})).json();
+  assert.deepEqual(capabilities.captionProviders,{openai:false,groq:true,deepgram:false,assemblyai:false});assert.equal(typeof capabilities.deepFilterNet,'boolean');
+  let r=await fetch(t.url+'/api/captions?provider=groq',upload(t.fixture));assert.equal(r.status,200);assert.equal(seen,'groq');assert.match((await r.json()).provider,/Groq/);
+  r=await fetch(t.url+'/api/captions?provider=nope',upload(t.fixture));assert.equal(r.status,400);assert.equal((await r.json()).code,'UNKNOWN_PROVIDER');
+  r=await fetch(t.url+'/api/captions?provider=openai',upload(t.fixture));assert.equal(r.status,503);assert.match((await r.json()).error,/OPENAI_API_KEY/);
+  assert.equal(seen,'groq');assert.deepEqual(fs.readdirSync(t.root),[]);
+ }finally{await t.close();}
+});
+test('DeepFilterNet denoising needs no cloud consent; missing binary gives install guidance',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'vc-df-'));
+ const fake=path.join(dir,'deep_filter');
+ fs.writeFileSync(fake,'#!/bin/sh\nif [ "$1" = "--version" ]; then echo deep_filter-test; exit 0; fi\nout="";prev="";for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done\ncp "$1" "$out/enhanced.wav"\n');fs.chmodSync(fake,0o700);
+ const old=process.env.DEEPFILTER_PATH;process.env.DEEPFILTER_PATH=fake;
+ const local=(fixture)=>{const body=new FormData();body.append('file',new Blob([fs.readFileSync(fixture)]),'audio.wav');return {method:'POST',body,headers:{Authorization:'Bearer '+KEY}};};
+ const t=await setup({configured:{captions:false,isolation:false}});try{
+  let r=await fetch(t.url+'/api/denoise-local',local(t.fixture));
+  assert.equal(r.status,200);assert.equal(r.headers.get('x-processing-method'),'DeepFilterNet-local-AI');assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0,4).toString(),'RIFF');
+  process.env.DEEPFILTER_PATH='/nonexistent/deep_filter';
+  r=await fetch(t.url+'/api/denoise-local',local(t.fixture));
+  assert.equal(r.status,503);assert.equal((await r.json()).code,'DEEPFILTER_MISSING');
+  assert.deepEqual(fs.readdirSync(t.root),[]);
+ }finally{await t.close();if(old===undefined)delete process.env.DEEPFILTER_PATH;else process.env.DEEPFILTER_PATH=old;fs.rmSync(dir,{recursive:true,force:true});}
+});
