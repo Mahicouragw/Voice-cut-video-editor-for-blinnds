@@ -1,0 +1,9 @@
+*
+!server/
+!server/server.js
+!server/providers.js
+!server/package.json
+!server/package-lock.json
+!web/
+!web/captions.js
+!Dockerfile

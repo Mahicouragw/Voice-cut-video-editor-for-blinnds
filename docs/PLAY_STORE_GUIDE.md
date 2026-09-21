@@ -1,245 +1,84 @@
-# 📱 Flutter App + AAB for Google Play Store - Step by Step
+# Android: test APK first, signed AAB second
 
-You want VoiceCut Studio as a Flutter app with AAB file for Play Store. Here's how.
+The Android source was analyzed with Flutter 3.41.2 with **no issues found**. This workspace did not build an APK/AAB or run Android/TalkBack on a physical phone. The workflow builds it in GitHub, where Android SDK tooling is available. A successful compile is not the same as a tested app or guaranteed Play Store approval.
 
-## Option 1: Fast WebView Wrapper (Recommended for now - 5 mins)
+## 1. Build a debug APK without secrets
+1. Merge the repair after pull-request checks pass. The PR also requests an Android debug build.
+2. Open [repository Actions](https://github.com/Mahicouragw/Voice-cut-video-editor-for-blinnds/actions).
+3. Select **Android test APK and optional signed AAB** → **Run workflow**.
+4. Choose main. Leave **signed_release** unchecked.
+5. Wait for green. A pending job is not a completed build. Android is allowed up to 30 minutes for dependency downloads/build; this is separate from the 15-minute sign-in/file-retention policies.
+6. Open the run → **Artifacts** → download `voicecut-debug-apk-NOT-FOR-PLAY-STORE`. Unzip it.
+7. On your Android test device, install `app-debug.apk` if you are comfortable granting install permission to your file manager. Never disable Play Protect globally.
+8. Test picking media, TalkBack traversal, permission denial, recording, persistence after reopening, editing, cancelling export and saving/sharing an actual video. WebView codecs vary by Android version.
 
-This wraps your existing `index.html` web app inside Flutter. It works, has file picker, microphone, and can be published.
+The app uses a device-local server to load packaged assets. This is not a remote website or media upload. Microphone permission is requested only when recording, and only for the trusted app origin. It does not request broad media-library/storage permissions; file selection uses the WebView/system picker.
 
-### Prerequisites
+## 2. Important limitations
+- Version 1.2 adds captions and a native SRT/VTT sharing handler. Rebuild the APK to include these assets; updating Pages does not update a previously installed APK.
+- Export capability depends on Android WebView and device performance. Update Android System WebView/Chrome where available.
+- Native sharing is limited to 40 MB to bound the binary bridge's memory usage. Open the deployed website in Chrome for bigger exports.
+- Native temporary sharing files are deleted after the system share sheet completes. Process termination can interrupt this; Android may retain cache until cleared. The 15-minute server-file rule is about the optional processing server, not files saved by the user to their device.
+- The shared media must be tested with the receiving app. Make sure a copied file opens after VoiceCut closes.
+- The updated backend accepts the packaged Android origin only when `ALLOW_ANDROID_APP=true`, as configured in the supplied blueprint. Provider keys stay on that backend; enter only its separate server access key in the app.
+- Retain the correct application ID and signing key if updating an app that already exists in Play Console. The new scaffold defaults to `com.mahicouragw.voicecut_studio`. **Do not replace a previously published app's ID blindly.**
 
-1. Install Flutter: https://docs.flutter.dev/get-started/install
-   - Download Flutter SDK, add to PATH
-   - Run `flutter doctor` to check
+## 3. Create an upload keystore, privately
+Skip this if you already have the upload key for an existing Play app. Reuse its correct key instead. Java's `keytool` is available in Codespaces if a JDK is installed, or on a computer with a JDK.
 
-2. Install Android Studio + Android SDK
-
-### Steps
-
-#### 1. Create Flutter Project (We already did for you)
-
-We created `flutter_app/` folder with:
-
-- `pubspec.yaml` - dependencies
-- `lib/main.dart` - WebView that loads VoiceCut
-- `android/app/src/main/AndroidManifest.xml` - permissions for mic, storage
-
-#### 2. Get Dependencies
-
+In a trusted terminal outside public source files:
 ```bash
+keytool -genkeypair -v \
+  -keystore "$HOME/voicecut-upload.jks" \
+  -alias voicecut \
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+It asks for a strong keystore password, your certificate details and possibly a key password. Keep the passwords and `.jks` file in a private backup. Losing the upload key complicates updates. Do not include passwords in shell command lines.
+
+Generate a Base64 file:
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import base64
+key = Path.home() / 'voicecut-upload.jks'
+(Path.home() / 'voicecut-upload.base64').write_text(base64.b64encode(key.read_bytes()).decode())
+print('Private Base64 file created in your home folder. Do not commit it.')
+PY
+```
+Open that private file locally and copy its entire one-line contents. Base64 is not encryption: treat it exactly like the keystore.
+
+## 4. Paste four secrets in GitHub, not source code
+Open [Repository Actions secrets](https://github.com/Mahicouragw/Voice-cut-video-editor-for-blinnds/settings/secrets/actions).
+
+Select **New repository secret** once for each row:
+
+| Secret name — copy exactly | Value to paste |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Entire contents of the private Base64 file |
+| `ANDROID_KEYSTORE_PASSWORD` | Password entered for the keystore |
+| `ANDROID_KEY_ALIAS` | `voicecut`, unless you used another alias |
+| `ANDROID_KEY_PASSWORD` | Password for that alias, often the same as the keystore password |
+
+Secret values are not printed by the signing helper. They are exposed to the release step only, not to the Pages build or pull-request builds. The job removes the temporary keystore afterward.
+
+## 5. Request a signed AAB
+1. Actions → **Android test APK and optional signed AAB** → Run workflow.
+2. Select main, check **signed_release**, and run.
+3. If a secret is missing or the Gradle template does not match, the signing script fails instead of presenting an unsigned/debug-signed bundle as a release.
+4. Download the `voicecut-signed-aab` artifact from the successful run.
+5. Check the application ID, versionCode and signing certificate. For an existing Play app, the build number must exceed the current versionCode. The workflow uses its run number; adjust `--build-number` if it is too low for your existing app.
+6. Open [Google Play Console](https://play.google.com/console), use internal testing first, and upload the AAB. Complete store listing, app access instructions, privacy/data-safety disclosures, content rating, developer verification and all applicable testing requirements. Google determines availability and approval. Developer registration may cost money.
+7. Describe features accurately: local filters are not AI; optional OpenAI captions and ElevenLabs AI isolation require a configured backend, separate provider accounts and upload consent. Disclose cloud processing and any charges in the listing/privacy information.
+
+The workflow does not publish to Play automatically and does not create public GitHub releases. Debug and signed artifacts have seven-day retention, **not** 15-minute retention. GitHub artifacts use day-based retention controls; the requested 15-minute timer applies to authorization waits and server media, not build artifacts.
+
+## 6. Local Android build
+Install Flutter 3.41.2, Java 17 and an Android SDK, then:
+```bash
+bash scripts/prepare-android.sh
 cd flutter_app
 flutter pub get
+flutter analyze --no-fatal-infos
+flutter build apk --debug
 ```
-
-#### 3. Copy Web App to Assets
-
-```bash
-cp ../index.html assets/index.html
-# Already done in our template
-```
-
-#### 4. Test on Emulator/Device
-
-```bash
-flutter run
-# Select Android device/emulator
-```
-
-You should see VoiceCut Studio running inside Flutter, with:
-- File picker for video/audio
-- Microphone permission for voice-over recording
-- Real AI noise reduction (local WASM works offline)
-
-#### 5. Build AAB for Play Store
-
-```bash
-flutter build appbundle --release
-```
-
-AAB file will be at:
-```
-build/app/outputs/bundle/release/app-release.aab
-```
-
-This AAB is what you upload to Play Console.
-
-#### 6. Create Keystore (First Time Only)
-
-For Play Store, you need signing key:
-
-```bash
-keytool -genkey -v -keystore ~/voicecut-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias voicecut
-```
-
-Then create `android/key.properties`:
-
-```
-storePassword=YOUR_STORE_PASSWORD
-keyPassword=YOUR_KEY_PASSWORD
-keyAlias=voicecut
-storeFile=/home/user/voicecut-key.jks
-```
-
-We have template at `flutter_app/android/key.properties.example`
-
-#### 7. Publish to Play Store
-
-1. Go to **https://play.google.com/console**
-2. Sign up as developer ($25 one-time)
-3. Click **Create app**
-   - Name: `VoiceCut Studio - Accessible Video Editor`
-   - Package: `com.voicecut.studio` (must match pubspec)
-   - Category: Video Players & Editors
-   - Accessibility declaration: Yes, designed for TalkBack/VoiceOver
-4. Go to **Production → Create new release**
-5. Upload `app-release.aab`
-6. Fill listing:
-   - Short description: `Accessible video editor for TalkBack, VoiceOver, screen readers. AI noise reduction.`
-   - Full description: Use README
-   - Screenshots: Take from web app
-   - Privacy policy: Required - say local processing, no data collection
-7. Content rating, pricing, etc.
-8. **Review → Rollout**
-
----
-
-## Option 2: Full Native Flutter (Advanced, Later)
-
-For fully native (not WebView), you need:
-
-- `ffmpeg_kit_flutter` for video editing
-- `flutter_sound` for audio
-- `onnxruntime` for local AI (DeepFilterNet)
-- Custom timeline UI in Flutter
-
-We can build this after WebView version is live.
-
----
-
-## What We Included in flutter_app/
-
-### pubspec.yaml
-
-```yaml
-name: voicecut_studio
-description: Accessible video editor with real AI noise reduction
-publish_to: 'none'
-version: 1.0.0+1
-
-environment:
-  sdk: '>=3.0.0 <4.0.0'
-
-dependencies:
-  flutter:
-    sdk: flutter
-  flutter_inappwebview: ^6.0.0  # WebView with file upload + mic support
-  file_picker: ^8.0.0
-  permission_handler: ^11.0.0
-  path_provider: ^2.1.0
-
-flutter:
-  assets:
-    - assets/index.html
-    - assets/real-ai-worker.js
-```
-
-### lib/main.dart - Key Features
-
-- Loads `assets/index.html` in InAppWebView
-- Handles file picker: when user clicks Upload Video, opens native Android file picker
-- Handles microphone permission for voice-over recording
-- JavaScript channels for accessibility announcements
-- Keeps TalkBack/VoiceOver working inside WebView
-- Offline: works without internet (local AI)
-
-### Android Permissions (AndroidManifest.xml)
-
-```xml
-<uses-permission android:name="android.permission.RECORD_AUDIO" />
-<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-<uses-permission android:name="android.permission.INTERNET" /> <!-- for cloud AI fallback -->
-```
-
----
-
-## Build AAB Without Android Studio (CI/CD)
-
-We included GitHub Actions workflow `.github/workflows/build-aab.yml` that builds AAB automatically when you push to GitHub.
-
-1. Push your repo to GitHub
-2. Go to Actions tab → Build AAB workflow → Run
-3. Download AAB artifact
-4. Upload to Play Console
-
-No need for local Android Studio!
-
----
-
-## Play Store Listing - Accessibility Focus
-
-Since your app is accessibility-first, highlight in Play Store:
-
-**Title:** VoiceCut Studio - Accessible Video Editor
-
-**Short desc:** Video editor designed for TalkBack, VoiceOver, screen readers. Real AI noise reduction.
-
-**Full desc:**
-```
-VoiceCut Studio is the first video editor built from day one for accessibility.
-
-♿ Designed for:
-- Android TalkBack
-- iOS VoiceOver  
-- Keyboard navigation
-- Screen readers
-
-🎬 Features:
-- Upload MP4/MOV/WebM
-- Multi-track timeline (video, music, voice-over)
-- Independent volume, mute, fade per clip
-- Voice-over recording with countdown
-- Trim, split, duplicate, move clips with exact time input (no drag needed)
-- Real AI noise reduction (removes fan, AC, traffic, hum, hiss, preserves speech)
-- Voice ducking (music quiets when voice plays)
-- Export 720p/1080p/4K with mixed audio
-
-🤖 Real AI (not fake filters):
-- Local: RNNoise + DeepFilterNet WASM (free, offline, private)
-- Cloud: Dolby.io Enhance (250 mins/month free, studio quality)
-
-🔒 Privacy: All processing local by default, no upload without consent.
-
-Simple Mode for beginners, Advanced Mode for pros.
-```
-
-**Tags:** video editor, accessible, TalkBack, VoiceOver, screen reader, AI noise reduction, voice over
-
----
-
-## Checklist Before Publishing
-
-- [ ] Test on real Android device with TalkBack on
-- [ ] Test file upload, voice recording, export
-- [ ] Create privacy policy (required) - say: "No data collected, local processing"
-- [ ] Create app icon (512x512)
-- [ ] Create feature graphic (1024x500)
-- [ ] Take 2-3 screenshots
-- [ ] Build release AAB with signing key
-- [ ] Upload to Play Console → Production
-
----
-
-## Need Help?
-
-If `flutter build appbundle` fails:
-- Run `flutter doctor -v` and fix issues
-- Ensure Android SDK installed
-- Ensure keystore created
-
-For real AI in Flutter:
-- Local WASM works in WebView (no extra setup)
-- For cloud Dolby.io, add internet permission (already added) and API key in app settings
-
-We can help build AAB via GitHub Actions if local build fails.
+The preparation script supplies Gradle wrapper/scaffold files and copies the current website assets; do not maintain a separate hand-edited HTML copy. Signed builds are intentionally not configured by default. Use the reviewed release workflow or provide the same secrets privately for the signing helper.
