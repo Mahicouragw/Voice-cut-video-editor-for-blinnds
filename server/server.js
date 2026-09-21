@@ -1,309 +1,136 @@
-/**
- * VoiceCut Studio - Real AI Noise Reduction Server
- * Provides REAL AI noise reduction, not fake filters
- * 
- * Supports:
- * - Dolby.io Enhance API (best quality, 250 mins free)
- * - Hugging Face Inference API (free)
- * - Replicate API (free credits)
- * - Local fallback with ffmpeg + noisereduce
- * 
- * This server is OPTIONAL - local WASM works without it
- * But for best quality, use Dolby.io
- */
-
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const axios = require('axios');
-const FormData = require('form-data');
-const fs = require('fs');
-const path = require('path');
-
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Storage for uploaded files
-const upload = multer({
-  dest: 'uploads/',
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB
-});
-
-// Ensure uploads dir exists
-if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
-if (!fs.existsSync('enhanced')) fs.mkdirSync('enhanced');
-
-/**
- * REAL AI: Dolby.io Media Enhance API
- * This is REAL AI that removes ALL background noise and enhances voice to studio quality
- * Free: 250 minutes/month
- */
-async function enhanceWithDolbyIO(filePath, apiKey) {
-  console.log('🤖 Starting Dolby.io REAL AI enhancement...');
-  
-  const formData = new FormData();
-  formData.append('file', fs.createReadStream(filePath));
-  
-  // Dolby Enhance API - real AI processing
-  const response = await axios.post('https://api.dolby.com/media/enhance', formData, {
-    headers: {
-      'x-api-key': apiKey,
-      ...formData.getHeaders()
-    },
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity
+'use strict';
+require('dotenv').config({path:require('node:path').join(__dirname,'.env'),quiet:true});
+const express=require('express');
+const multer=require('multer');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const crypto=require('node:crypto');
+const {spawn}=require('node:child_process');
+const {createProviders,ServiceError}=require('./providers');
+const Captions=require('../web/captions');
+const TTL=15*60*1000;
+const FORMATS='mov,matroska,webm,wav,mp3,flac,ogg,aac,aiff';
+function createApp(options={}) {
+  const key=options.key||process.env.SERVER_ACCESS_KEY;
+  if(!key||key.length<32) throw new Error('Set SERVER_ACCESS_KEY to a random secret of at least 32 characters.');
+  const origin=options.origin||process.env.ALLOWED_ORIGIN;
+  if(!origin||new URL(origin).origin!==origin||!origin.startsWith('https://')) throw new Error('ALLOWED_ORIGIN must be an exact HTTPS origin.');
+  const origins=new Set([origin]);
+  if(options.allowAndroid??process.env.ALLOW_ANDROID_APP==='true') origins.add('http://localhost:8080');
+  const providers=options.providers||createProviders({openaiKey:process.env.OPENAI_API_KEY,elevenKey:process.env.ELEVENLABS_API_KEY});
+  const root=options.root||path.join(os.tmpdir(),'voicecut-temporary');
+  const lifetime=Math.min(TTL,options.ttlMs||TTL); // Shorter deadline only used by tests.
+  const jobsPerHour=Number(process.env.MAX_AI_REQUESTS_PER_HOUR||20);
+  if(!Number.isInteger(jobsPerHour)||jobsPerHour<1||jobsPerHour>100) throw new Error('MAX_AI_REQUESTS_PER_HOUR must be between 1 and 100.');
+  fs.mkdirSync(root,{recursive:true,mode:0o700});
+  for(const name of fs.readdirSync(root)) fs.rmSync(path.join(root,name),{recursive:true,force:true});
+  const app=express();app.disable('x-powered-by');
+  let active=false,attempts=[];
+  app.use((req,res,next)=>{
+    res.set('Cache-Control','no-store');res.set('X-Content-Type-Options','nosniff');
+    if(req.headers.origin) {
+      if(!origins.has(req.headers.origin)) return res.status(403).json({code:'ORIGIN_DENIED',error:'This website origin is not allowed by your server.'});
+      res.set('Access-Control-Allow-Origin',req.headers.origin);res.set('Vary','Origin');
+      res.set('Access-Control-Allow-Headers','Authorization, Content-Type, X-Upload-Consent');
+      res.set('Access-Control-Allow-Methods','POST, GET, OPTIONS');
+    }
+    if(req.method==='OPTIONS') return res.sendStatus(204);
+    next();
   });
-
-  const jobId = response.data.job_id;
-  console.log(`Dolby job created: ${jobId}`);
-
-  // Poll for completion
-  let jobStatus = 'pending';
-  let enhancedUrl = null;
-  
-  while (jobStatus !== 'completed' && jobStatus !== 'failed') {
-    await new Promise(r => setTimeout(r, 2000));
-    
-    const statusResponse = await axios.get(`https://api.dolby.com/media/enhance?job_id=${jobId}`, {
-      headers: { 'x-api-key': apiKey }
+  const authorized=(req,res,next)=>{
+    const a=Buffer.from(req.headers.authorization||''),b=Buffer.from('Bearer '+key);
+    if(a.length!==b.length||!crypto.timingSafeEqual(a,b)) return res.status(401).json({code:'ACCESS_KEY_REJECTED',error:'Server access key rejected. Re-enter the current SERVER_ACCESS_KEY in editor Settings.'});
+    next();
+  };
+  app.get('/health',(_,res)=>res.json({status:'ok',version:'1.2.0',temporaryFileTTLSeconds:900}));
+  app.get('/capabilities',authorized,(_,res)=>res.json({captions:providers.configured.captions,isolation:providers.configured.isolation,providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900}));
+  const storage=multer.diskStorage({destination:(req,_,cb)=>cb(null,req.workdir),filename:(_,__,cb)=>cb(null,'input')});
+  const upload=multer({storage,limits:{fileSize:100*1024*1024,files:1,fields:0,parts:1}}).single('file');
+  const job=(kind)=>async(req,res)=>{
+    if(active) return res.status(429).json({code:'BUSY',error:'Another job is running. Wait before trying again.'});
+    const cloud=kind!=='filter';
+    const language=String(req.query.language||'');
+    if(language&&!/^[a-z]{2}$/.test(language)) return res.status(400).json({error:'Language must be blank for automatic detection or a two-letter code.'});
+    if(cloud) {
+      if(req.headers['x-upload-consent']!=='yes') return res.status(400).json({code:'CONSENT_REQUIRED',error:'Explicit cloud-processing consent is required.'});
+      if(!providers.configured[kind==='captions'?'captions':'isolation']) return res.status(503).json({code:'KEY_NOT_CONFIGURED',error:(kind==='captions'?'OPENAI_API_KEY':'ELEVENLABS_API_KEY')+' is not configured on the server.'});
+      attempts=attempts.filter(t=>Date.now()-t<3600000);
+      if(attempts.length>=jobsPerHour) return res.status(429).json({code:'HOURLY_LIMIT',error:'The server hourly AI request limit was reached. Wait before retrying.'});
+      attempts.push(Date.now());
+    }
+    active=true;
+    req.workdir=fs.mkdtempSync(path.join(root,'job-'));
+    const controller=new AbortController(),signal=controller.signal;
+    const children=new Set();let closed=false,deadline;
+    const cleanup=()=>{
+      if(closed)return;closed=true;clearTimeout(deadline);controller.abort();
+      children.forEach(child=>child.kill('SIGKILL'));
+      fs.rmSync(req.workdir,{recursive:true,force:true});active=false;
+    };
+    deadline=setTimeout(()=>{
+      if(!res.headersSent) res.status(408).json({code:'EXPIRED',error:'The processing deadline expired. No automatic paid retry was made.'});
+      else res.destroy();
+      cleanup();req.destroy();
+    },lifetime);
+    req.on('aborted',cleanup);res.on('close',cleanup);
+    const run=(binary,args)=>new Promise((resolve,reject)=>{
+      if(signal.aborted)return reject(new ServiceError(408,'EXPIRED','Request expired.'));
+      const child=spawn(binary,args,{stdio:['ignore','pipe','ignore']});children.add(child);let output='';
+      child.stdout.on('data',data=>{output+=data;if(output.length>2*1024*1024)child.kill('SIGKILL');});
+      child.on('error',()=>reject(new ServiceError(503,'PROCESSOR_UNAVAILABLE','FFmpeg or FFprobe is unavailable on the server.')));
+      child.on('close',code=>{children.delete(child);if(code!==0)reject(new ServiceError(422,'BAD_MEDIA','Unsupported, damaged or unreadable audio/video.'));else resolve(output);});
     });
-    
-    jobStatus = statusResponse.data.status;
-    console.log(`Dolby job status: ${jobStatus} - ${statusResponse.data.progress || 0}%`);
-    
-    if (jobStatus === 'completed') {
-      enhancedUrl = statusResponse.data.result?.url;
-      break;
-    }
-    if (jobStatus === 'failed') {
-      throw new Error(`Dolby enhancement failed: ${JSON.stringify(statusResponse.data)}`);
-    }
-  }
-
-  if (!enhancedUrl) throw new Error('Dolby enhancement failed - no URL');
-
-  // Download enhanced file
-  const enhancedPath = path.join('enhanced', `dolby_${Date.now()}_${path.basename(filePath)}.wav`);
-  const writer = fs.createWriteStream(enhancedPath);
-  
-  const downloadResponse = await axios({
-    method: 'GET',
-    url: enhancedUrl,
-    responseType: 'stream'
-  });
-  
-  downloadResponse.data.pipe(writer);
-  
-  await new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
-
-  console.log(`✅ Dolby REAL AI enhancement complete: ${enhancedPath}`);
-  return enhancedPath;
-}
-
-/**
- * REAL AI: Hugging Face Inference API
- * Uses Resemble Enhance or similar models
- */
-async function enhanceWithHuggingFace(filePath, apiKey) {
-  console.log('🤖 Starting Hugging Face REAL AI enhancement...');
-  
-  const audioData = fs.readFileSync(filePath);
-  
-  // Use Resemble Enhance model - real AI speech enhancement
-  const response = await axios.post(
-    'https://api-inference.huggingface.co/models/resemble-ai/resemble-enhance',
-    audioData,
-    {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'audio/wav'
-      },
-      responseType: 'arraybuffer'
-    }
-  );
-
-  const enhancedPath = path.join('enhanced', `hf_${Date.now()}_${path.basename(filePath)}.wav`);
-  fs.writeFileSync(enhancedPath, response.data);
-  
-  console.log(`✅ Hugging Face REAL AI enhancement complete: ${enhancedPath}`);
-  return enhancedPath;
-}
-
-/**
- * REAL AI: Replicate API
- */
-async function enhanceWithReplicate(filePath, apiKey) {
-  console.log('🤖 Starting Replicate REAL AI enhancement...');
-  
-  // Upload file to Replicate (simplified - in real app you'd upload to storage first)
-  // This is a placeholder for Replicate's API flow
-  // Replicate requires file URL, so you'd need to upload to S3 or similar
-  
-  // For demo, we'll throw and fallback to local
-  throw new Error('Replicate requires file hosting - use Dolby or Hugging Face for now');
-}
-
-// API Routes
-
-// Health check
-app.get('/', (req, res) => {
-  res.json({
-    message: 'VoiceCut Studio Real AI Noise Reduction Server',
-    status: 'running',
-    realAI: true,
-    notFake: true,
-    providers: {
-      dolby: !!process.env.DOLBY_API_KEY ? 'configured (BEST QUALITY, 250 mins free)' : 'not configured - get free key from dolby.io',
-      huggingface: !!process.env.HUGGINGFACE_API_KEY ? 'configured' : 'not configured - get free key from huggingface.co',
-      replicate: !!process.env.REPLICATE_API_KEY ? 'configured' : 'not configured'
-    },
-    endpoints: {
-      'POST /enhance': 'Upload audio/video, get REAL AI enhanced audio back',
-      'POST /enhance/dolby': 'Force Dolby.io enhancement',
-      'POST /enhance/huggingface': 'Force Hugging Face enhancement'
-    }
-  });
-});
-
-// Main enhancement endpoint - tries best available REAL AI
-app.post('/enhance', upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded. Use field name "file"' });
-  }
-
-  const filePath = req.file.path;
-  const originalName = req.file.originalname;
-  let enhancedPath = null;
-  let provider = null;
-
-  try {
-    console.log(`📥 Received file: ${originalName} (${req.file.size} bytes)`);
-
-    // Try Dolby.io first (best quality, real AI)
-    if (process.env.DOLBY_API_KEY) {
-      try {
-        enhancedPath = await enhanceWithDolbyIO(filePath, process.env.DOLBY_API_KEY);
-        provider = 'dolby.io (REAL AI - Studio Quality)';
-      } catch (e) {
-        console.warn('Dolby failed, trying next:', e.message);
+    const encode=async(input,output,args)=>{
+      await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',input,'-vn','-t','600',...args,'-y',output]);signal.throwIfAborted();
+    };
+    try {
+      await new Promise((resolve,reject)=>upload(req,res,error=>error?reject(new ServiceError(error.code==='LIMIT_FILE_SIZE'?413:400,'UPLOAD_REJECTED','Upload rejected: '+error.code)):resolve()));
+      signal.throwIfAborted();
+      if(!req.file)throw new ServiceError(400,'NO_FILE','Send one media file using field name file.');
+      const info=JSON.parse(await run(process.env.FFPROBE_PATH||'ffprobe',['-v','error','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-show_streams','-show_format','-of','json',req.file.path]));
+      if(!info.streams?.some(s=>s.codec_type==='audio'))throw new ServiceError(422,'NO_AUDIO','This media has no readable audio track.');
+      let duration=Number(info.format?.duration||info.streams.find(s=>s.codec_type==='audio')?.duration);
+      if(!Number.isFinite(duration)||duration<=0)throw new ServiceError(422,'UNKNOWN_DURATION','Could not determine audio duration. Export to MP4/WAV and try again.');
+      if(duration>600.05)throw new ServiceError(413,'MEDIA_TOO_LONG','Use a source recording no longer than 10 minutes. Longer recordings are rejected, not silently truncated.');
+      duration=Math.min(duration,600);
+      const audioStream=info.streams.find(s=>s.codec_type==='audio');
+      const offset=Math.max(0,(Number(audioStream.start_time)||0)-(Number(info.format?.start_time)||0));
+      const align=`adelay=${Math.round(offset*1000)}:all=1,apad,atrim=duration=${duration.toFixed(6)},asetpts=N/SR/TB`;
+      const output=path.join(req.workdir,'processed.wav');
+      if(kind==='filter') {
+        await encode(req.file.path,output,['-af',align+',highpass=f=80,lowpass=f=12000,afftdn=nf=-25','-ar','48000','-ac','2','-c:a','pcm_s16le']);
+      } else {
+        const speech=path.join(req.workdir,'speech.mp3');
+        await encode(req.file.path,speech,['-af',align,'-ar',kind==='captions'?'16000':'48000','-ac',kind==='captions'?'1':'2','-c:a','libmp3lame','-b:a',kind==='captions'?'64k':'192k']);
+        if(kind==='captions') {
+          const transcript=await providers.transcribe(speech,language,signal);signal.throwIfAborted();
+          let cues;
+          try {cues=Captions.fromTranscript(transcript,duration);}catch {throw new ServiceError(502,'INVALID_TIMESTAMPS','Provider returned invalid caption timestamps. Please retry or add captions manually.');}
+          res.json({provider:'OpenAI whisper-1',language:String(transcript.language||language||'und').slice(0,60),duration,cues,reviewRequired:true});cleanup();return;
+        }
+        const audio=await providers.isolate(speech,signal);signal.throwIfAborted();
+        const isolated=path.join(req.workdir,'isolated-audio');fs.writeFileSync(isolated,audio);
+        // Decode provider output to a known format and reject gross timing drift.
+        await encode(isolated,output,['-ar','48000','-ac','2','-c:a','pcm_s16le']);
+        const processed=Number(await run(process.env.FFPROBE_PATH||'ffprobe',['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',output]));
+        if(!Number.isFinite(processed)||Math.abs(processed-duration)>Math.max(0.5,duration*0.01))throw new ServiceError(502,'DURATION_MISMATCH','Isolated audio duration changed unexpectedly. Not applied; retain your original.');
       }
+      signal.throwIfAborted();
+      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':'ElevenLabs-Voice-Isolator');
+      res.download(output,'processed.wav',cleanup);
+    }catch(e){
+      if(!closed&&!res.headersSent)res.status(e instanceof ServiceError?e.status:502).json({code:e.code||'PROCESSING_FAILED',error:e instanceof ServiceError?e.message:'Processing failed or timed out. Your original media is unchanged. No automatic paid retry was made.'});
+      cleanup();
     }
-
-    // Try Hugging Face
-    if (!enhancedPath && process.env.HUGGINGFACE_API_KEY) {
-      try {
-        enhancedPath = await enhanceWithHuggingFace(filePath, process.env.HUGGINGFACE_API_KEY);
-        provider = 'huggingface (REAL AI - Resemble Enhance)';
-      } catch (e) {
-        console.warn('Hugging Face failed:', e.message);
-      }
-    }
-
-    // Try Replicate
-    if (!enhancedPath && process.env.REPLICATE_API_KEY) {
-      try {
-        enhancedPath = await enhanceWithReplicate(filePath, process.env.REPLICATE_API_KEY);
-        provider = 'replicate (REAL AI)';
-      } catch (e) {
-        console.warn('Replicate failed:', e.message);
-      }
-    }
-
-    if (!enhancedPath) {
-      // No API keys configured - return helpful error with guide
-      return res.status(400).json({
-        error: 'No REAL AI API keys configured',
-        message: 'This is not fake - we need real AI keys to do real noise reduction',
-        howToFix: {
-          step1: 'Get free Dolby.io key from https://dolby.io/dashboard (250 mins free, best quality)',
-          step2: 'Add to .env file: DOLBY_API_KEY=your_key',
-          step3: 'Restart server: npm start',
-          step4: 'Try again - you will hear REAL noise removal, not fake filters'
-        },
-        freeKeysGuide: 'See docs/API_KEYS_GUIDE.md for step-by-step',
-        localFallback: 'For 100% free local AI (no key), use the web app directly - it has RNNoise WASM which is real AI but runs locally'
-      });
-    }
-
-    // Return enhanced file
-    res.download(enhancedPath, `enhanced_${originalName}`, (err) => {
-      // Cleanup
-      try {
-        fs.unlinkSync(filePath);
-        // Keep enhanced file for a while, or delete after download
-        // fs.unlinkSync(enhancedPath);
-      } catch {}
-    });
-
-    console.log(`✅ Enhancement complete via ${provider}: ${originalName}`);
-
-  } catch (error) {
-    console.error('Enhancement error:', error);
-    
-    // Cleanup
-    try { fs.unlinkSync(filePath); } catch {}
-    if (enhancedPath) try { fs.unlinkSync(enhancedPath); } catch {}
-
-    res.status(500).json({
-      error: 'REAL AI enhancement failed',
-      details: error.message,
-      provider: provider || 'none',
-      suggestion: 'Check API keys, free tier limits, and internet connection. See docs/API_KEYS_GUIDE.md'
-    });
-  }
-});
-
-// Force Dolby endpoint
-app.post('/enhance/dolby', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file' });
-  if (!process.env.DOLBY_API_KEY) return res.status(400).json({ error: 'Dolby API key not configured. Get free from dolby.io' });
-
-  try {
-    const enhancedPath = await enhanceWithDolbyIO(req.file.path, process.env.DOLBY_API_KEY);
-    res.download(enhancedPath, `dolby_enhanced_${req.file.originalname}`);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Force Hugging Face endpoint
-app.post('/enhance/huggingface', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file' });
-  if (!process.env.HUGGINGFACE_API_KEY) return res.status(400).json({ error: 'HF key not configured' });
-
-  try {
-    const enhancedPath = await enhanceWithHuggingFace(req.file.path, process.env.HUGGINGFACE_API_KEY);
-    res.download(enhancedPath, `hf_enhanced_${req.file.originalname}`);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`
-🎬 VoiceCut Studio - REAL AI Noise Reduction Server
-====================================================
-✅ Running on http://localhost:${PORT}
-✅ REAL AI, not fake filters
-
-Providers:
-${process.env.DOLBY_API_KEY ? '✅' : '❌'} Dolby.io (BEST, 250 mins free) - ${process.env.DOLBY_API_KEY ? 'Ready' : 'Get free key from dolby.io'}
-${process.env.HUGGINGFACE_API_KEY ? '✅' : '❌'} Hugging Face (Free) - ${process.env.HUGGINGFACE_API_KEY ? 'Ready' : 'Get free from huggingface.co'}
-${process.env.REPLICATE_API_KEY ? '✅' : '❌'} Replicate (Free credits)
-
-Endpoints:
-POST /enhance - Auto-picks best REAL AI
-POST /enhance/dolby - Force Dolby.io
-POST /enhance/huggingface - Force HF
-
-Docs: See docs/API_KEYS_GUIDE.md for free keys guide
-  `);
-});
+  };
+  app.post('/enhance',authorized,job('filter'));
+  app.post('/api/captions',authorized,job('captions'));
+  app.post('/api/isolate',authorized,job('isolation'));
+  return app;
+}
+if(require.main===module){
+  const server=createApp().listen(Number(process.env.PORT||3001),'0.0.0.0',()=>console.log('VoiceCut processing server ready'));
+  server.requestTimeout=TTL;server.headersTimeout=30000;
+}
+module.exports={createApp,TTL};

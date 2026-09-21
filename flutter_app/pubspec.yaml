@@ -1,36 +1,22 @@
 name: voicecut_studio
-description: VoiceCut Studio - Accessible Video Editor with Real AI Noise Reduction. Designed for TalkBack, VoiceOver, screen readers.
-publish_to: 'none'
-version: 1.0.0+1
-
+description: Accessible video editor with browser-based media processing.
+publish_to: none
+version: 1.2.0+3
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-  flutter: ">=3.10.0"
-
+  sdk: '>=3.5.0 <4.0.0'
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.6
-  flutter_inappwebview: ^6.0.0
-  file_picker: ^8.1.0
-  permission_handler: ^11.3.0
-  path_provider: ^2.1.2
-  device_info_plus: ^9.1.0
-
+  flutter_inappwebview: 6.1.5
+  permission_handler: 11.4.0
+  path_provider: 2.1.5
+  share_plus: 10.1.4
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
-
+  flutter_lints: 5.0.0
 flutter:
   uses-material-design: true
   assets:
-    - assets/index.html
-    - assets/rnnoise.wasm
-    - assets/deepfilter/
-
-  # For accessibility, keep fonts readable
-  fonts:
-    - family: Inter
-      fonts:
-        - asset: assets/fonts/Inter-Regular.ttf
+    - assets/web/
+    - assets/web/web/

@@ -1,78 +1,62 @@
-name: Build VoiceCut AAB for Play Store
-
+name: Android test APK and optional signed AAB
 on:
-  push:
-    branches: [ main ]
+  pull_request:
+    paths: ['flutter_app/**', 'web/**', 'index.html', 'scripts/**', '.github/workflows/build-aab.yml']
   workflow_dispatch:
-
+    inputs:
+      signed_release:
+        type: boolean
+        default: false
+        description: Build signed AAB using your four Android signing secrets
+permissions:
+  contents: read
 jobs:
-  build-aab:
+  android:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/setup-java@v4
         with:
-          flutter-version: '3.19.0'
-          channel: 'stable'
-      
-      - name: Set up Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
+          distribution: temurin
           java-version: '17'
-      
-      - name: Install dependencies
-        working-directory: ./flutter_app
-        run: flutter pub get
-      
-      - name: Copy web app to assets
-        run: cp index.html flutter_app/assets/index.html
-      
-      - name: Build AAB (Release)
-        working-directory: ./flutter_app
-        run: flutter build appbundle --release --no-tree-shake-icons
-      
-      - name: Upload AAB artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          name: voicecut-studio-aab
-          path: flutter_app/build/app/outputs/bundle/release/app-release.aab
-          retention-days: 30
-      
-      - name: Create Release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v1
+          node-version: '22'
+      - uses: subosito/flutter-action@v2
         with:
-          files: flutter_app/build/app/outputs/bundle/release/app-release.aab
-          tag_name: v1.0.${{ github.run_number }}
-          name: VoiceCut Studio v1.0.${{ github.run_number }} - AAB for Play Store
-          body: |
-            ## VoiceCut Studio - Accessible Video Editor
-            
-            **Real AI Noise Reduction + Flutter AAB**
-            
-            This AAB is ready to upload to Google Play Console.
-            
-            ### What's included:
-            - Real AI noise reduction (RNNoise WASM + Dolby.io cloud fallback)
-            - Accessible video editor (TalkBack, VoiceOver, keyboard)
-            - Multi-track timeline, voice-over recording, export
-            
-            ### How to publish:
-            1. Download app-release.aab from artifacts
-            2. Go to https://play.google.com/console
-            3. Create app → Production → Upload AAB
-            4. See docs/PLAY_STORE_GUIDE.md
-            
-            ### Real AI:
-            - Local: RNNoise WASM (free, offline, no key)
-            - Cloud: Dolby.io (250 mins/month free, best quality) - add key in app Settings
-            
-            Built automatically via GitHub Actions.
-          draft: false
-          prerelease: false
+          flutter-version: '3.41.2'
+          channel: stable
+          cache: true
+      - run: bash scripts/prepare-android.sh
+      - working-directory: flutter_app
+        run: flutter pub get && flutter analyze --no-fatal-infos
+      - working-directory: flutter_app
+        run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voicecut-debug-apk-NOT-FOR-PLAY-STORE
+          path: flutter_app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+      - name: Build signed Play Store bundle only when requested
+        if: github.event_name == 'workflow_dispatch' && inputs.signed_release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          python3 scripts/android-signing.py
+          cd flutter_app
+          flutter build appbundle --release --build-number=${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.signed_release
+        with:
+          name: voicecut-signed-aab
+          path: flutter_app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove signing material
+        if: always()
+        run: rm -f flutter_app/android/app/upload-keystore.jks flutter_app/android/key.properties

@@ -7,7 +7,6 @@ flutter_app/.flutter-plugins
 flutter_app/.flutter-plugins-dependencies
 flutter_app/.packages
 flutter_app/build/
-flutter_app/*.lock
 
 # API Keys - NEVER commit real keys
 server/.env
@@ -39,3 +38,13 @@ Thumbs.db
 # Temp
 tmp/
 temp/
+
+# Generated output and credentials
+/dist/
+server/tmp/
+flutter_app/android/key.properties
+flutter_app/android/app/upload-keystore.jks
+*.base64
+artifacts/
+
+*.iml

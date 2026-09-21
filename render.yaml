@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: voicecut-processing
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: SERVER_ACCESS_KEY
+        generateValue: true
+      - key: ALLOWED_ORIGIN
+        value: https://mahicouragw.github.io
+      - key: ALLOW_ANDROID_APP
+        value: 'true'
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: MAX_AI_REQUESTS_PER_HOUR
+        value: '20'

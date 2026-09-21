@@ -1,190 +1,182 @@
-# 🔑 Real AI Noise Reduction - Free API Keys Guide
+# Real AI captions and noise removal: create keys and paste them safely
 
-You said current noise reduction is fake. This guide gives you **REAL AI** that actually removes noise.
+This guide applies to **VoiceCut 1.2 (the AI update)**. The previous 1.1 repair had only filters and cannot use these provider keys. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
 
-## Option 1: 100% Free Local AI (No Key Needed) - Best for Privacy
+**Do not send keys to this chat. Do not paste them into JavaScript, HTML, Android assets, public GitHub files, screenshots, or GitHub issues.**
 
-This runs **in your browser**, no upload, no key, offline.
+## The three keys — they are different
 
-### What it uses:
-- **RNNoise** - Xiph.org's recurrent neural network for noise suppression, trained on 1000s of hours of speech vs noise
-- **DeepFilterNet** - Deep learning speech enhancement, SOTA quality
+| Name | What it does | Exact place to paste it |
+|---|---|---|
+| `OPENAI_API_KEY` | Recognizes speech and creates timed captions | Render → your **backend service** → **Environment** → variable with this exact name |
+| `ELEVENLABS_API_KEY` | AI voice isolation/background-noise removal | Same backend Environment page → variable with this exact name |
+| `SERVER_ACCESS_KEY` | Protects your personal backend against other people using your API credits | Backend Environment **and** VoiceCut → Settings → **Your SERVER_ACCESS_KEY** |
 
-### How to enable (already included):
-1. Open `index.html`
-2. No key needed, just click `🤖 Reduce Noise`
-3. It loads `rnnoise-wasm` via CDN and processes locally
-4. Shows real progress 1%...100% because it really processes audio buffer sample-by-sample
+**The website should never receive the first two keys.** Only the separate server access key goes into the editor. The backend attaches the appropriate provider key privately when making requests.
 
-**Pros:** Free forever, private, offline
-**Cons:** Slightly less quality than cloud Dolby for extreme noise
+Local editing, manual captions and local filters remain free of provider-key requirements. The two cloud providers and your hosting service may charge independently. There is no promise of free API credits.
 
----
+## Step 1 — Create an OpenAI key for automatic captions
 
-## Option 2: Dolby.io - BEST QUALITY, Free 250 mins/month (Recommended)
+1. Open [OpenAI Platform](https://platform.openai.com/) and sign in or create your own account.
+2. Select your organization/project. If needed, create a project called **VoiceCut** so usage can be tracked separately.
+3. Open [API billing](https://platform.openai.com/settings/organization/billing/overview). Review the current [API pricing](https://developers.openai.com/api/docs/pricing) and enable API billing/prepaid credit if your account requires it. **A ChatGPT subscription does not include API billing.** Do not buy another ChatGPT plan for this feature.
+4. Configure the available project usage budgets/alerts. Read the provider's explanation: budget alerts are not necessarily hard spending caps. Start with a short test and monitor the usage dashboard.
+5. Open [API keys](https://platform.openai.com/api-keys).
+6. Choose **Create new secret key** (wording may vary), name it **VoiceCut captions**, and select the intended project.
+7. If you restrict permissions, allow the audio transcription endpoint, `POST /v1/audio/transcriptions`. The code uses **`whisper-1`**, because this integration needs timestamped words/segments. Your project must have access to that model and endpoint.
+8. Create the key. Copy it immediately into a password manager or directly into your backend's `OPENAI_API_KEY` environment variable. OpenAI shows the full secret only when it is created. If you lose it, create a replacement rather than sharing another person's key.
+9. Do not paste it into VoiceCut's “Server access key” box. That box is for a different, self-generated secret.
 
-This is **real industry-grade AI** used by professionals.
+This implementation transcribes the spoken language; it does not automatically translate captions into English or identify who a speaker is. Select English, Hindi, Telugu or another offered language hint, or choose automatic detection. Accuracy depends on language, speech, recording conditions and model behavior. Review the captions.
 
-### Step by Step:
+Official references: [OpenAI key creation/security](https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key), [separate API billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform), [Whisper timestamp documentation](https://developers.openai.com/api/docs/guides/speech-to-text#timestamps).
 
-1. Go to **https://dolby.io/**
-2. Click **Sign Up** (free, no credit card for free tier)
-3. Verify email, log in
-4. Go to **Dashboard** → https://dolby.io/dashboard
-5. Click **Get API Key** or **Applications** → **Create Application**
-   - Name: `VoiceCut Studio`
-   - Description: `Accessible video editor AI noise reduction`
-6. Copy your **API Key** (looks like `dlb_prod_xxxxxxxxxxxxxxxx`)
-7. **Free tier:** 250 minutes of Enhance API per month, resets monthly. Enough for ~50 videos.
+## Step 2 — Create an ElevenLabs key for genuine AI noise removal
 
-### How to use in VoiceCut:
+1. Open [ElevenLabs](https://elevenlabs.io/) and sign in or create your account.
+2. Check your workspace's current [pricing and credits](https://elevenlabs.io/pricing). Confirm that your account can use **Voice Isolator / Audio Isolation through the API**. A website feature being visible is not proof of API entitlement or remaining credit.
+3. Open [Personal API keys](https://elevenlabs.io/app/settings/api-keys). If redirected, find API Keys under your profile/settings; the exact navigation can vary by account.
+4. Select **Create API key** and name it **VoiceCut isolation**.
+5. Restrict its scope to **Audio Isolation / Voice Isolator** when that control is available. Other unrelated endpoints do not need access.
+6. Set a conservative credit quota. If using IP restrictions, use your backend provider's supported outbound IP addresses—not your phone's IP. Incorrect IP allowlisting causes a 403 error.
+7. Personal keys can have an **Expire After** setting. For a temporary test you can choose **15 minutes** if offered. Such a key will actually stop working after that period and must be replaced or extended for continued service. For a long-running app, deliberately choose an appropriate lifetime and rotation plan instead. Do not confuse this with VoiceCut's separate 15-minute browser/server-copy timers.
+8. Create/copy the key into your backend's `ELEVENLABS_API_KEY` variable. Never paste it in the editor or source code.
+9. If you cannot create a personal key, check the workspace seat/role requirements; ask its administrator rather than trying someone else's credentials.
 
-1. Open VoiceCut Studio → **Settings** → **AI API Keys** section
-2. Paste Dolby.io key into `Dolby.io API Key` field
-3. Click Save
-4. Now when you click `🤖 Reduce Noise`, it will:
-   - Try Dolby.io cloud first (best quality)
-   - Shows progress: `Uploading to Dolby... 10% → Enhancing with AI... 50% → Downloading enhanced... 90%`
-   - Falls back to local WASM if offline
+The implementation calls `POST https://api.elevenlabs.io/v1/audio-isolation` with the documented `audio` file field and `xi-api-key` header. It does not imitate AI with filters. However, AI isolation may remove music or alter parts of speech. Always listen before applying. No guarantee of perfect noise removal or restoration of damaged speech is made.
 
-### API Details (for developers):
+Official references: [API key scopes, quota and expiry](https://elevenlabs.io/docs/overview/administration/workspaces/api-keys), [audio-isolation endpoint](https://elevenlabs.io/docs/api-reference/audio-isolation/convert), [Voice Isolator capabilities and usage](https://elevenlabs.io/docs/overview/capabilities/voice-isolator).
 
-```javascript
-// Dolby.io Enhance API - Real AI
-const formData = new FormData();
-formData.append('file', audioFile);
+## Step 3 — Deploy or update the private backend
 
-const response = await fetch('https://api.dolby.com/media/enhance', {
-  method: 'POST',
-  headers: { 'x-api-key': 'YOUR_DOLBY_KEY' },
-  body: formData
-});
+GitHub Pages can host the editor, **but cannot run this Node/FFmpeg backend or keep API keys secret**. Do not put the keys into GitHub Pages build variables or frontend code.
 
-// Then poll for job status and download enhanced file
-// Removes ALL background noise, enhances voice to studio quality
+### If the Render backend already exists
+1. Open [Render dashboard](https://dashboard.render.com/).
+2. Open your **voicecut-processing** service.
+3. Ensure it points to your updated repository/branch and root Dockerfile. Deploy the latest repaired commit.
+4. Open **Environment**. Add/update the variables in the table below, then save/redeploy.
+
+### If you do not have a backend yet
+1. First merge the AI update into your GitHub `main` branch.
+2. Open [Render dashboard](https://dashboard.render.com/) → **New → Blueprint**.
+3. Connect GitHub and select only `Mahicouragw/Voice-cut-video-editor-for-blinnds`.
+4. Render reads the included `render.yaml` and `Dockerfile`. It may ask for the two provider secret values before creating the service.
+5. **Review hosting prices before confirming.** The blueprint requests Render's paid `starter` plan; this is not a free-hosting promise. If you do not accept the charge, do not confirm deployment.
+6. Enter your provider keys in the private secret/environment fields. The blueprint generates a separate `SERVER_ACCESS_KEY` for you.
+7. Apply/deploy. Wait for the service to be healthy. The assistant has not created a paid service or granted account authorization for you.
+
+### Exact backend environment values
+
+| Variable name | Value |
+|---|---|
+| `OPENAI_API_KEY` | Your real key from Step 1 |
+| `ELEVENLABS_API_KEY` | Your real key from Step 2 |
+| `SERVER_ACCESS_KEY` | Render-generated random value, or your self-generated value from Step 4 |
+| `ALLOWED_ORIGIN` | `https://mahicouragw.github.io` — **no repository path and no trailing slash** |
+| `ALLOW_ANDROID_APP` | `true` to allow the packaged Android app's `http://localhost:8080` origin; its requests still require the server access key |
+| `MAX_AI_REQUESTS_PER_HOUR` | `20` by default; you can use `3` while testing |
+
+Optional features work independently: if you only want captions, configure OpenAI and leave ElevenLabs blank; if you only want isolation, do the reverse. The editor reports which key is missing. No fallback to another paid provider occurs.
+
+Render supplies `PORT`; you normally do not need to set it manually. FFmpeg and FFprobe are installed by the Dockerfile.
+
+Copy your service's real HTTPS URL from Render. It will look like `https://your-service.onrender.com`; **do not paste that example literally**. Open `YOUR-REAL-URL/health`. The new version returns JSON containing `status: "ok"` and `version: "1.2.0"`.
+
+## Step 4 — Create your separate server access key, if needed
+
+Render's blueprint can generate this for you. To generate your own instead, run in a trusted Node.js terminal:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
----
+Copy the random 64-character output. Paste the **same value** in:
+1. Render → backend → Environment → `SERVER_ACCESS_KEY`.
+2. VoiceCut editor → Settings → **Your SERVER_ACCESS_KEY**.
 
-## Option 3: Hugging Face - Free, Good Quality
+This key is not from OpenAI, ElevenLabs, or GitHub. It is your private password protecting the backend. Treat it as secret: anyone holding it can request processing using the backend's provider accounts. This is a personal setup, not a secure multiuser billing system. Do not embed the key in a public app for all users.
 
-1. Go to **https://huggingface.co/**
-2. Sign up free
-3. Go to **Settings → Access Tokens**: https://huggingface.co/settings/tokens
-4. Click **New token** → Name: `voicecut` → Role: `Read` → Generate
-5. Copy token (starts with `hf_...`)
+## Step 5 — Connect the editor
 
-### Models used:
-- `resemble-ai/resemble-enhance` - Speech enhancement
-- `facebook/demucs` - Noise separation
-- `suno/bark` - Audio enhancement
+1. Open your deployed VoiceCut website. The expected Pages address is [VoiceCut](https://mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/), **after successful deployment of this update**.
+2. Open **Settings → AI server connection and audio cleanup method**.
+3. Paste the Render HTTPS URL into **Your deployed HTTPS server URL**.
+4. Paste only the generated **SERVER_ACCESS_KEY** into **Your SERVER_ACCESS_KEY**.
+5. Click **Save server settings**. The access-key field clears; its value stays in memory for up to 15 minutes and is lost on page reload. It is not saved with your project.
+6. Click **Check connection and configured features**.
+7. Expect “Connected. OpenAI captions: key configured. ElevenLabs isolation: key configured.” This checks your server access and the presence of provider keys; **it does not validate those keys with providers, verify billing, or make a paid processing request**.
+8. If the editor complains that you pasted a provider key, remove it and enter your generated server access key instead.
 
-Free tier: ~1000 requests/month
+## Step 6 — Generate captions and put them on the video
 
----
+1. Upload a short, non-sensitive test video, ideally 10–20 seconds of clear speech.
+2. Go to **CAPTIONS → Automatic captions**.
+3. Choose **Original video audio**. To transcribe a voice-over separately, select its audio clip in the timeline, then choose **Selected audio clip**.
+4. Choose the spoken language, or **Detect automatically**.
+5. Click **Generate AI captions**. Read and approve the upload/cost consent. The server receives your selected source file, extracts audio, and sends only the extracted audio to OpenAI.
+6. Wait. Do not submit repeated requests. **Cancel caption request** aborts our waiting/request; it cannot promise a provider refund or stop provider-side processing already underway.
+7. Select each caption in **Caption to edit**. Correct the words and start/end seconds, then click **Save caption changes**.
+8. **Show captions on preview** controls the visible overlay. The caption text is also provided as ordinary screen-reader-readable text. **Announce current caption** reads it through the app's status region on demand; it does not interrupt TalkBack continuously during playback.
+9. Leave **Include captions permanently in exported video** checked to burn them into the video. Uncheck it if you only want separate subtitles.
+10. Download **SRT** and/or **VTT**. These timings automatically account for trim, deleted video segments and playback speed.
+11. Export the video using matching settings, then play the downloaded result. Burned-in text cannot be turned off afterward.
+12. Save the project. Caption edits and media persist locally. After reloading, re-enter the server access key only if you need another cloud request.
 
-## Option 4: Replicate - Free Credits
+This release captions **one chosen source at a time**, not all overlapping speech in the final mix. Generation replaces the current caption list after confirmation; Undo restores the previous list. To caption the exact final mix, first export it, import that exported video, then generate captions for its original audio. After moving a captioned audio clip, regenerate or manually retime its captions.
 
-1. Go to **https://replicate.com/**
-2. Sign up with GitHub
-3. Go to **Account → API tokens**: https://replicate.com/account/api-tokens
-4. Copy token (starts with `r8_...`)
-5. Free: ~$5 credits (~100 mins)
+## Step 7 — Use genuine AI background-noise removal
 
-Model: `cjwbw/resemble-enhance` or `facebookresearch/demucs`
+1. Settings → **Method used by Reduce Noise buttons** → choose **ElevenLabs AI Voice Isolator**.
+2. Choose Reduce Noise for the original video audio or select an audio clip and enhance that clip.
+3. Approve the upload/cost consent. Extracted audio is sent to ElevenLabs, not OpenAI.
+4. Wait for completion. Listen to **Original** and **Processed** separately.
+5. Choose **Apply** only if it sounds better. The original video track is muted when its isolated replacement is applied to avoid double audio. Undo is available.
+6. Export and listen again. To keep the recording entirely local, select **Local filters** instead—but that mode is not AI.
 
----
+## Limits, cost control and privacy
 
-## Option 5: OpenRouter / OpenAI (For Chatbot-style, not best for noise)
+- This implementation accepts sources up to **100 MB and 10 minutes**. Longer recordings are rejected before any provider call; no silent truncation. Export a shorter clip and re-import it if necessary. A timeline trim does not reduce the source upload itself.
+- Only one server job runs at a time. The hourly AI-attempt cap is per process and resets on server restart; it is **not** a hard currency spending guarantee. Use provider quotas and monitor actual usage.
+- Provider input audio is normalized to a bounded MP3: captions use 16 kHz mono; isolation uses 48 kHz stereo. Isolated audio is decoded back to WAV and checked for gross duration drift before it can replace your track.
+- The browser waits at most 14 minutes for a processing request. The server's absolute deadline is 15 minutes from request start and includes upload/processing/download time. It kills local processing, aborts the provider request and removes temporary server files at completion, failure, disconnect or deadline.
+- A sleeping or crashed host cannot perform wall-clock disk deletion while stopped. Stale files are removed on startup before accepting new requests. Use independent provider-managed lifecycle/audit controls if regulated deletion guarantees are required.
+- **OpenAI and ElevenLabs retention, logging, processing location and billing are separate.** Our 15-minute timer does not erase their copies. Review your account's data controls and the providers' terms before uploading private recordings.
+- Saved local projects, subtitles and downloaded exports do not expire automatically.
+- The server environment keys remain valid until provider expiry/revocation or rotation. VoiceCut's 15-minute in-browser copy expiry does not globally revoke your server key.
+- GitHub authorization codes have their own expiry. The existing deployment helper caps new CLI sign-in waiting at 15 minutes. No GitHub account authorization request has been created by this guide.
 
-If you want OpenRouter for other AI features:
-1. openrouter.ai → Sign up → Keys → Create
-2. Free models available
+## Troubleshooting — exact distinction between errors
 
-But for noise reduction, Dolby.io is better than OpenAI.
+| Error | What to check |
+|---|---|
+| Server access key rejected / HTTP 401 | The **SERVER_ACCESS_KEY** in the editor must match the backend; do not use a provider key. Re-enter it after 15 minutes or reload. |
+| `OPENAI_API_KEY` or `ELEVENLABS_API_KEY` missing | Add the named key to the **backend Environment**, then redeploy. |
+| OpenAI/ElevenLabs rejected the API key or permissions | The provider key is wrong, revoked, expired, missing endpoint permissions, belongs to the wrong project, or has an IP restriction. Fix it on the server, not in the editor. |
+| Quota/rate limit reached | Check API billing/credits and provider rate limits. A “configured” connection check is not a credit check. There is no automatic paid retry. |
+| Server hourly limit reached | Wait for the one-hour window or adjust your intentional testing limit. Do not remove all limits merely to suppress an error. |
+| Another job is running | Wait or cancel the existing operation. |
+| Cannot reach server / origin denied | Check the HTTPS URL, deployment health, exact `ALLOWED_ORIGIN` and Android flag if using the app. The website origin has no repository path. |
+| Source longer than 10 minutes or over 100 MB | Export a shorter/smaller video, import that new file, and try again. |
+| No readable audio / unsupported media | Import an ordinary MP4 with audio, WAV, MP3, M4A, WebM, OGG or FLAC. A silent video may have no audio track. |
+| Unexpected isolated audio duration | The replacement was rejected rather than corrupting synchronization. Keep the original and retry a short standard-format source. |
+| Captions contain wrong words | Edit them. AI can hallucinate words in silence/music; no automatic transcript is guaranteed correct. |
+| Settings look like the old version | Confirm the updated workflow deployed successfully, then reload the page. Open `/health` to check backend version 1.2.0. |
 
----
+## Local backend alternative
 
-## How VoiceCut Uses Both (Local + Cloud)
+With Node.js 22 and FFmpeg/FFprobe installed:
 
-In `index.html`, the real AI logic:
-
-```javascript
-async function realAINoiseReduction(audioFile, level) {
-  const dolbyKey = localStorage.getItem('dolby_api_key');
-  const hfKey = localStorage.getItem('hf_api_key');
-  
-  // Try cloud first if online and key exists
-  if (navigator.onLine && dolbyKey) {
-    try {
-      return await enhanceWithDolbyIO(audioFile, dolbyKey, level);
-    } catch(e) {
-      console.log('Dolby failed, falling back to local', e);
-    }
-  }
-  
-  if (navigator.onLine && hfKey) {
-    try {
-      return await enhanceWithHuggingFace(audioFile, hfKey);
-    } catch(e) {
-      console.log('HF failed, falling back to local');
-    }
-  }
-  
-  // Fallback to REAL local AI (not fake filters)
-  return await enhanceWithRNNoiseWASM(audioFile, level);
-}
+```bash
+npm --prefix server ci
+cp server/.env.example server/.env
 ```
 
-### Real Local AI - RNNoise WASM (Not Fake Filters):
+Open `server/.env` privately and fill the three key values plus your exact HTTPS frontend origin. Never commit it. Then:
 
-```javascript
-// Loads real neural network WASM (not just highpass/lowpass)
-const rnnoise = await RNNoise.load();
-const enhancedBuffer = await rnnoise.process(originalBuffer);
-// This is a trained RNN that actually learned to separate speech from noise
+```bash
+npm --prefix server start
 ```
 
----
-
-## Quick Setup - What You Need To Do NOW
-
-1. **Get Dolby.io key** (5 mins, best quality, free):
-   - dolby.io → Sign up → Dashboard → Copy key
-
-2. **Paste in app**:
-   - Open VoiceCut → Settings → AI API Keys → Dolby.io field → Paste → Save
-
-3. **Test**:
-   - Upload noisy video (fan, traffic)
-   - Click `🤖 Reduce Noise - Enhance Original Audio`
-   - Watch real progress 1%...100% (uploading, AI enhancing, downloading)
-   - Preview Before/After - you will HEAR difference, noise gone
-
-If you don't want to get keys, just use local RNNoise - it's still real AI, not fake, and free.
-
----
-
-## Cost Summary
-
-| Provider | Free Tier | Quality | Needs Key? | Offline? |
-|----------|-----------|---------|------------|----------|
-| Local RNNoise WASM | Unlimited | Good (8/10) | No | Yes |
-| Local DeepFilterNet | Unlimited | Very Good (9/10) | No | Yes |
-| Dolby.io | 250 mins/month | Excellent (10/10) | Yes, free | No |
-| Hugging Face | ~1000 req/month | Good (8/10) | Yes, free | No |
-| Replicate | $5 free credit | Very Good (9/10) | Yes, free | No |
-
-**Recommendation:** Start with Dolby.io free key for best results, keep local WASM as fallback.
-
----
-
-## Need Help?
-
-If API key not working:
-- Check key copied correctly (no spaces)
-- Check internet connection
-- Check free tier not exhausted (Dolby dashboard shows usage)
-- App will auto-fallback to local AI if cloud fails
-
-For Play Store AAB, you don't need AI keys - local WASM works offline in Flutter app too.
+The editor accepts HTTPS backend URLs. For another device, use an authorized HTTPS deployment or trusted tunnel; `localhost` on a phone is not your computer. Do not expose your backend without the access key and upload limits.
