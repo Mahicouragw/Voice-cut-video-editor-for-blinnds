@@ -1,4 +1,4 @@
-# VoiceCut Studio 1.2 — AI captions and speech isolation
+# VoiceCut Studio 1.3 — Free AI captions and speech isolation
 
 An accessible-first browser video editor, packaged Android WebView app, and private Node/FFmpeg backend.
 
@@ -7,10 +7,10 @@ An accessible-first browser video editor, packaged Android WebView app, and priv
 The earlier manual alternative remains in [AI_UPDATE_START_HERE.md](AI_UPDATE_START_HERE.md). For precise key creation/paste instructions, read [docs/API_KEYS_GUIDE.md](docs/API_KEYS_GUIDE.md).
 
 ## What is new
-- **OpenAI Whisper captions:** original language transcription, automatic language detection or a language hint, word/segment timestamps, editable captions.
+- **Free AI captions:** Groq Whisper (free tier, recommended), Deepgram Nova and AssemblyAI free options, plus paid OpenAI — original-language transcription, automatic detection or a language hint, timed words, editable captions.
 - **Subtitle output:** preview overlay, optional burned-in captions in exported video, SRT/VTT downloads retimed for trim, deleted segments and playback speed.
-- **ElevenLabs AI Voice Isolator:** genuine provider-based speech isolation, selectable separately from free ordinary filters. No silent substitution when the provider fails.
-- **Key safety:** `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` live only on the backend. The editor receives a different `SERVER_ACCESS_KEY`, held in memory for at most 15 minutes.
+- **Free DeepFilterNet AI denoising:** genuine neural noise removal running on your own server with no key or account, plus ElevenLabs cloud Voice Isolator as an option. No silent substitution when a provider fails.
+- **Key safety:** provider keys (`GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`) live only on the backend. The editor receives a different `SERVER_ACCESS_KEY`, held in memory for at most 15 minutes.
 - Explicit upload/cost confirmation, server configuration check, useful auth/billing/quota errors, cancel/timeout handling and no automatic paid retries.
 
 Cloud features require your own provider accounts and may cost money. No paid account, API keys or public deployment have been created for you. Automated tests use mocked external responses; live provider quality must be tested after setup. Ordinary editing, manual captions and local filters need no provider key.
@@ -23,7 +23,7 @@ Cloud features require your own provider accounts and may cost money. No paid ac
 - `web/core.js`: tested ranges, MIME and expiry helpers.
 - `web/storage.js`: IndexedDB media and caption persistence.
 - `server/server.js`: authenticated multipart routes, FFmpeg/FFprobe preprocessing, limits and cleanup.
-- `server/providers.js`: OpenAI and ElevenLabs request contracts, bounded responses and safe error handling.
+- `server/providers.js`: Groq/Deepgram/AssemblyAI/OpenAI caption and ElevenLabs isolation contracts, bounded responses and safe error handling.
 - `flutter_app/lib/main.dart`: Android microphone permission, local asset loading and video/subtitle sharing.
 - `scripts/android-signing.py`: private signing configuration helper.
 - `.github/workflows/`: website tests/deployment, debug APK, explicitly requested signed AAB.
@@ -41,6 +41,9 @@ Deploy the root Dockerfile on your authorized host, or install Node 22 and FFmpe
 
 Server environment variables:
 ```dotenv
+GROQ_API_KEY=replace_privately_on_your_backend
+DEEPGRAM_API_KEY=replace_privately_on_your_backend
+ASSEMBLYAI_API_KEY=replace_privately_on_your_backend
 OPENAI_API_KEY=replace_privately_on_your_backend
 ELEVENLABS_API_KEY=replace_privately_on_your_backend
 SERVER_ACCESS_KEY=your_separate_random_64_character_key
@@ -53,8 +56,9 @@ These are placeholders, not usable credentials. Do not commit real values. GitHu
 Endpoints:
 - `GET /health`: public liveness/version only.
 - `GET /capabilities`: requires server access key; checks presence, not provider validity/billing.
-- `POST /api/captions?language=te`: requires auth and `X-Upload-Consent: yes`; multipart file field `file`; returns validated timestamped cues.
+- `POST /api/captions?language=te&provider=groq`: requires auth and `X-Upload-Consent: yes`; multipart file field `file`; provider is groq, deepgram, assemblyai or openai; returns validated timestamped cues.
 - `POST /api/isolate`: requires auth and consent; returns normalized processed WAV.
+- `POST /api/denoise-local`: authenticated keyless DeepFilterNet AI denoising on your server; no cloud consent or provider account.
 - `POST /enhance`: authenticated ordinary FFmpeg filters, not AI.
 
 ## Tests

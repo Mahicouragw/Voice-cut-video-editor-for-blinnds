@@ -313,10 +313,11 @@
 
     <section id="section-captions" class="card" aria-labelledby="captionsHeading">
       <h2 id="captionsHeading">Automatic captions</h2>
-      <p>Recognize speech with OpenAI, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
+      <p>Recognize speech with a free or paid caption service, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
       <div class="grid grid-2">
         <div><label for="captionSource">Speech to caption</label><select id="captionSource"><option value="original">Original video audio</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
         <div><label for="captionLanguage">Spoken language</label><select id="captionLanguage"><option value="">Detect automatically</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="ml">Malayalam</option><option value="mr">Marathi</option><option value="bn">Bengali</option><option value="ur">Urdu</option></select></div>
+        <div><label for="captionProvider">Caption service</label><select id="captionProvider"><option value="groq">Groq Whisper — free tier, recommended</option><option value="deepgram">Deepgram Nova — free starter credit</option><option value="assemblyai">AssemblyAI — free tier</option><option value="openai">OpenAI Whisper — paid</option></select></div>
       </div>
       <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes and 100 MB.</p>
       <button id="btnGenerateCaptions" class="primary">Generate AI captions</button>
@@ -568,7 +569,7 @@
       </div>
       <div class="divider"></div>
       <h3>AI server connection and audio cleanup method</h3>
-      <p>Provider keys belong only in your server Environment settings: OPENAI_API_KEY for captions and ELEVENLABS_API_KEY for AI speech isolation. Never paste either provider key below. Local audio filters need no key. Cloud processing requires consent and may cost money.</p>
+      <p>Provider keys belong only in your server Environment settings: GROQ_API_KEY, DEEPGRAM_API_KEY or ASSEMBLYAI_API_KEY for captions (free options available), OPENAI_API_KEY for paid captions, and ELEVENLABS_API_KEY for cloud AI speech isolation. Never paste any provider key below. Local filters and DeepFilterNet need no key. Cloud processing requires consent and may cost money after free quotas.</p>
       <label for="aiServerUrl">Your deployed HTTPS server URL</label>
       <input id="aiServerUrl" type="url" placeholder="https://your-service.onrender.com">
       <label for="serverAccessKey">Your SERVER_ACCESS_KEY (not an OpenAI or ElevenLabs key)</label>
@@ -580,10 +581,11 @@
       <label for="cleanupMethod">Method used by Reduce Noise buttons</label>
       <select id="cleanupMethod">
         <option value="local">Local filters — free, not AI, no upload</option>
+        <option value="deepfilter">DeepFilterNet AI — free, runs on your server, no key</option>
         <option value="server">Server FFmpeg filters — not AI</option>
         <option value="elevenlabs">ElevenLabs AI Voice Isolator — cloud, may use paid credits</option>
       </select>
-      <p>Choose ElevenLabs for genuine AI noise removal. It can remove music as well as noise and can alter speech. Preview before applying; your original media is retained. We do not silently substitute filters when an AI request fails.</p>
+      <p>Choose DeepFilterNet for free genuine AI noise removal with no account or key, or ElevenLabs for cloud AI isolation. AI cleanup can remove music as well as noise and can alter speech. Preview before applying; your original media is retained. We do not silently substitute filters when an AI request fails.</p>
       <p>Server temporary copies expire within 15 minutes while the server is running. Providers have their own retention policies: our timer cannot delete their copies. Cancel stops our request, but cannot guarantee refund or cancellation of provider-side processing.</p>
       <div class="divider"></div>
       <h3>Advanced Editing Mode</h3>
@@ -595,7 +597,7 @@
       <h2 id="privacyHeading">Privacy</h2>
       <p>Videos, recordings, and voice-over files are private user content. Processing happens locally using Web Audio API, HTML5 Video, and Canvas capture. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
       <p><strong>Local processing:</strong> Trimming, splitting, volume, fades, noise reduction, ducking, preview playback.</p>
-      <p><strong>Potential server processing:</strong> Local editing needs no upload. AI captions send extracted audio to OpenAI; AI isolation sends extracted audio to ElevenLabs, via your server, only after explicit consent. The server initially receives the selected source file. Provider retention and billing are separate from our local cleanup timer.</p>
+      <p><strong>Potential server processing:</strong> Local editing needs no upload. AI captions send extracted audio to your chosen caption service (Groq, Deepgram, AssemblyAI or OpenAI); AI isolation sends extracted audio to ElevenLabs; DeepFilterNet denoising stays on your own server. Cloud uploads happen via your server only after explicit consent. The server initially receives the selected source file. Provider retention and billing are separate from our local cleanup timer.</p>
     </div>
   </section>
 

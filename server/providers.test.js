@@ -23,3 +23,40 @@ test('provider authentication and quota errors are sanitized and never auto-retr
  }
 }));
 test('missing provider key fails locally before network',()=>withFile(async file=>{let calls=0;const p=createProviders({fetchImpl:async()=>calls++});await assert.rejects(p.transcribe(file,'',new AbortController().signal),e=>e.code==='KEY_NOT_CONFIGURED');assert.equal(calls,0);}));
+test('Groq contract uses OpenAI-compatible endpoint with whisper-large-v3',()=>withFile(async file=>{
+ const p=createProviders({groqKey:'PRIVATE-GROQ',fetchImpl:async(url,request)=>{
+  assert.equal(url,'https://api.groq.com/openai/v1/audio/transcriptions');assert.equal(request.headers.Authorization,'Bearer PRIVATE-GROQ');
+  assert.equal(request.body.get('model'),'whisper-large-v3');assert.equal(request.body.get('response_format'),'verbose_json');assert.deepEqual(request.body.getAll('timestamp_granularities[]'),['word','segment']);
+  return Response.json({words:[{word:'hi',start:0,end:0.5}],language:'english'});
+ }});
+ assert.equal((await p.transcribe(file,'',new AbortController().signal,'groq')).language,'english');
+}));
+test('Deepgram contract uses Token auth and normalizes timed words',()=>withFile(async file=>{
+ const p=createProviders({deepgramKey:'PRIVATE-DEEPGRAM',fetchImpl:async(url,request)=>{
+  const parsed=new URL(url);assert.equal(parsed.origin+parsed.pathname,'https://api.deepgram.com/v1/listen');
+  assert.equal(parsed.searchParams.get('model'),'nova-3');assert.equal(parsed.searchParams.get('utterances'),'true');assert.equal(parsed.searchParams.get('language'),'hi');
+  assert.equal(request.headers.Authorization,'Token PRIVATE-DEEPGRAM');assert.equal(request.headers['Content-Type'],'audio/mpeg');assert.equal(request.redirect,'error');
+  return Response.json({results:{channels:[{detected_language:'hi',alternatives:[{words:[{word:'namaste',punctuated_word:'Namaste',start:0.1,end:0.8}]}]}]}});
+ }});
+ const transcript=await p.transcribe(file,'hi',new AbortController().signal,'deepgram');
+ assert.equal(transcript.language,'hi');assert.equal(transcript.words[0].word,'Namaste');assert.equal(transcript.words[0].start,0.1);
+}));
+test('AssemblyAI uploads audio, polls once, and converts millisecond words to seconds',()=>withFile(async file=>{
+ let stage=0;const p=createProviders({assemblyKey:'PRIVATE-ASSEMBLY',fetchImpl:async(url,request)=>{
+  stage++;const target=String(url);
+  if(target.endsWith('/v2/upload')){assert.equal(request.headers.Authorization,'PRIVATE-ASSEMBLY');assert.ok(request.body instanceof Buffer||request.body instanceof Uint8Array);return Response.json({upload_url:'https://assembly.ai/audio'});}
+  if(target.endsWith('/v2/transcript')&&request.method==='POST'){assert.equal(JSON.parse(request.body).speech_model,'universal');return Response.json({id:'job1'});}
+  assert.equal(target,'https://api.assemblyai.com/v2/transcript/job1');
+  if(stage===3)return Response.json({status:'processing'});
+  return Response.json({status:'completed',language_code:'en',words:[{text:'Hello',start:100,end:900,confidence:0.99}]});
+ }});
+ const transcript=await p.transcribe(file,'',new AbortController().signal,'assemblyai');
+ assert.equal(transcript.words[0].word,'Hello');assert.equal(transcript.words[0].start,0.1);assert.equal(transcript.words[0].end,0.9);assert.ok(stage>=4);
+}));
+test('unknown or unconfigured caption provider fails locally with exact key name',()=>withFile(async file=>{
+ let calls=0;const p=createProviders({groqKey:'PRIVATE-GROQ',fetchImpl:async()=>{calls++;return Response.json({});}});
+ assert.deepEqual(p.configured.captionProviders,{openai:false,groq:true,deepgram:false,assemblyai:false});assert.equal(p.configured.captions,true);
+ await assert.rejects(p.transcribe(file,'',new AbortController().signal,'nope'),e=>e.code==='UNKNOWN_PROVIDER');
+ await assert.rejects(p.transcribe(file,'',new AbortController().signal,'deepgram'),e=>e.code==='KEY_NOT_CONFIGURED'&&e.message.includes('DEEPGRAM_API_KEY'));
+ assert.equal(calls,0);
+}));
