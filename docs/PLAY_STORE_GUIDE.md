@@ -12,15 +12,15 @@ The Android source was analyzed with Flutter 3.41.2 with **no issues found**. Th
 7. On your Android test device, install `app-debug.apk` if you are comfortable granting install permission to your file manager. Never disable Play Protect globally.
 8. Test picking media, TalkBack traversal, permission denial, recording, persistence after reopening, editing, cancelling export and saving/sharing an actual video. WebView codecs vary by Android version.
 
-The app uses a device-local server to load packaged assets. This is not a remote website or media upload. Microphone permission is requested only when recording, and only for the trusted app origin. It does not request broad media-library/storage permissions; file selection uses the WebView/system picker.
+The app loads the live VoiceCut website, so website updates apply automatically without reinstalling the app. An internet connection is required. Microphone permission is requested only when recording, and only for the trusted website origin. It does not request broad media-library/storage permissions; file selection uses the WebView/system picker.
 
 ## 2. Important limitations
-- Version 1.2 adds captions and a native SRT/VTT sharing handler. Rebuild the APK to include these assets; updating Pages does not update a previously installed APK.
+- Since app version 2.1 the website is loaded from its address, not packaged inside. Updating the website updates every installed app automatically; rebuild the APK only when the wrapper itself (permissions, sharing, version) changes.
 - Export capability depends on Android WebView and device performance. Update Android System WebView/Chrome where available.
 - Native sharing is limited to 40 MB to bound the binary bridge's memory usage. Open the deployed website in Chrome for bigger exports.
 - Native temporary sharing files are deleted after the system share sheet completes. Process termination can interrupt this; Android may retain cache until cleared. The 15-minute server-file rule is about the optional processing server, not files saved by the user to their device.
 - The shared media must be tested with the receiving app. Make sure a copied file opens after VoiceCut closes.
-- The updated backend accepts the packaged Android origin only when `ALLOW_ANDROID_APP=true`, as configured in the supplied blueprint. Provider keys stay on that backend; enter only its separate server access key in the app.
+- The app uses the same website origin as the browser version, so the backend needs no separate Android origin flag. Provider keys stay on that backend; the owner connects it through the same private page address as on desktop.
 - Retain the correct application ID and signing key if updating an app that already exists in Play Console. The new scaffold defaults to `com.mahicouragw.voicecut_studio`. **Do not replace a previously published app's ID blindly.**
 
 ## 3. Create an upload keystore, privately
