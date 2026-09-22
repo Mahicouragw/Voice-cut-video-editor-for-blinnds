@@ -1,14 +1,16 @@
-# VoiceCut 1.2 — real AI captions and voice isolation
+# VoiceCut 2.0 — accessible shell, project library, crop/rotate/freeze, automatic cloud AI
 
 ## What this update adds
-- OpenAI Whisper automatic, editable timestamped captions with automatic language detection or a chosen language hint.
-- Captions on preview and burned into video exports, plus SRT and VTT downloads.
-- ElevenLabs AI Voice Isolator as a separate, explicit cleanup option. Local/FFmpeg filters remain available and honestly labeled as not AI.
-- Private provider keys on your backend, server connection checks, clear authorization/quota errors, cancellation, no automatic paid retries, and 15-minute local server-copy lifetime.
+- HOME/LIBRARY/SETTINGS shell; the editor opens only with a project, with a friendly “No project is open” view otherwise.
+- Multi-project library with open, rename and delete, recent projects on Home, and “Project saved” announcements.
+- Crop presets plus custom percentages, 90/180/270-degree rotation, and freeze-frame holds — all honored at export.
+- Automatic, editable timestamped captions (free Groq/Deepgram/AssemblyAI preferred before paid OpenAI) with language detection or hint, preview overlay, burned-in export, and SRT/VTT downloads.
+- Automatic noise reduction (free on-server DeepFilterNet AI, then ElevenLabs cloud isolation, then on-device filters) with Off/Light/Medium/Strong/Voice Focus and Original/Processed compare.
+- No server URL, API key, or provider/method menus in the normal UI. Provider keys stay in backend environment variables; the owner connects via `web/config.js` or a session-only `#dev-backend`/`#dev-key` page address.
+- Friendly failures with Retry, per-request upload consent, cancellation, no automatic paid retries, and the earlier hardening (export lock, stale-request invalidation, gap skipping, audio alignment, drift rejection, no silent truncation).
 - Android subtitle sharing and configured origin support for its packaged editor.
-- Additional fixes: export controls locked during recording, old requests invalidated on project changes, preview skips deleted source gaps, delayed audio aligned when preparing provider input, gross isolation timing drift rejected, and no silent truncation of long input.
 
-**Status:** code and automated tests are provided. No repository push, permanent deployment, paid provider request or Play Store publication has been performed on your behalf. Genuine provider quality/billing must be checked using your own keys and a short recording. Not every remaining editor feature is implemented; crop/rotate/freeze-frame and batch cleanup remain disabled.
+**Status:** code and automated tests are provided. No repository push, permanent deployment, paid provider request or Play Store publication has been performed on your behalf. Genuine provider quality/billing must be checked using your own keys and a short recording. Batch cleanup remains unavailable by design (one clip at a time with preview).
 
 ## 1. Download the right file
 - `voicecut-ai-update.zip`: complete updated source and all instructions.
@@ -72,23 +74,23 @@ Open [Create AI update pull request](https://github.com/Mahicouragw/Voice-cut-vi
 2. Merge the reviewed pull request after checks pass. If the environment requires approval, its authorized reviewer must approve.
 3. [Actions](https://github.com/Mahicouragw/Voice-cut-video-editor-for-blinnds/actions) → **Test and deploy website** → wait for successful test/build and deploy. Do not treat “pending” as completed.
 4. Expected website address after successful deployment: [VoiceCut](https://mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/).
-5. **AI needs the private backend too.** Follow [the key creation and exact paste-location guide](docs/API_KEYS_GUIDE.md). It explains OpenAI, ElevenLabs, Render environment variables and the editor's separate server access key.
+5. **AI needs the private backend too.** Follow [the key creation and exact paste-location guide](docs/API_KEYS_GUIDE.md). It explains Groq/Deepgram/AssemblyAI/OpenAI, ElevenLabs, Render environment variables, and the owner's private backend connection (no key fields in the normal UI).
 6. For Android, run the workflow in [the Android guide](docs/PLAY_STORE_GUIDE.md); download a new APK because it packages this version of the website. An older APK will not gain captions simply because Pages was updated.
 
 `npm run deploy` is still available to request the Pages workflow after it is merged. It is not needed for each main-branch commit and does not deploy the backend. It cannot make failed authorization succeed; inspect the actual Actions log.
 
 ## 6. Your first short live test
 1. Create provider keys and configure backend variables as documented.
-2. In the editor, enter the backend URL and **SERVER_ACCESS_KEY**, then Check connection.
+2. Connect the editor to the backend with your private `#dev-backend`/`#dev-key` page address (or a `BACKEND_URL` edit plus redeploy), then verify `/capabilities` privately as documented.
 3. Import a 10–20 second non-sensitive recording of clear speech.
 4. Generate captions with consent. Review/edit them, download SRT/VTT, and export a video with captions enabled.
-5. Select **ElevenLabs AI Voice Isolator** in Settings, process that recording with separate consent, and compare original/processed speech before Apply.
+5. Run Reduce Noise in Automatic mode with separate consent, and compare original/processed speech before Apply.
 6. Check provider usage dashboards. If something fails, share the error text and failing feature, **not the key**.
 
 ## 7. Verification included
-- 12 Node unit/build tests.
-- 10 backend/provider-contract tests, including real local FFmpeg work and a shortened deadline test for abort/cleanup. External provider responses are simulated.
-- Chromium workflow: saved media, recording, undo, generated/editable captions using a mocked provider, SRT/VTT downloads, provider-error preservation, isolation response handling, local caption persistence, two real video exports with frame-pixel verification that captions are burned in, cancellation and key-memory behavior.
+- 13 Node unit tests.
+- 19 backend/provider-contract tests, including real local FFmpeg work and a shortened deadline test for abort/cleanup. External provider responses are simulated.
+- Chromium workflow: router and no-project guard, library rename/reopen, prefs, saved media, recording, delete/undo, Voice Focus NR, on-device cleanup, mocked cloud captions with consent and friendly Retry, mocked isolation then neural-denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping and delete storage.
 - Flutter static analysis with no issues. Android APK/AAB build and physical TalkBack/VoiceOver tests are still needed.
 
 See [the repair report](docs/REPAIR_REPORT.md). Automated tests do not establish actual speech-recognition accuracy, perceptual noise-removal quality, perfect audiovisual synchronization or complete accessibility compliance.

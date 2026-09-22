@@ -1,4 +1,4 @@
-# VoiceCut Studio 1.3 — Free AI captions and speech isolation
+# VoiceCut Studio 2.0 — Accessible shell, project library, crop/rotate/freeze, automatic cloud AI
 
 An accessible-first browser video editor, packaged Android WebView app, and private Node/FFmpeg backend.
 
@@ -71,7 +71,7 @@ npm --prefix server test
 npx playwright install --with-deps chromium
 npm run test:browser
 ```
-There are 12 unit/build tests, 10 backend/provider-contract tests and a Chromium workflow with real local media/exports plus mocked cloud responses. See [the report](docs/REPAIR_REPORT.md) for what was and was not verified.
+There are 13 unit tests, 19 backend/provider-contract tests and a Chromium workflow covering the router, library, prefs, recording, on-device and mocked cloud AI (captions with consent and friendly Retry, isolation, neural denoise auto-selection), reviewed SRT/VTT, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping and delete storage. See [the report](docs/REPAIR_REPORT.md) for what was and was not verified.
 
 ## Limits and honest feature status
 - Sources for server processing: maximum **10 minutes and 100 MB**; larger inputs rejected before provider processing. A timeline trim alone does not shorten the uploaded source file.
@@ -86,7 +86,7 @@ There are 12 unit/build tests, 10 backend/provider-contract tests and a Chromium
 - This is a **personal** backend with one job at a time, not a multiuser SaaS. The server access key can spend your configured API credits; do not distribute it. The hourly cap is per-process and resets on restart, not a monetary guarantee.
 
 ## Privacy and 15-minute expiry
-Local editing does not upload media. After cloud consent, the server receives the source file, extracts audio and sends audio to the selected provider. Server temporary files are deleted on completion/error/disconnect or the 15-minute absolute deadline while running. Crashed/suspended hosts cannot execute cleanup while stopped; leftovers are removed on startup.
+Local editing does not upload media. After cloud consent, the server receives the source file, extracts audio and sends audio to the automatically chosen free-first provider. Server temporary files are deleted on completion/error/disconnect or the 15-minute absolute deadline while running. Crashed/suspended hosts cannot execute cleanup while stopped; leftovers are removed on startup.
 
 **Provider copies/retention and billing are not controlled by our timer.** Cancelling our request does not guarantee a provider refund or stopped provider-side processing. Review provider data policies before using sensitive recordings.
 

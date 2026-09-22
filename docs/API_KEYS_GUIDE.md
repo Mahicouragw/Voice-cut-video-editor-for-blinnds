@@ -1,6 +1,6 @@
 # Real AI captions and noise removal: create keys and paste them safely
 
-This guide applies to **VoiceCut 1.3 (the free-AI update)**. It adds free caption providers (Groq, Deepgram, AssemblyAI) and free built-in DeepFilterNet noise removal alongside the paid OpenAI/ElevenLabs options. The previous 1.1 repair had only filters and cannot use these provider keys. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
+This guide applies to **VoiceCut 2.0**. Cloud AI is automatic: free caption providers (Groq, Deepgram, AssemblyAI) are preferred before paid OpenAI, and Reduce Noise prefers free built-in DeepFilterNet before ElevenLabs cloud isolation. The normal user interface has **no server URL, API key, or provider/method menus** — provider keys live only in backend environment variables. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
 
 **Do not send keys to this chat. Do not paste them into JavaScript, HTML, Android assets, public GitHub files, screenshots, or GitHub issues.**
 
@@ -30,7 +30,7 @@ You only need **one** caption provider to start. Groq is recommended because its
 3. Choose **Create API Key**, name it **VoiceCut captions**.
 4. Copy the key immediately into a password manager or directly into your backend's `GROQ_API_KEY` environment variable. If you lose it, create a replacement.
 5. Review the current [rate limits](https://console.groq.com/docs/rate-limits) for `whisper-large-v3` (requests per day and audio seconds per day). If you exceed them, requests fail with a quota error instead of silently billing you.
-6. Do not paste it into VoiceCut's “Server access key” box. That box is for a different, self-generated secret.
+6. Never paste it into the VoiceCut website, which has no key fields. The only browser-side secret is your separate, self-generated server access key (Step 4), used through a private page address.
 
 ### Free alternatives (configure one or more)
 
@@ -102,7 +102,7 @@ GitHub Pages can host the editor, **but cannot run this Node/FFmpeg backend or k
 | `ALLOW_ANDROID_APP` | `true` to allow the packaged Android app's `http://localhost:8080` origin; its requests still require the server access key |
 | `MAX_AI_REQUESTS_PER_HOUR` | `20` by default; you can use `3` while testing |
 
-Optional features work independently: configure only the providers you want. The editor reports which key is missing, and caption requests never silently fall back to a different (possibly paid) provider. DeepFilterNet is included in the server image automatically — no key or extra step needed. Its first run downloads its neural model (about 30 MB); allow extra time on the very first denoise.
+Optional features work independently: configure only the providers you want. Captions automatically use the first configured provider in the order Groq → Deepgram → AssemblyAI → OpenAI, so free tiers are preferred and a paid key is only used when no free key is configured. DeepFilterNet is included in the server image automatically — no key or extra step needed. Its first run downloads its neural model (about 30 MB); allow extra time on the very first denoise.
 
 Render supplies `PORT`; you normally do not need to set it manually. FFmpeg and FFprobe are installed by the Dockerfile.
 
@@ -116,22 +116,31 @@ Render's blueprint can generate this for you. To generate your own instead, run 
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Copy the random 64-character output. Paste the **same value** in:
-1. Render → backend → Environment → `SERVER_ACCESS_KEY`.
-2. VoiceCut editor → Settings → **Your SERVER_ACCESS_KEY**.
+Copy the random 64-character output into Render → backend → Environment → `SERVER_ACCESS_KEY`, then save/redeploy.
 
 This key is not from OpenAI, ElevenLabs, or GitHub. It is your private password protecting the backend. Treat it as secret: anyone holding it can request processing using the backend's provider accounts. This is a personal setup, not a secure multiuser billing system. Do not embed the key in a public app for all users.
 
-## Step 5 — Connect the editor
+## Step 5 — Connect the editor (owner only; no key fields in the normal UI)
 
-1. Open your deployed VoiceCut website. The expected Pages address is [VoiceCut](https://mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/), **after successful deployment of this update**.
-2. Open **Settings → AI server connection and audio cleanup method**.
-3. Paste the Render HTTPS URL into **Your deployed HTTPS server URL**.
-4. Paste only the generated **SERVER_ACCESS_KEY** into **Your SERVER_ACCESS_KEY**.
-5. Click **Save server settings**. The access-key field clears; its value stays in memory for up to 15 minutes and is lost on page reload. It is not saved with your project.
-6. Click **Check connection and configured features**.
-7. Expect “Connected. Captions — Groq (free): key configured…” listing each provider you set, plus ElevenLabs isolation and DeepFilterNet install status. This checks your server access and the presence of provider keys; **it does not validate those keys with providers, verify billing, or make a paid processing request**.
-8. If the editor complains that you pasted a provider key, remove it and enter your generated server access key instead.
+The VoiceCut website intentionally has **no server URL or key fields**. Pick one connection method:
+
+**Option A — permanent personal site (recommended).** Edit `web/config.js` in your repository and set `BACKEND_URL` to your Render HTTPS origin (example shape `https://your-service.onrender.com`), commit, and redeploy the website. The editor then uses your backend automatically; provider keys still never appear in the browser.
+
+**Option B — private testing address.** Open the editor with a page address shaped like this (replace both values; keep the `#` part private, exactly like a password):
+
+```text
+https://mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/#/editor?dev-backend=https%3A%2F%2Fyour-service.onrender.com&dev-key=YOUR_64_CHARACTER_KEY
+```
+
+The `#dev-backend`/`#dev-key` part is session-only: it lives in the current tab, is never saved to the project or local storage, and is forgotten when the tab closes. Do not share or screenshot this address.
+
+**Verify the connection.** In a private terminal, check which features your backend has configured:
+
+```bash
+curl -s -H "Authorization: Bearer YOUR_64_CHARACTER_KEY" https://your-service.onrender.com/capabilities
+```
+
+Expect JSON listing captions/isolation availability, the automatic provider order pick, and DeepFilterNet install status. This checks your server access and the **presence** of provider keys; **it does not validate those keys with providers, verify billing, or make a paid processing request**.
 
 ## Step 6 — Generate captions and put them on the video
 
@@ -139,33 +148,29 @@ This key is not from OpenAI, ElevenLabs, or GitHub. It is your private password 
 2. Go to **CAPTIONS → Automatic captions**.
 3. Choose **Original video audio**. To transcribe a voice-over separately, select its audio clip in the timeline, then choose **Selected audio clip**.
 4. Choose the spoken language, or **Detect automatically**.
-5. Choose the **Caption service** (Groq is preselected). Only configure the matching key on the backend.
-6. Click **Generate AI captions**. Read and approve the upload/cost consent. The server receives your selected source file, extracts audio, and sends only the extracted audio to your chosen provider.
-6. Wait. Do not submit repeated requests. **Cancel caption request** aborts our waiting/request; it cannot promise a provider refund or stop provider-side processing already underway.
-7. Select each caption in **Caption to edit**. Correct the words and start/end seconds, then click **Save caption changes**.
-8. **Show captions on preview** controls the visible overlay. The caption text is also provided as ordinary screen-reader-readable text. **Announce current caption** reads it through the app's status region on demand; it does not interrupt TalkBack continuously during playback.
-9. Leave **Include captions permanently in exported video** checked to burn them into the video. Uncheck it if you only want separate subtitles.
-10. Download **SRT** and/or **VTT**. These timings automatically account for trim, deleted video segments and playback speed.
-11. Export the video using matching settings, then play the downloaded result. Burned-in text cannot be turned off afterward.
-12. Save the project. Caption edits and media persist locally. After reloading, re-enter the server access key only if you need another cloud request.
+5. There is no provider menu: the backend automatically uses Groq, Deepgram, AssemblyAI or OpenAI in that order, skipping providers with no key. Configure at least one caption key on the backend.
+6. Click **Generate Captions**. Read and approve the upload consent. The server receives your selected source file, extracts audio, and sends only the extracted audio to the automatically chosen provider.
+7. Wait. Do not submit repeated requests. **Cancel caption request** aborts our waiting/request; it cannot promise a provider refund or stop provider-side processing already underway. If generation fails you get a friendly message with **Retry**; your existing captions are preserved.
+8. Select each caption in **Caption to edit**. Correct the words and start/end seconds, then click **Save caption changes**.
+9. **Show captions on preview** controls the visible overlay. The caption text is also provided as ordinary screen-reader-readable text. **Announce current caption** reads it through the app's status region on demand; it does not interrupt TalkBack continuously during playback.
+10. Leave **Include captions permanently in exported video** checked to burn them into the video. Uncheck it if you only want separate subtitles.
+11. Download **SRT** and/or **VTT**. These timings automatically account for trim, deleted video segments and playback speed.
+12. Export the video using matching settings, then play the downloaded result. Burned-in text cannot be turned off afterward.
+13. Save the project. Caption edits and media persist locally in the project library. After reloading, reopen your private `#dev-key` page address only if you need another cloud request.
 
 This release captions **one chosen source at a time**, not all overlapping speech in the final mix. Generation replaces the current caption list after confirmation; Undo restores the previous list. To caption the exact final mix, first export it, import that exported video, then generate captions for its original audio. After moving a captioned audio clip, regenerate or manually retime its captions.
 
 ## Step 7 — Use genuine AI background-noise removal
 
-### Free option: DeepFilterNet (no key, no account)
+There is no method menu. **Enhancement mode** offers only **Automatic — best available** or **This device only — no upload**. Automatic mode tries, in order: free DeepFilterNet AI on your own server (no key, no account, nothing sent to any AI company) → ElevenLabs cloud Voice Isolator (uses your ElevenLabs credits after any free allowance) → on-device filters when the service is unreachable.
 
-1. Settings → **Method used by Reduce Noise buttons** → choose **DeepFilterNet AI**.
-2. Choose Reduce Noise for the original video audio, or select an audio clip and enhance that clip.
-3. Approve the upload prompt. Audio is processed by the neural model **on your own server** — nothing is sent to any AI company and no credits are used.
-4. The very first denoise downloads the model (about 30 MB); later runs are faster.
-5. Wait for completion. Listen to **Original** and **Processed** separately.
-6. Choose **Apply** only if it sounds better. The original video track is muted when its denoised replacement is applied to avoid double audio. Undo is available.
-7. Export and listen again.
+1. Choose Reduce Noise for the original video audio, or select an audio clip and enhance that clip.
+2. Approve the upload prompt. The very first DeepFilterNet denoise downloads the model (about 30 MB); later runs are faster.
+3. Wait for completion. Listen to **Original** and **Processed** separately.
+4. Choose **Apply** only if it sounds better. The original video track is muted when its denoised replacement is applied to avoid double audio. Undo is available.
+5. Export and listen again.
 
-### Cloud option: ElevenLabs AI Voice Isolator
-
-Follow the same steps with **ElevenLabs AI Voice Isolator** selected. Extracted audio is sent to ElevenLabs and uses your ElevenLabs credits after any free allowance. To keep the recording entirely on your device, select **Local filters** instead — but that mode is not AI.
+To keep a recording entirely on your device, choose **This device only** — but that mode is ordinary filters, not AI.
 
 ## Limits, cost control and privacy
 
@@ -176,14 +181,14 @@ Follow the same steps with **ElevenLabs AI Voice Isolator** selected. Extracted 
 - A sleeping or crashed host cannot perform wall-clock disk deletion while stopped. Stale files are removed on startup before accepting new requests. Use independent provider-managed lifecycle/audit controls if regulated deletion guarantees are required.
 - **OpenAI and ElevenLabs retention, logging, processing location and billing are separate.** Our 15-minute timer does not erase their copies. Review your account's data controls and the providers' terms before uploading private recordings.
 - Saved local projects, subtitles and downloaded exports do not expire automatically.
-- The server environment keys remain valid until provider expiry/revocation or rotation. VoiceCut's 15-minute in-browser copy expiry does not globally revoke your server key.
+- The server environment keys remain valid until provider expiry/revocation or rotation. Closing the tab only forgets your `#dev-key` page address; it does not revoke the server key.
 - GitHub authorization codes have their own expiry. The existing deployment helper caps new CLI sign-in waiting at 15 minutes. No GitHub account authorization request has been created by this guide.
 
 ## Troubleshooting — exact distinction between errors
 
 | Error | What to check |
 |---|---|
-| Server access key rejected / HTTP 401 | The **SERVER_ACCESS_KEY** in the editor must match the backend; do not use a provider key. Re-enter it after 15 minutes or reload. |
+| Server access key rejected / HTTP 401 | The `#dev-key` value in the page address must match the backend's `SERVER_ACCESS_KEY`; do not use a provider key. The address override is forgotten when the tab closes. |
 | `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`, `OPENAI_API_KEY` or `ELEVENLABS_API_KEY` missing | Add the named key to the **backend Environment**, then redeploy. |
 | OpenAI/ElevenLabs rejected the API key or permissions | The provider key is wrong, revoked, expired, missing endpoint permissions, belongs to the wrong project, or has an IP restriction. Fix it on the server, not in the editor. |
 | Quota/rate limit reached | Check API billing/credits and provider rate limits. A “configured” connection check is not a credit check. There is no automatic paid retry. |
@@ -194,7 +199,7 @@ Follow the same steps with **ElevenLabs AI Voice Isolator** selected. Extracted 
 | No readable audio / unsupported media | Import an ordinary MP4 with audio, WAV, MP3, M4A, WebM, OGG or FLAC. A silent video may have no audio track. |
 | Unexpected isolated audio duration | The replacement was rejected rather than corrupting synchronization. Keep the original and retry a short standard-format source. |
 | Captions contain wrong words | Edit them. AI can hallucinate words in silence/music; no automatic transcript is guaranteed correct. |
-| Settings look like the old version | Confirm the updated workflow deployed successfully, then reload the page. Open `/health` to check backend version 1.3.0. |
+| Settings look like the old version | Confirm the updated workflow deployed successfully, then reload the page. Open `/health` to check backend version 2.0.0. |
 
 ## Local backend alternative
 
@@ -211,4 +216,4 @@ Open `server/.env` privately and fill the key values plus your exact HTTPS front
 npm --prefix server start
 ```
 
-The editor accepts HTTPS backend URLs. For another device, use an authorized HTTPS deployment or trusted tunnel; `localhost` on a phone is not your computer. Do not expose your backend without the access key and upload limits.
+Point the editor at the local backend with a `#dev-backend` page address (see Step 5, Option B). The override only accepts HTTPS origins. For another device, use an authorized HTTPS deployment or trusted tunnel; `localhost` on a phone is not your computer. Do not expose your backend without the access key and upload limits.

@@ -9,7 +9,10 @@ const crypto=require('node:crypto');
 const {spawn,spawnSync}=require('node:child_process');
 const {createProviders,ServiceError}=require('./providers');
 const Captions=require('../web/captions');
-const VERSION='1.3.0';
+const VERSION='2.0.0';
+const CAPTION_ORDER=['groq','deepgram','assemblyai','openai']; // Automatic preference: free tiers first.
+const FILTER_LEVELS={light:'highpass=f=80,afftdn=nf=-20',medium:'highpass=f=100,lowpass=f=12000,afftdn=nf=-25',strong:'highpass=f=120,lowpass=f=8000,afftdn=nf=-35',voicefocus:'highpass=f=120,lowpass=f=8000,afftdn=nf=-40,equalizer=f=3000:t=q:w=1:g=5,acompressor=threshold=-20dB:ratio=4:attack=10:release=200'};
+const DF_LEVEL_ARGS={light:['--atten-lim-db','12'],medium:['--atten-lim-db','30'],strong:['--atten-lim-db','60','--pf'],voicefocus:['--atten-lim-db','100','--pf','--pf-beta','0.05']};
 const CAPTION_LABELS={openai:'OpenAI whisper-1',groq:'Groq whisper-large-v3',deepgram:'Deepgram Nova-3',assemblyai:'AssemblyAI Universal'};
 const CAPTION_ENV={openai:'OPENAI_API_KEY',groq:'GROQ_API_KEY',deepgram:'DEEPGRAM_API_KEY',assemblyai:'ASSEMBLYAI_API_KEY'};
 function deepFilterAvailable() {
@@ -19,8 +22,11 @@ function deepFilterAvailable() {
 const TTL=15*60*1000;
 const FORMATS='mov,matroska,webm,wav,mp3,flac,ogg,aac,aiff';
 function createApp(options={}) {
+  const publicMode=options.public??process.env.PUBLIC_MODE==='true';
   const key=options.key||process.env.SERVER_ACCESS_KEY;
-  if(!key||key.length<32) throw new Error('Set SERVER_ACCESS_KEY to a random secret of at least 32 characters.');
+  if(!publicMode&&(!key||key.length<32)) throw new Error('Set SERVER_ACCESS_KEY to a random secret of at least 32 characters, or explicitly set PUBLIC_MODE=true with quotas.');
+  const perIpHour=Number(process.env.MAX_AI_PER_IP_PER_HOUR||5),perIpDay=Number(process.env.MAX_AI_PER_IP_PER_DAY||20);
+  if(!Number.isInteger(perIpHour)||perIpHour<1||perIpHour>100||!Number.isInteger(perIpDay)||perIpDay<1||perIpDay>500) throw new Error('Per-IP quotas must be within 1-100/hour and 1-500/day.');
   const origin=options.origin||process.env.ALLOWED_ORIGIN;
   if(!origin||new URL(origin).origin!==origin||!origin.startsWith('https://')) throw new Error('ALLOWED_ORIGIN must be an exact HTTPS origin.');
   const origins=new Set([origin]);
@@ -33,7 +39,7 @@ function createApp(options={}) {
   fs.mkdirSync(root,{recursive:true,mode:0o700});
   for(const name of fs.readdirSync(root)) fs.rmSync(path.join(root,name),{recursive:true,force:true});
   const app=express();app.disable('x-powered-by');
-  let active=false,attempts=[];
+  let active=false,attempts=[],ipAttempts=new Map();
   app.use((req,res,next)=>{
     res.set('Cache-Control','no-store');res.set('X-Content-Type-Options','nosniff');
     if(req.headers.origin) {
@@ -45,25 +51,38 @@ function createApp(options={}) {
     if(req.method==='OPTIONS') return res.sendStatus(204);
     next();
   });
+  const clientIp=req=>(String(req.headers['x-forwarded-for']||'').split(',')[0].trim()||req.socket?.remoteAddress||'unknown').slice(0,80);
   const authorized=(req,res,next)=>{
+    if(publicMode) return next();
     const a=Buffer.from(req.headers.authorization||''),b=Buffer.from('Bearer '+key);
-    if(a.length!==b.length||!crypto.timingSafeEqual(a,b)) return res.status(401).json({code:'ACCESS_KEY_REJECTED',error:'Server access key rejected. Re-enter the current SERVER_ACCESS_KEY in editor Settings.'});
+    if(a.length!==b.length||!crypto.timingSafeEqual(a,b)) return res.status(401).json({code:'ACCESS_KEY_REJECTED',error:'Server access key rejected. Check the #dev-key value in the page address.'});
     next();
   };
   app.get('/health',(_,res)=>res.json({status:'ok',version:VERSION,temporaryFileTTLSeconds:900}));
-  app.get('/capabilities',authorized,(_,res)=>res.json({captions:providers.configured.captions,isolation:providers.configured.isolation,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900}));
+  app.get('/capabilities',authorized,(_,res)=>{const keys=providers.configured.captionProviders||{openai:providers.configured.captions};res.json({publicMode,captions:providers.configured.captions,isolation:providers.configured.isolation,autoProvider:CAPTION_ORDER.find(id=>keys[id])||null,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900});});
   const storage=multer.diskStorage({destination:(req,_,cb)=>cb(null,req.workdir),filename:(_,__,cb)=>cb(null,'input')});
   const upload=multer({storage,limits:{fileSize:100*1024*1024,files:1,fields:0,parts:1}}).single('file');
   const job=(kind)=>async(req,res)=>{
     if(active) return res.status(429).json({code:'BUSY',error:'Another job is running. Wait before trying again.'});
     const cloud=kind==='captions'||kind==='isolation';
+    const usesAI=cloud||kind==='deepfilter';
     const language=String(req.query.language||'');
     if(language&&!/^[a-z]{2}$/.test(language)) return res.status(400).json({error:'Language must be blank for automatic detection or a two-letter code.'});
-    const provider=String(req.query.provider||'openai');
+    const level=String(req.query.level||'medium');
+    if((kind==='filter'||kind==='deepfilter')&&!FILTER_LEVELS[level]) return res.status(400).json({code:'UNKNOWN_LEVEL',error:'Unknown noise reduction level.'});
+    const captionKeys=providers.configured.captionProviders||{openai:providers.configured.captions};
+    let provider=String(req.query.provider||'auto');
+    if(provider==='auto') provider=CAPTION_ORDER.find(id=>captionKeys[id])||'openai';
     if(kind==='captions'&&!CAPTION_LABELS[provider]) return res.status(400).json({code:'UNKNOWN_PROVIDER',error:'Unknown caption provider.'});
+    if(publicMode&&usesAI) {
+      const ip=clientIp(req),now=Date.now();
+      const log=(ipAttempts.get(ip)||[]).filter(t=>now-t<86400000);
+      if(log.filter(t=>now-t<3600000).length>=perIpHour||log.length>=perIpDay) return res.status(429).json({code:'IP_QUOTA',error:'Too many AI requests from this address. Try again later.'});
+      log.push(now);ipAttempts.set(ip,log);
+      if(ipAttempts.size>10000) ipAttempts.clear();
+    }
     if(cloud) {
       if(req.headers['x-upload-consent']!=='yes') return res.status(400).json({code:'CONSENT_REQUIRED',error:'Explicit cloud-processing consent is required.'});
-      const captionKeys=providers.configured.captionProviders||{openai:providers.configured.captions};
       const ready=kind==='captions'?captionKeys[provider]:providers.configured.isolation;
       if(!ready) return res.status(503).json({code:'KEY_NOT_CONFIGURED',error:(kind==='captions'?CAPTION_ENV[provider]:'ELEVENLABS_API_KEY')+' is not configured on the server.'});
       attempts=attempts.filter(t=>Date.now()-t<3600000);
@@ -110,7 +129,7 @@ function createApp(options={}) {
       const align=`adelay=${Math.round(offset*1000)}:all=1,apad,atrim=duration=${duration.toFixed(6)},asetpts=N/SR/TB`;
       const output=path.join(req.workdir,'processed.wav');
       if(kind==='filter') {
-        await encode(req.file.path,output,['-af',align+',highpass=f=80,lowpass=f=12000,afftdn=nf=-25','-ar','48000','-ac','2','-c:a','pcm_s16le']);
+        await encode(req.file.path,output,['-af',align+','+FILTER_LEVELS[level],'-ar','48000','-ac','2','-c:a','pcm_s16le']);
       } else if(kind==='deepfilter') {
         // Free, keyless neural denoising that runs on your own server. No provider account or credits.
         if(!deepFilterAvailable()) throw new ServiceError(503,'DEEPFILTER_MISSING','DeepFilterNet is not installed on this server. Rebuild the server image with deep_filter, or choose ElevenLabs cloud isolation instead.');
@@ -119,7 +138,7 @@ function createApp(options={}) {
         const outdir=path.join(req.workdir,'df');fs.mkdirSync(outdir);
         await new Promise((resolve,reject)=>{
           if(signal.aborted) return reject(new ServiceError(408,'EXPIRED','Request expired.'));
-          const child=spawn(process.env.DEEPFILTER_PATH||'deep_filter',[noisy,'-o',outdir],{stdio:'ignore'});
+          const child=spawn(process.env.DEEPFILTER_PATH||'deep_filter',[noisy,'-o',outdir,...DF_LEVEL_ARGS[level]],{stdio:'ignore'});
           children.add(child);
           const onAbort=()=>child.kill('SIGKILL');
           signal.addEventListener('abort',onAbort,{once:true});

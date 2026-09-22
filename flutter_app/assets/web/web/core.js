@@ -17,7 +17,24 @@
   }
   function extension(mime) { return mime.startsWith('video/mp4') ? 'mp4' : 'webm'; }
   function expired(createdAt, now = Date.now()) { return now - createdAt >= TTL_MS; }
-  const api = { TTL_MS, ranges, mimeFor, extension, expired };
+  // Crop rectangle in source pixels. Presets are centered; custom uses percentages 0-100.
+  function cropRect(preset, videoWidth, videoHeight, custom) {
+    const vw = Number(videoWidth), vh = Number(videoHeight);
+    if (!Number.isFinite(vw) || !Number.isFinite(vh) || vw <= 0 || vh <= 0) throw new Error('Video dimensions are unavailable.');
+    const ratios = {'16:9': 16/9, '9:16': 9/16, '1:1': 1, '4:3': 4/3};
+    if (preset === 'custom') {
+      const x = Number(custom?.x), y = Number(custom?.y), w = Number(custom?.w), h = Number(custom?.h);
+      if (![x,y,w,h].every(Number.isFinite) || x < 0 || y < 0 || w <= 0 || h <= 0 || x+w > 100.01 || y+h > 100.01) throw new Error('Crop values must be percentages inside the frame.');
+      return {x: Math.round(vw*x/100), y: Math.round(vh*y/100), w: Math.max(2, Math.round(vw*w/100)), h: Math.max(2, Math.round(vh*h/100))};
+    }
+    if (!preset || preset === 'original' || !ratios[preset]) return {x: 0, y: 0, w: Math.round(vw), h: Math.round(vh)};
+    const target = ratios[preset];
+    let w = vw, h = vw/target;
+    if (h > vh) { h = vh; w = vh*target; }
+    w = Math.max(2, Math.round(w)); h = Math.max(2, Math.round(h));
+    return {x: Math.round((vw-w)/2), y: Math.round((vh-h)/2), w, h};
+  }
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

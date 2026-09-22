@@ -27,17 +27,11 @@
   </div>
 </header>
 
-<nav class="section-nav" aria-label="Editor sections navigation" id="sectionNav">
-  <a href="#section-project" aria-label="Go to Project section">PROJECT</a>
-  <a href="#section-video" aria-label="Go to Video section">VIDEO</a>
-  <a href="#section-audio" aria-label="Go to Audio section">AUDIO</a>
-  <a href="#section-voiceover" aria-label="Go to Voice-over section">VOICE-OVER</a>
-  <a href="#section-effects" aria-label="Go to Effects section">EFFECTS</a>
-  <a href="#section-captions">CAPTIONS</a>
-  <a href="#section-aitools" aria-label="Go to Audio Tools section">Audio TOOLS</a>
-  <a href="#section-timeline" aria-label="Go to Timeline section">TIMELINE</a>
-  <a href="#section-export" aria-label="Go to Export section">EXPORT</a>
-  <a href="#section-settings" aria-label="Go to Settings section">SETTINGS</a>
+<nav class="primary-nav" aria-label="Main navigation" id="mainNav">
+  <a href="#/home" data-route="home">HOME</a>
+  <a href="#/library" data-route="library">LIBRARY</a>
+  <a href="#/settings" data-route="settings">SETTINGS</a>
+  <a href="#/editor" data-route="editor" id="navEditor" class="hidden">EDITOR</a>
 </nav>
 
 <main id="main-content" tabindex="-1">
@@ -54,30 +48,24 @@
         <span class="icon" aria-hidden="true">🎬</span>
         <span><strong>Upload Video</strong><br><small style="font-weight:400; color:var(--text2)">MP4, MOV, WebM supported</small></span>
       </button>
-      <button id="homeRecordVoice" aria-label="Record Voice-over, button. Record your voice while video plays">
-        <span class="icon" aria-hidden="true">🎙️</span>
-        <span><strong>Record Voice-over</strong><br><small style="font-weight:400; color:var(--text2)">Add narration</small></span>
-      </button>
-      <button id="homeImportAudio" aria-label="Import Audio, button. Import music or sound effects">
-        <span class="icon" aria-hidden="true">🎵</span>
-        <span><strong>Import Audio</strong><br><small style="font-weight:400; color:var(--text2)">MP3, WAV, M4A, AAC, OGG</small></span>
-      </button>
       <button id="homeOpenProject" aria-label="Open Project, button. Open a saved project">
         <span class="icon" aria-hidden="true">📂</span>
         <span><strong>Open Project</strong><br><small style="font-weight:400; color:var(--text2)">Continue editing</small></span>
       </button>
-      <button id="homeRecentProjects" aria-label="Saved Project, button. View recently edited projects">
+      <button id="homeLibrary" aria-label="Library, button. View all saved projects">
         <span class="icon" aria-hidden="true">🕘</span>
-        <span><strong>Saved Project</strong><br><small style="font-weight:400; color:var(--text2)">Quick access</small></span>
-      </button>
-      <button id="homeSettings" aria-label="Settings, button. Configure accessibility and app settings">
-        <span class="icon" aria-hidden="true">⚙️</span>
-        <span><strong>Settings</strong><br><small style="font-weight:400; color:var(--text2)">Accessibility options</small></span>
+        <span><strong>Library</strong><br><small style="font-weight:400; color:var(--text2)">All projects</small></span>
       </button>
       <button id="homeHelp" aria-label="Help and Accessibility, button. Learn how to use VoiceCut with screen readers">
         <span class="icon" aria-hidden="true">♿</span>
         <span><strong>Help and Accessibility</strong><br><small style="font-weight:400; color:var(--text2)">Guides & shortcuts</small></span>
       </button>
+    </div>
+
+    <div class="card" role="region" aria-labelledby="homeRecentHeading">
+      <h2 id="homeRecentHeading">Recent Projects</h2>
+      <p id="homeRecentEmpty">No recent projects.</p>
+      <div id="homeRecentList" class="library-list"></div>
     </div>
 
     <div class="card">
@@ -97,8 +85,136 @@
     </div>
   </section>
 
+  <!-- LIBRARY -->
+  <section id="libraryScreen" class="hidden" aria-labelledby="libraryTitle">
+    <div class="home-hero">
+      <h1 id="libraryTitle">Library</h1>
+      <p>All saved projects on this device. Media stays private in this browser.</p>
+    </div>
+    <p id="libraryEmpty">No recent projects.</p>
+    <div id="libraryList" class="library-list"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="settingsScreen" class="hidden" aria-labelledby="settingsViewTitle">
+    <div class="home-hero">
+      <h1 id="settingsViewTitle">Settings</h1>
+      <p>Accessibility, editing preferences, captions, privacy and about.</p>
+    </div>
+    <!-- SETTINGS -->
+    <div id="section-settings" class="card" role="region" aria-labelledby="settingsHeading">
+      <h2 id="settingsHeading">ACCESSIBILITY AND EDITOR PREFERENCES</h2>
+      <div class="grid grid-2">
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingScreenReader" checked aria-label="Screen reader optimized mode"> Screen Reader Optimized Mode</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingLargeControls" aria-label="Large controls"> Large Controls</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingHighContrast" aria-label="High contrast"> High Contrast</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingReducedMotion" aria-label="Reduced motion"> Reduced Motion</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingKeyboardNav" checked aria-label="Keyboard navigation"> Keyboard Navigation</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingAudioFeedback" checked aria-label="Audio feedback"> Audio Feedback</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingLongAnnouncements" aria-label="Longer status announcements"> Longer Status Announcements</label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingSimpleMode" checked aria-label="Simple editing mode"> Simple Editing Mode</label>
+      </div>
+      <div class="grid grid-2 mt-16">
+        <div>
+          <label for="settingTimelineNav">Timeline Navigation Mode</label>
+          <select id="settingTimelineNav" aria-label="Timeline navigation mode, select">
+            <option value="focus">Focus per clip</option>
+            <option value="swipe">Swipe navigation</option>
+            <option value="list">List navigation</option>
+          </select>
+        </div>
+        <div>
+          <label for="settingDefaultSkip">Skip Amount</label>
+          <select id="settingDefaultSkip" aria-label="Default skip amount, select">
+            <option value="5" selected>5 seconds</option>
+            <option value="10">10 seconds</option>
+            <option value="15">15 seconds</option>
+            <option value="30">30 seconds</option>
+          </select>
+        </div>
+        <div>
+          <label for="settingDefaultVolume">Default Volume</label>
+          <input id="settingDefaultVolume" type="range" min="0" max="100" value="80" aria-label="Default volume slider">
+          <span id="settingDefaultVolumeVal">80%</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label for="settingEnableDucking" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingEnableDucking" checked aria-label="Enable voice ducking by default"> Enable Voice Ducking</label>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="divider"></div>
+      <div class="divider"></div>
+      <h3>Editor Preferences</h3>
+      <div class="grid grid-2">
+        <div>
+          <label for="settingPlaybackSpeed">Default playback speed</label>
+          <select id="settingPlaybackSpeed"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+        </div>
+        <div>
+          <label for="settingExportResolution">Default export quality</label>
+          <select id="settingExportResolution"><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">4K if supported</option></select>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <h3>Caption Preferences</h3>
+      <div class="grid grid-2">
+        <div>
+          <label for="settingCaptionLanguage">Preferred caption language</label>
+          <select id="settingCaptionLanguage"><option value="">Detect automatically</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="ml">Malayalam</option><option value="mr">Marathi</option><option value="bn">Bengali</option><option value="ur">Urdu</option></select>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label for="settingCaptionPreview" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingCaptionPreview" checked> Show captions on preview</label>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label for="settingCaptionBurn" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingCaptionBurn" checked> Include captions in exported video</label>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <h3>Advanced Editing Mode</h3>
+      <p style="color:var(--text2)">Advanced mode exposes multiple tracks, precise timeline positioning, audio fades, ducking, noise reduction strength, playback speed, detailed export settings.</p>
+      <button id="btnToggleAdvanced" aria-label="Enable advanced editing mode, button">Enable Advanced Editing Mode</button>
+    </div>
+    <div class="card" role="region" aria-labelledby="privacyHeading">
+      <h2 id="privacyHeading">Privacy</h2>
+      <p>Videos, recordings, and voice-over files are private user content. Processing happens locally using Web Audio API, HTML5 Video, and Canvas capture. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
+      <p><strong>Local processing:</strong> Trimming, splitting, volume, fades, noise reduction, ducking, preview playback.</p>
+      <p><strong>Optional cloud AI:</strong> automatic captions and AI noise removal can process audio on the secure VoiceCut service. Nothing is uploaded without your explicit approval for each request. Temporary server copies expire within 15 minutes.</p>
+    </div>
+    <div class="card" role="region" aria-labelledby="termsHeading">
+      <h2 id="termsHeading">Terms of Use</h2>
+      <p>VoiceCut Studio is provided for personal video editing. You are responsible for the content you edit and share: only edit media you own or have permission to use. Cloud AI features are rate-limited per device to keep the shared service fair; excessive automated use may be blocked. No warranty is given; review AI captions and enhanced audio before publishing.</p>
+    </div>
+
+    <div class="card" role="region" aria-labelledby="aboutHeading">
+      <h2 id="aboutHeading">About VoiceCut Studio</h2>
+      <p>Version <strong>2.0.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
+    </div>
+  </section>
+
+  <!-- NO PROJECT -->
+  <section id="noProjectScreen" class="hidden" aria-labelledby="noProjectTitle">
+    <div class="home-hero">
+      <h1 id="noProjectTitle">No project is open.</h1>
+      <p>Upload a video to start editing, or open a saved project.</p>
+    </div>
+    <div class="home-actions" role="group" aria-label="No project actions">
+      <button id="noProjectUpload" class="primary">Upload Video</button>
+      <button id="noProjectOpen">Open Project</button>
+    </div>
+  </section>
+
   <!-- EDITOR SCREEN -->
   <section id="editorScreen" class="hidden" aria-label="Video editor">
+    <nav class="section-nav" aria-label="Editor sections navigation" id="sectionNav">
+      <a href="#section-video" aria-label="Go to Video section">VIDEO</a>
+      <a href="#section-edit" aria-label="Go to Edit section">EDIT</a>
+      <a href="#section-audio" aria-label="Go to Audio section">AUDIO</a>
+      <a href="#section-voiceover" aria-label="Go to Voice-over section">VOICE-OVER</a>
+      <a href="#section-aitools" aria-label="Go to AI Audio section">AI AUDIO</a>
+      <a href="#section-captions" aria-label="Go to Captions section">CAPTIONS</a>
+      <a href="#section-timeline" aria-label="Go to Timeline section">TIMELINE</a>
+      <a href="#section-export" aria-label="Go to Export section">EXPORT</a>
+    </nav>
     <!-- PROJECT -->
     <div id="section-project" class="card" role="region" aria-labelledby="projectHeading">
       <h2 id="projectHeading">PROJECT</h2>
@@ -180,9 +296,9 @@
         <button id="btnDeleteSection" aria-label="Delete selected section, button">Delete Selected Section</button>
         <button id="btnKeepSection" aria-label="Keep selected section, button">Keep Selected Section</button>
         <button id="btnDuplicateSegment" aria-label="Duplicate segment, button">Duplicate Segment</button>
-        <button id="btnCrop" aria-label="Crop video, button" disabled title="Not implemented in this repair release">Crop</button>
-        <button id="btnRotate" aria-label="Rotate video, button" disabled title="Not implemented in this repair release">Rotate</button>
-        <button id="btnFreezeFrame" aria-label="Freeze frame, button" disabled title="Not implemented in this repair release">Freeze Frame</button>
+        <button id="btnCrop" aria-label="Crop settings, button">Crop…</button>
+        <button id="btnRotate" aria-label="Rotation settings, button">Rotate…</button>
+        <button id="btnFreezeFrame" aria-label="Freeze frame settings, button">Freeze Frame…</button>
       </div>
 
       <div class="grid grid-2 mt-16">
@@ -203,6 +319,49 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- EDIT: CROP, ROTATE, FREEZE -->
+    <div id="section-edit" class="card" role="region" aria-labelledby="editHeading">
+      <h2 id="editHeading">EDIT — CROP, ROTATE, FREEZE FRAME</h2>
+      <p style="color:var(--text2); font-size:14px;">Crop and rotation are applied when you export the video. Numbers are percentages of the frame, so no visual dragging is needed.</p>
+      <div class="grid grid-2">
+        <div>
+          <label for="cropPreset">Crop</label>
+          <select id="cropPreset" aria-label="Crop preset, select">
+            <option value="original">Original (no crop)</option>
+            <option value="16:9">16:9 widescreen</option>
+            <option value="9:16">9:16 vertical</option>
+            <option value="1:1">1:1 square</option>
+            <option value="4:3">4:3 standard</option>
+            <option value="custom">Custom (use numbers below)</option>
+          </select>
+        </div>
+        <div>
+          <label for="rotateAngle">Rotate</label>
+          <select id="rotateAngle" aria-label="Rotation angle, select">
+            <option value="0">No rotation</option>
+            <option value="90">90 degrees clockwise</option>
+            <option value="180">180 degrees</option>
+            <option value="270">270 degrees clockwise</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-3 mt-16" role="group" aria-label="Custom crop area in percent">
+        <div><label for="cropX">Left, percent</label><input id="cropX" type="number" min="0" max="100" step="1" value="0"></div>
+        <div><label for="cropY">Top, percent</label><input id="cropY" type="number" min="0" max="100" step="1" value="0"></div>
+        <div><label for="cropW">Width, percent</label><input id="cropW" type="number" min="1" max="100" step="1" value="100"></div>
+        <div><label for="cropH">Height, percent</label><input id="cropH" type="number" min="1" max="100" step="1" value="100"></div>
+      </div>
+      <p id="cropSummary" role="status">Crop: original frame. Rotation: none.</p>
+      <div class="divider"></div>
+      <h3>Freeze Frame</h3>
+      <p style="color:var(--text2); font-size:14px;">Hold the current frame still for a few seconds in the exported video. Audio pauses during the hold.</p>
+      <div class="grid grid-2">
+        <div><label for="freezeSeconds">Hold duration, seconds</label><input id="freezeSeconds" type="number" min="1" max="10" step="1" value="2"></div>
+        <div style="align-self:end;"><button id="btnAddFreeze" aria-label="Add freeze frame at current position, button">Add Freeze Frame at Current Position</button></div>
+      </div>
+      <ul id="freezeList" aria-label="Freeze frames"></ul>
     </div>
 
     <!-- ORIGINAL AUDIO -->
@@ -231,7 +390,7 @@
           <option value="light">Light</option>
           <option value="medium" selected>Medium</option>
           <option value="strong">Strong</option>
-          <option value="custom">Custom</option>
+          <option value="voicefocus">Voice Focus</option>
         </select>
       </div>
     </div>
@@ -313,16 +472,16 @@
 
     <section id="section-captions" class="card" aria-labelledby="captionsHeading">
       <h2 id="captionsHeading">Automatic captions</h2>
-      <p>Recognize speech with a free or paid caption service, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
+      <p>Generate captions automatically, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
       <div class="grid grid-2">
-        <div><label for="captionSource">Speech to caption</label><select id="captionSource"><option value="original">Original video audio</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
+        <div><label for="captionSource">Speech to caption</label><select id="captionSource"><option value="original">Original video audio</option><option value="voiceover">Voice-over track</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
         <div><label for="captionLanguage">Spoken language</label><select id="captionLanguage"><option value="">Detect automatically</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="ml">Malayalam</option><option value="mr">Marathi</option><option value="bn">Bengali</option><option value="ur">Urdu</option></select></div>
-        <div><label for="captionProvider">Caption service</label><select id="captionProvider"><option value="groq">Groq Whisper — free tier, recommended</option><option value="deepgram">Deepgram Nova — free starter credit</option><option value="assemblyai">AssemblyAI — free tier</option><option value="openai">OpenAI Whisper — paid</option></select></div>
       </div>
       <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes and 100 MB.</p>
-      <button id="btnGenerateCaptions" class="primary">Generate AI captions</button>
+      <button id="btnGenerateCaptions" class="primary">Generate Captions</button>
+      <button id="btnRetryCaptions" class="hidden">Retry</button>
       <button id="btnCancelCaptions" disabled>Cancel caption request</button>
-      <p id="captionStatus" role="status" aria-live="polite">No captions yet. Configure your server in Settings, or add a caption manually.</p>
+      <p id="captionStatus" role="status" aria-live="polite">No captions yet. Generate captions or add one manually.</p>
       <label><input type="checkbox" id="captionPreview" checked> Show captions on preview</label>
       <label><input type="checkbox" id="captionBurn" checked> Include captions permanently in exported video</label>
       <p id="currentCaption">Current caption: none</p>
@@ -353,7 +512,14 @@
             <option value="light">Light</option>
             <option value="medium" selected>Medium</option>
             <option value="strong">Strong</option>
-            <option value="custom">Custom</option>
+            <option value="voicefocus">Voice Focus</option>
+          </select>
+        </div>
+        <div>
+          <label for="enhanceMode">Enhancement mode</label>
+          <select id="enhanceMode" aria-label="Enhancement mode, select">
+            <option value="automatic">Automatic — best available</option>
+            <option value="device">This device only — no upload</option>
           </select>
         </div>
         <div class="flex gap-8 wrap items-center" style="align-self:end;">
@@ -371,7 +537,7 @@
           <button id="btnAIEnhanceAllVoice" aria-label="Audio Enhance All Voice-overs, button. Process all voice-over tracks" disabled title="Process one clip at a time and preview before applying">🤖 Enhance All Voice-overs</button>
           <button id="btnAIEnhanceAll" aria-label="Audio Enhance All Audio Tracks, button" disabled title="Process one clip at a time and preview before applying">🤖 Enhance All Audio</button>
         </div>
-        <div class="mt-8" style="font-size:12px; color:var(--text3);">Local audio filters • No upload unless you configure and approve server processing • Results vary</div>
+        <div class="mt-8" style="font-size:12px; color:var(--text3);">Automatic mode may upload audio to the secure VoiceCut service with your approval. Results vary.</div>
       </div>
       <div class="mt-16">
         <h3>Per-Track Noise Reduction</h3>
@@ -450,7 +616,7 @@
               <option value="light">Light</option>
               <option value="medium">Medium</option>
               <option value="strong">Strong</option>
-              <option value="custom">Custom</option>
+              <option value="voicefocus">Voice Focus</option>
             </select>
           </div>
           <div>
@@ -527,78 +693,6 @@
       <video id="exportedVideo" controls class="hidden mt-16 w-full" style="width:100%; border-radius:12px; background:#000;" aria-label="Exported video preview"></video>
     </div>
 
-    <!-- SETTINGS -->
-    <div id="section-settings" class="card" role="region" aria-labelledby="settingsHeading">
-      <h2 id="settingsHeading">SETTINGS</h2>
-      <div class="grid grid-2">
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingScreenReader" checked aria-label="Screen reader optimized mode"> Screen Reader Optimized Mode</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingLargeControls" aria-label="Large controls"> Large Controls</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingHighContrast" aria-label="High contrast"> High Contrast</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingReducedMotion" aria-label="Reduced motion"> Reduced Motion</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingKeyboardNav" checked aria-label="Keyboard navigation"> Keyboard Navigation</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingAudioFeedback" checked aria-label="Audio feedback"> Audio Feedback</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingLongAnnouncements" aria-label="Longer status announcements"> Longer Status Announcements</label>
-        <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingSimpleMode" checked aria-label="Simple editing mode"> Simple Editing Mode</label>
-      </div>
-      <div class="grid grid-2 mt-16">
-        <div>
-          <label for="settingTimelineNav">Timeline Navigation Mode</label>
-          <select id="settingTimelineNav" aria-label="Timeline navigation mode, select">
-            <option value="focus">Focus per clip</option>
-            <option value="swipe">Swipe navigation</option>
-            <option value="list">List navigation</option>
-          </select>
-        </div>
-        <div>
-          <label for="settingDefaultSkip">Skip Amount</label>
-          <select id="settingDefaultSkip" aria-label="Default skip amount, select">
-            <option value="5" selected>5 seconds</option>
-            <option value="10">10 seconds</option>
-            <option value="15">15 seconds</option>
-            <option value="30">30 seconds</option>
-          </select>
-        </div>
-        <div>
-          <label for="settingDefaultVolume">Default Volume</label>
-          <input id="settingDefaultVolume" type="range" min="0" max="100" value="80" aria-label="Default volume slider">
-          <span id="settingDefaultVolumeVal">80%</span>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <label for="settingEnableDucking" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingEnableDucking" checked aria-label="Enable voice ducking by default"> Enable Voice Ducking</label>
-        </div>
-      </div>
-      <div class="divider"></div>
-      <h3>AI server connection and audio cleanup method</h3>
-      <p>Provider keys belong only in your server Environment settings: GROQ_API_KEY, DEEPGRAM_API_KEY or ASSEMBLYAI_API_KEY for captions (free options available), OPENAI_API_KEY for paid captions, and ELEVENLABS_API_KEY for cloud AI speech isolation. Never paste any provider key below. Local filters and DeepFilterNet need no key. Cloud processing requires consent and may cost money after free quotas.</p>
-      <label for="aiServerUrl">Your deployed HTTPS server URL</label>
-      <input id="aiServerUrl" type="url" placeholder="https://your-service.onrender.com">
-      <label for="serverAccessKey">Your SERVER_ACCESS_KEY (not an OpenAI or ElevenLabs key)</label>
-      <input id="serverAccessKey" type="password" autocomplete="off">
-      <button id="btnSaveApiKeys">Save server settings</button>
-      <button id="btnCheckServer">Check connection and configured features</button>
-      <button id="btnClearApiKeys">Clear server settings</button>
-      <p id="apiKeysStatus" role="status">Server access key stays in memory for up to 15 minutes, then must be entered again.</p>
-      <label for="cleanupMethod">Method used by Reduce Noise buttons</label>
-      <select id="cleanupMethod">
-        <option value="local">Local filters — free, not AI, no upload</option>
-        <option value="deepfilter">DeepFilterNet AI — free, runs on your server, no key</option>
-        <option value="server">Server FFmpeg filters — not AI</option>
-        <option value="elevenlabs">ElevenLabs AI Voice Isolator — cloud, may use paid credits</option>
-      </select>
-      <p>Choose DeepFilterNet for free genuine AI noise removal with no account or key, or ElevenLabs for cloud AI isolation. AI cleanup can remove music as well as noise and can alter speech. Preview before applying; your original media is retained. We do not silently substitute filters when an AI request fails.</p>
-      <p>Server temporary copies expire within 15 minutes while the server is running. Providers have their own retention policies: our timer cannot delete their copies. Cancel stops our request, but cannot guarantee refund or cancellation of provider-side processing.</p>
-      <div class="divider"></div>
-      <h3>Advanced Editing Mode</h3>
-      <p style="color:var(--text2)">Advanced mode exposes multiple tracks, precise timeline positioning, audio fades, ducking, noise reduction strength, playback speed, detailed export settings.</p>
-      <button id="btnToggleAdvanced" aria-label="Enable advanced editing mode, button">Enable Advanced Editing Mode</button>
-    </div>
-
-    <div class="card" role="region" aria-labelledby="privacyHeading">
-      <h2 id="privacyHeading">Privacy</h2>
-      <p>Videos, recordings, and voice-over files are private user content. Processing happens locally using Web Audio API, HTML5 Video, and Canvas capture. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
-      <p><strong>Local processing:</strong> Trimming, splitting, volume, fades, noise reduction, ducking, preview playback.</p>
-      <p><strong>Potential server processing:</strong> Local editing needs no upload. AI captions send extracted audio to your chosen caption service (Groq, Deepgram, AssemblyAI or OpenAI); AI isolation sends extracted audio to ElevenLabs; DeepFilterNet denoising stays on your own server. Cloud uploads happen via your server only after explicit consent. The server initially receives the selected source file. Provider retention and billing are separate from our local cleanup timer.</p>
-    </div>
   </section>
 
   <!-- Help Dialog -->
@@ -724,6 +818,7 @@
   <button id="btnClearStatus" aria-label="Clear status message, button" class="ghost">Clear</button>
 </div>
 
+<script src="web/config.js" defer></script>
 <script src="web/core.js" defer></script>
 <script src="web/captions.js" defer></script>
 <script src="web/storage.js" defer></script>
