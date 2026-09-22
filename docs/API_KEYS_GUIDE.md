@@ -99,7 +99,7 @@ GitHub Pages can host the editor, **but cannot run this Node/FFmpeg backend or k
 | `ELEVENLABS_API_KEY` | Your real key from Step 2, or blank |
 | `SERVER_ACCESS_KEY` | Render-generated random value, or your self-generated value from Step 4 |
 | `ALLOWED_ORIGIN` | `https://mahicouragw.github.io` — **no repository path and no trailing slash** |
-| `ALLOW_ANDROID_APP` | `true` to allow the packaged Android app's `http://localhost:8080` origin; its requests still require the server access key |
+| `ALLOW_ANDROID_APP` | Legacy flag for the old packaged app's `http://localhost:8080` origin. The current app loads the website directly and uses the website origin, so new backends can leave this unset |
 | `MAX_AI_REQUESTS_PER_HOUR` | `20` by default; you can use `3` while testing |
 
 Optional features work independently: configure only the providers you want. Captions automatically use the first configured provider in the order Groq → Deepgram → AssemblyAI → OpenAI, so free tiers are preferred and a paid key is only used when no free key is configured. DeepFilterNet is included in the server image automatically — no key or extra step needed. Its first run downloads its neural model (about 30 MB); allow extra time on the very first denoise.

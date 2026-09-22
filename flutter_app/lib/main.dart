@@ -6,17 +6,14 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-final localServer = InAppLocalhostServer(documentRoot: 'assets/web', port: 8080);
-const localOrigin = 'http://localhost:8080';
+// The app loads the live VoiceCut website, so website updates apply
+// automatically without rebuilding or reinstalling the app.
+const siteUrl = 'https://mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/';
+const siteOrigin = 'https://mahicouragw.github.io';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await localServer.start();
-    runApp(const VoiceCutApp());
-  } catch (_) {
-    runApp(const MaterialApp(home: Scaffold(body: Center(child: Text('Could not start the editor. Close and reopen the app.')))));
-  }
+  runApp(const VoiceCutApp());
 }
 
 class VoiceCutApp extends StatelessWidget {
@@ -37,14 +34,19 @@ class EditorPage extends StatefulWidget {
 }
 
 class _EditorPageState extends State<EditorPage> {
+  InAppWebViewController? webController;
   String? error;
   bool loading = true;
+  void retry() {
+    setState(() { loading = true; error = null; });
+    webController?.reload();
+  }
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('VoiceCut Studio')),
     body: SafeArea(child: Stack(children: [
       InAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri('$localOrigin/index.html')),
+        initialUrlRequest: URLRequest(url: WebUri(siteUrl)),
         initialSettings: InAppWebViewSettings(
           javaScriptEnabled: true,
           mediaPlaybackRequiresUserGesture: true,
@@ -55,12 +57,13 @@ class _EditorPageState extends State<EditorPage> {
         ),
         shouldOverrideUrlLoading: (controller, action) async {
           final origin = action.request.url?.origin;
-          return origin == localOrigin ? NavigationActionPolicy.ALLOW : NavigationActionPolicy.CANCEL;
+          return origin == siteOrigin ? NavigationActionPolicy.ALLOW : NavigationActionPolicy.CANCEL;
         },
         onWebViewCreated: (controller) {
+          webController = controller;
           controller.addJavaScriptHandler(handlerName: 'shareSubtitles', callback: (args) async {
             final url = await controller.getUrl();
-            if (url?.origin != localOrigin || args.length != 2 || args[0] is! String) throw StateError('Invalid subtitle request');
+            if (url?.origin != siteOrigin || args.length != 2 || args[0] is! String) throw StateError('Invalid subtitle request');
             final text = args[0] as String;
             if (text.length > 3000000) throw StateError('Subtitle file too large');
             final extension = args[1] == 'vtt' ? 'vtt' : 'srt';
@@ -76,7 +79,7 @@ class _EditorPageState extends State<EditorPage> {
           });
           controller.addJavaScriptHandler(handlerName: 'shareExport', callback: (args) async {
             final url = await controller.getUrl();
-            if (url?.origin != localOrigin || args.length != 2 || args[0] is! String) throw StateError('Invalid export request');
+            if (url?.origin != siteOrigin || args.length != 2 || args[0] is! String) throw StateError('Invalid export request');
             final encoded = args[0] as String;
             if (encoded.length > 56 * 1024 * 1024) throw StateError('Export too large. Use Chrome for exports larger than 40 MB.');
             final extension = args[1] == 'mp4' ? 'mp4' : 'webm';
@@ -92,18 +95,21 @@ class _EditorPageState extends State<EditorPage> {
           });
         },
         onPermissionRequest: (controller, request) async {
-          final trusted = request.origin.origin == localOrigin;
+          final trusted = request.origin.origin == siteOrigin;
           final audioOnly = request.resources.isNotEmpty && request.resources.every((r) => r == PermissionResourceType.MICROPHONE);
           final allowed = trusted && audioOnly && await Permission.microphone.request().isGranted;
           return PermissionResponse(resources: request.resources, action: allowed ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
         },
         onLoadStop: (controller, url) { if (mounted) setState(() { loading = false; error = null; }); },
         onReceivedError: (controller, request, details) {
-          if (request.isForMainFrame == true && mounted) setState(() { loading = false; error = 'Editor could not load. Close and reopen the app.'; });
+          if (request.isForMainFrame == true && mounted) setState(() { loading = false; error = 'Could not load the editor. Check your internet connection, then retry.'; });
         },
       ),
       if (loading) const Center(child: CircularProgressIndicator(semanticsLabel: 'Loading editor')),
-      if (error != null) Center(child: Text(error!)),
+      if (error != null) Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(padding: const EdgeInsets.all(16), child: Text(error!, textAlign: TextAlign.center)),
+        ElevatedButton(onPressed: retry, child: const Text('Retry')),
+      ])),
     ])),
   );
 }

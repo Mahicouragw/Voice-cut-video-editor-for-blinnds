@@ -26,7 +26,7 @@ Cloud features require your own provider accounts and may cost money. No paid ac
 - `web/storage.js`: IndexedDB media and caption persistence.
 - `server/server.js`: authenticated multipart routes, FFmpeg/FFprobe preprocessing, limits and cleanup.
 - `server/providers.js`: Groq/Deepgram/AssemblyAI/OpenAI caption and ElevenLabs isolation contracts, bounded responses and safe error handling.
-- `flutter_app/lib/main.dart`: Android microphone permission, local asset loading and video/subtitle sharing.
+- `flutter_app/lib/main.dart`: Android microphone permission, live-website WebView and video/subtitle sharing.
 - `scripts/android-signing.py`: private signing configuration helper.
 - `.github/workflows/`: website tests/deployment, debug APK, explicitly requested signed AAB.
 

@@ -8,4 +8,3 @@ flutter create --platforms=android --org=com.mahicouragw --project-name=voicecut
 cp -R flutter_app/android/. "$TEMP/overrides/"
 cp -R "$TEMP/scaffold/android/." flutter_app/android/
 cp -R "$TEMP/overrides/." flutter_app/android/
-node scripts/android-assets.js
