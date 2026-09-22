@@ -4,7 +4,7 @@ window.VoiceCutConfig = (() => {
   // The app owner sets their public backend origin here before deploying.
   // Leave null to ship without cloud AI: the app shows a friendly
   // "temporarily unavailable" message instead of asking users for keys or URLs.
-  const BACKEND_URL = null; // e.g. 'https://voicecut-processing.onrender.com'
+  const BACKEND_URL = 'https://voice-cut-video-editor-for-blinnds.onrender.com';
   // Hidden developer-only override, never linked from the UI and never stored.
   // Open the app with #dev-backend=<encoded-https-url>&dev-key=<key> for this tab only.
   function devOverride() {

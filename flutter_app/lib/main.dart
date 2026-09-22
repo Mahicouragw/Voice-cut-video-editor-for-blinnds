@@ -42,8 +42,9 @@ class _EditorPageState extends State<EditorPage> {
     webController?.reload();
   }
   @override
+  // Fullscreen WebView with no native header: TalkBack linear navigation
+  // starts inside the page instead of getting stuck on an app bar.
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('VoiceCut Studio')),
     body: SafeArea(child: Stack(children: [
       InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(siteUrl)),

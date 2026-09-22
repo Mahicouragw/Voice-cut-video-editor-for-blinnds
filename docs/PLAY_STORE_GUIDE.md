@@ -12,7 +12,7 @@ The Android source was analyzed with Flutter 3.41.2 with **no issues found**. Th
 7. On your Android test device, install `app-debug.apk` if you are comfortable granting install permission to your file manager. Never disable Play Protect globally.
 8. Test picking media, TalkBack traversal, permission denial, recording, persistence after reopening, editing, cancelling export and saving/sharing an actual video. WebView codecs vary by Android version.
 
-The app loads the live VoiceCut website, so website updates apply automatically without reinstalling the app. An internet connection is required. Microphone permission is requested only when recording, and only for the trusted website origin. It does not request broad media-library/storage permissions; file selection uses the WebView/system picker.
+The app loads the live VoiceCut website, so website updates apply automatically without reinstalling the app. An internet connection is required. Microphone permission is requested only when recording, and only for the trusted website origin. It does not request broad media-library/storage permissions; file selection uses the WebView/system picker. The editor fills the whole screen with no separate native header, so TalkBack swipe navigation starts inside the page content instead of stopping on an app bar.
 
 ## 2. Important limitations
 - Since app version 2.1 the website is loaded from its address, not packaged inside. Updating the website updates every installed app automatically; rebuild the APK only when the wrapper itself (permissions, sharing, version) changes.

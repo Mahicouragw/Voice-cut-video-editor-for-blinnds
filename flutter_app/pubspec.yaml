@@ -1,7 +1,7 @@
 name: voicecut_studio
 description: Accessible video editor with browser-based media processing.
 publish_to: none
-version: 2.1.0+6
+version: 2.1.1+7
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:
