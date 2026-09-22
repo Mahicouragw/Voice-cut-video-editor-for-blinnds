@@ -188,8 +188,11 @@ const path = require('node:path');
   await page.waitForFunction(()=>!document.querySelector('#btnCancelExport').disabled);
   await page.locator('#btnCancelExport').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Export cancelled'));
+  await page.waitForFunction(()=>!document.querySelector('#btnDoExport').disabled && document.querySelector('#btnCancelExport').disabled);
   // Native button Space activation must not be stolen by global play shortcuts.
-  await page.locator('#btnSaveProject').focus();await page.keyboard.press('Space');
+  await page.locator('#btnSaveProject').focus();
+  await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='btnSaveProject');
+  await page.keyboard.press('Space');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Project saved'));
   // Filename is rendered as text, never HTML.
   await page.setInputFiles('#fileAudio',{name:'<img src=x onerror=window.INJECTED=1>.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});

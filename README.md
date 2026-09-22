@@ -7,11 +7,12 @@ An accessible-first browser video editor, packaged Android WebView app, and priv
 The earlier manual alternative remains in [AI_UPDATE_START_HERE.md](AI_UPDATE_START_HERE.md). For precise key creation/paste instructions, read [docs/API_KEYS_GUIDE.md](docs/API_KEYS_GUIDE.md).
 
 ## What is new
-- **Free AI captions:** Groq Whisper (free tier, recommended), Deepgram Nova and AssemblyAI free options, plus paid OpenAI — original-language transcription, automatic detection or a language hint, timed words, editable captions.
-- **Subtitle output:** preview overlay, optional burned-in captions in exported video, SRT/VTT downloads retimed for trim, deleted segments and playback speed.
-- **Free DeepFilterNet AI denoising:** genuine neural noise removal running on your own server with no key or account, plus ElevenLabs cloud Voice Isolator as an option. No silent substitution when a provider fails.
-- **Key safety:** provider keys (`GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`) live only on the backend. The editor receives a different `SERVER_ACCESS_KEY`, held in memory for at most 15 minutes.
-- Explicit upload/cost confirmation, server configuration check, useful auth/billing/quota errors, cancel/timeout handling and no automatic paid retries.
+- **Simple shell:** HOME, LIBRARY and SETTINGS navigation. The editor opens only after a project is uploaded or opened; a direct editor link with no project shows a friendly “No project is open” view.
+- **Project library:** multiple saved projects on the device with open, rename and delete, plus recent projects on Home and a “Project saved” announcement.
+- **Crop, rotate and freeze-frame export:** percentage-based crop presets plus custom numbers, 90/180/270-degree rotation, and freeze holds — all honored in the exported video.
+- **Automatic AI, no provider menus:** captions need only Generate plus a language and speech source; the backend automatically prefers free Groq, then Deepgram, AssemblyAI, then OpenAI. Noise reduction offers Off/Light/Medium/Strong/Voice Focus with Original/Processed compare, and Reduce Noise automatically uses on-server DeepFilterNet AI, then ElevenLabs cloud isolation, then on-device filters.
+- **No credentials in the user UI:** provider keys live only in backend environment variables. The normal Settings hold only accessibility and editing preferences. The owner connects a backend by setting `BACKEND_URL` in `web/config.js` (or a session-only `#dev-backend`/`#dev-key` page address for testing).
+- Friendly failures (“Caption generation is temporarily unavailable…”) with Retry, per-request upload consent, cancel/timeout handling and no automatic paid retries.
 
 Cloud features require your own provider accounts and may cost money. No paid account, API keys or public deployment have been created for you. Automated tests use mocked external responses; live provider quality must be tested after setup. Ordinary editing, manual captions and local filters need no provider key.
 
@@ -20,7 +21,8 @@ Cloud features require your own provider accounts and may cost money. No paid ac
 - `web/app.js`: editing, preview, recording, media routing, caption UI, export and network controls.
 - `web/styles.css`: visual styles.
 - `web/captions.js`: pure timing, grouping, serialization and canvas caption rendering.
-- `web/core.js`: tested ranges, MIME and expiry helpers.
+- `web/core.js`: tested ranges, crop math, MIME and expiry helpers.
+- `web/config.js`: baked backend URL (empty by default) plus the hidden session-only page-address override.
 - `web/storage.js`: IndexedDB media and caption persistence.
 - `server/server.js`: authenticated multipart routes, FFmpeg/FFprobe preprocessing, limits and cleanup.
 - `server/providers.js`: Groq/Deepgram/AssemblyAI/OpenAI caption and ElevenLabs isolation contracts, bounded responses and safe error handling.
@@ -56,7 +58,7 @@ These are placeholders, not usable credentials. Do not commit real values. GitHu
 Endpoints:
 - `GET /health`: public liveness/version only.
 - `GET /capabilities`: requires server access key; checks presence, not provider validity/billing.
-- `POST /api/captions?language=te&provider=groq`: requires auth and `X-Upload-Consent: yes`; multipart file field `file`; provider is groq, deepgram, assemblyai or openai; returns validated timestamped cues.
+- `POST /api/captions?language=te`: requires auth and `X-Upload-Consent: yes`; multipart file field `file`; provider auto-selects groq, deepgram, assemblyai or openai (free tiers first) unless `provider=` overrides it; returns validated timestamped cues.
 - `POST /api/isolate`: requires auth and consent; returns normalized processed WAV.
 - `POST /api/denoise-local`: authenticated keyless DeepFilterNet AI denoising on your server; no cloud consent or provider account.
 - `POST /enhance`: authenticated ordinary FFmpeg filters, not AI.
@@ -78,8 +80,8 @@ There are 13 unit tests, 19 backend/provider-contract tests and a Chromium workf
 - Captions describe one chosen source at a time, not all overlapping speech in the final mix. Export/reimport the final mix to caption it. Regenerate or retime captions after moving their source audio clip.
 - AI can mishear speech or hallucinate words in silence. Review text and timing, especially names/numbers. This is not speaker identification or automatic translation.
 - AI isolation can remove music and alter speech. Listen before applying; keep originals.
-- Crop, rotate, freeze-frame and automated batch cleanup remain disabled and unimplemented. No claim that every possible repository issue is resolved.
-- One locally saved project slot. Save As renames/replaces it, not a project library. Browser storage quotas or data clearing can remove it; keep original media and exported files.
+- Automated batch cleanup remains unavailable by design: process one clip at a time and preview before applying. No claim that every possible repository issue is resolved.
+- Multiple projects are saved locally in the browser library. Browser storage quotas or data clearing can remove them; keep original media and exported files.
 - Export is real time and the tab must remain visible. Formats/codecs vary; unsupported MP4 recording fails clearly rather than renaming WebM. Large/4K exports can overwhelm mobile devices. Frame-accurate gaps and perfect synchronization are not guaranteed.
 - Caption preview and exported appearance can differ with screen size/font support. Unicode text is preserved; verify your language's actual rendering on your device.
 - Android native video sharing is limited to 40 MB. SRT/VTT sharing is included; the new APK must be rebuilt. Static analysis passed; physical Android, TalkBack and Play release testing are still required.
@@ -90,7 +92,7 @@ Local editing does not upload media. After cloud consent, the server receives th
 
 **Provider copies/retention and billing are not controlled by our timer.** Cancelling our request does not guarantee a provider refund or stopped provider-side processing. Review provider data policies before using sensitive recordings.
 
-Browser server-key copies expire after 15 minutes/reload; host environment/provider keys remain valid until their own expiry/rotation/revocation. Local saved projects and downloaded media do not automatically expire. GitHub sign-in waiting has a separate 15-minute helper timeout, not automatic revocation of established GitHub credentials.
+The owner’s `#dev-key` page-address override lives only in the current tab and is forgotten on reload; host environment/provider keys remain valid until their own expiry/rotation/revocation. Local saved projects and downloaded media do not automatically expire. GitHub sign-in waiting has a separate 15-minute helper timeout, not automatic revocation of established GitHub credentials.
 
 ## Deployment
 - [AI update and patch choices](AI_UPDATE_START_HERE.md)

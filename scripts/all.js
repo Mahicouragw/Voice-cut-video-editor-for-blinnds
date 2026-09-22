@@ -88,7 +88,7 @@ async function publish(){
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
   if(names.some(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)))throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','Add free AI captions (Groq, Deepgram, AssemblyAI) and keyless DeepFilterNet denoising']);
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut 2.0: home/library/settings shell, multi-project library, crop/rotate/freeze export, auto cloud AI with no credentials in user UI']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');

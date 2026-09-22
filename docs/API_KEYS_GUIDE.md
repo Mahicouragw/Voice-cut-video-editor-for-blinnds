@@ -106,7 +106,7 @@ Optional features work independently: configure only the providers you want. Cap
 
 Render supplies `PORT`; you normally do not need to set it manually. FFmpeg and FFprobe are installed by the Dockerfile.
 
-Copy your service's real HTTPS URL from Render. It will look like `https://your-service.onrender.com`; **do not paste that example literally**. Open `YOUR-REAL-URL/health`. The new version returns JSON containing `status: "ok"` and `version: "1.3.0"`.
+Copy your service's real HTTPS URL from Render. It will look like `https://your-service.onrender.com`; **do not paste that example literally**. Open `YOUR-REAL-URL/health`. The new version returns JSON containing `status: "ok"` and `version: "2.0.0"`.
 
 ## Step 4 — Create your separate server access key, if needed
 
