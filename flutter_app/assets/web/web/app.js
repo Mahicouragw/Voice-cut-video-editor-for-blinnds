@@ -15,6 +15,9 @@
     duration: 0,
     trimStart: 0,
     trimEnd: 0,
+    crop: {preset:'original',x:0,y:0,w:100,h:100},
+    rotation: 0,
+    freezes: [],
     captions: [],
     captionSettings: {preview:true,burnIn:true},
     segments: [], // {id, start, end, label}
@@ -52,9 +55,120 @@
   let captionSelection = 0;
   let captionRequestBusy = false;
   let mediaEpoch = 0;
+  let currentView = 'home';
+  const VIEW_IDS = {home:'homeScreen',library:'libraryScreen',settings:'settingsScreen',editor:'editorScreen',none:'noProjectScreen'};
+  const hasProject = () => !!project.videoUrl;
+  function showView(name) {
+    if (name === 'editor' && !hasProject()) name = 'none';
+    currentView = name;
+    for (const [key,id] of Object.entries(VIEW_IDS)) $('#'+id).classList.toggle('hidden', key!==name);
+    $('#navEditor').classList.toggle('hidden', !hasProject());
+    $$('#mainNav a').forEach(a => { a.getAttribute('data-route')===name ? a.setAttribute('aria-current','page') : a.removeAttribute('aria-current'); });
+    document.querySelector('.header-actions').style.display = name==='editor' ? '' : 'none';
+    if (name !== 'editor') pauseAllAudio();
+    if (name === 'library') renderLibrary();
+    if (name === 'home') renderHomeRecent();
+    $('#main-content').focus({preventScroll:true});
+    window.scrollTo(0,0);
+  }
+  function route() {
+    const name = (location.hash||'').replace(/^#\/?/,'').split('?')[0] || 'home';
+    showView(VIEW_IDS[name] ? name : 'home');
+  }
+  function hashQuery() { const h=location.hash||''; return h.includes('?') ? '?'+h.split('?').slice(1).join('?') : ''; }
+  function openEditor() { showView('editor'); const target='#/editor'+hashQuery(); if ((location.hash||'') !== target) history.replaceState(null,'',target); }
+  function projectCardHTML(p) {
+    return `<div class="card library-card" role="group" aria-label="Project: ${escapeHTML(p.name)}. Duration ${formatTimeVerbose(p.duration)}. Last modified ${new Date(p.modified).toLocaleString()}.">
+      <div><strong>${escapeHTML(p.name)}</strong></div>
+      <div class="clip-meta">Duration ${formatTimeVerbose(p.duration)} • Modified ${new Date(p.modified).toLocaleString()}</div>
+      <div class="flex gap-8 wrap mt-8">
+        <button data-open-project="${p.id}">Open</button>
+        <button data-rename-project="${p.id}">Rename</button>
+        <button data-delete-project="${p.id}">Delete</button>
+      </div>
+    </div>`;
+  }
+  function wireProjectCards(root) {
+    root.querySelectorAll('[data-open-project]').forEach(b => b.addEventListener('click', () => openProjectById(b.getAttribute('data-open-project'))));
+    root.querySelectorAll('[data-delete-project]').forEach(b => b.addEventListener('click', () => {
+      const id = b.getAttribute('data-delete-project');
+      showConfirm('Delete this project and its saved media from this device?', async () => {
+        await VoiceCutStorage.remove(id);
+        if (project.id === id) resetProjectState();
+        renderLibrary(); renderHomeRecent();
+        announce('Project deleted.');
+      });
+    }));
+    root.querySelectorAll('[data-rename-project]').forEach(b => b.addEventListener('click', () => {
+      const id = b.getAttribute('data-rename-project');
+      const card = b.closest('.library-card');
+      const input = document.createElement('input');
+      input.type = 'text'; input.setAttribute('aria-label','New project name');
+      input.value = card.querySelector('strong').textContent;
+      const save = document.createElement('button'); save.textContent = 'Save name';
+      save.addEventListener('click', async () => {
+        const name = input.value.trim() || 'Untitled Project';
+        await VoiceCutStorage.rename(id, name);
+        if (project.id === id) { project.name = name; renderAll(); }
+        renderLibrary(); renderHomeRecent();
+        announce(`Project renamed to ${name}.`);
+      });
+      card.append(input, save); input.focus(); input.select();
+    }));
+  }
+  async function renderLibrary() {
+    const list = await VoiceCutStorage.list().catch(() => []);
+    $('#libraryEmpty').style.display = list.length ? 'none' : '';
+    $('#libraryList').innerHTML = list.map(projectCardHTML).join('');
+    wireProjectCards($('#libraryList'));
+  }
+  async function renderHomeRecent() {
+    const list = (await VoiceCutStorage.list().catch(() => [])).slice(0,3);
+    $('#homeRecentEmpty').style.display = list.length ? 'none' : '';
+    $('#homeRecentList').innerHTML = list.map(projectCardHTML).join('');
+    wireProjectCards($('#homeRecentList'));
+  }
+  async function openProjectById(id) {
+    try {
+      await saveQueue.catch(() => {});
+      const saved = id ? await VoiceCutStorage.get(id) : await VoiceCutStorage.load();
+      if (!saved) { announce('No saved project. Upload a video to begin.'); return; }
+      pauseAllAudio();
+      currentRequest?.abort(); mediaEpoch++;
+      project = saved; captionDefaults();
+      applyPrefsToProject(false);
+      project.videoUrl = project.videoFile ? URL.createObjectURL(project.videoFile) : null;
+      project.clips.forEach(c => { c.url = c.file ? URL.createObjectURL(c.file) : null; c.originalUrl = c.originalFile ? URL.createObjectURL(c.originalFile) : null; });
+      video.src = project.videoUrl || '';
+      for (const c of project.clips) createAudioNodeForClip(c);
+      applyOriginalNR();
+      selectedClipId = null;
+      historyStack = []; historyIndex = -1;
+      pushHistory(); renderAll();
+      $('#videoPlaceholder').classList.toggle('hidden', !!project.videoUrl);
+      openEditor();
+      $('#section-video').scrollIntoView();
+      announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(project.duration)}.`);
+    } catch(e) { announce('Cannot open project: ' + e.message, true); }
+  }
+  function resetProjectState() {
+    pauseAllAudio();
+    currentRequest?.abort(); mediaEpoch++;
+    clearTimeout(autoSaveTimeout); dirty = false;
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    applyPrefsToProject(true);
+    selectedClipId = null;
+    video.src = '';
+    $('#videoPlaceholder').classList.remove('hidden');
+    historyStack = []; historyIndex = -1;
+    renderAll();
+  }
   function captionDefaults() {
     project.captions ||= [];
     project.captionSettings ||= {preview:true,burnIn:true};
+    project.crop ||= {preset:'original',x:0,y:0,w:100,h:100};
+    project.rotation ||= 0;
+    project.freezes ||= [];
   }
   function renderCaptions() {
     captionDefaults();
@@ -81,19 +195,18 @@
   }
   async function generateCaptions() {
     if(captionRequestBusy||isExporting||cleanupBusy){announce('Wait for the current operation to finish.',true);return;}
-    const original=$('#captionSource').value==='original';
-    const clip=original?null:project.clips.find(c=>c.id===selectedClipId);
-    const file=original?project.videoFile:clip?.file;
-    if(!project.videoFile||!file){announce('Load a video and select the audio clip if required.',true);return;}
+    const source=$('#captionSource').value;
+    const clip=source==='original'?null:source==='voiceover'?project.clips.find(c=>c.type==='voiceover'):project.clips.find(c=>c.id===selectedClipId);
+    const file=source==='original'?project.videoFile:clip?.file;
+    if(!project.videoFile){announce('Load a video first.',true);return;}
+    if(!file){announce(source==='voiceover'?'No voice-over track. Record or import one first.':'Select an audio clip in the timeline first.',true);return;}
     if(project.captions?.length&&!confirm('Replace the current caption list? You can undo after generation.'))return;
     const epoch=mediaEpoch, id=project.id;
     const clipSnapshot=clip?structuredClone(clip):null;
     captionRequestBusy=true;$('#btnGenerateCaptions').disabled=true;$('#btnCancelCaptions').disabled=false;
     $('#captionStatus').textContent='Waiting for upload confirmation. Your existing captions are unchanged.';
     try{
-      const provider=$('#captionProvider').value;
-      const providerNames={groq:'Groq Whisper automatic captions (free tier)',deepgram:'Deepgram Nova automatic captions',assemblyai:'AssemblyAI automatic captions',openai:'OpenAI automatic captions'};
-      const result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value)+'&provider='+encodeURIComponent(provider),file,providerNames[provider]||'automatic captions');
+      const result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),file,{cloud:true});
       if(epoch!==mediaEpoch||id!==project.id)throw new Error('Project changed during processing. Result was not applied.');
       let cues=VoiceCutCaptions.validate(result.cues,result.duration);
       if(clipSnapshot){
@@ -103,11 +216,17 @@
       cues=cues.map(c=>({...c,start:Math.max(0,c.start),end:Math.min(project.duration,c.end)})).filter(c=>c.end>c.start);
       project.captions=VoiceCutCaptions.validate(cues,project.duration);
       project.captionLanguage=result.language;
-      project.captionSource=original?'Original video audio':'Audio clip: '+clipSnapshot.name;
+      project.captionSource=source==='original'?'Original video audio':source==='voiceover'?'Voice-over track':'Audio clip: '+clipSnapshot.name;
       captionSelection=0;pushHistory();renderCaptions();
       const message=`${cues.length} captions generated. Detected language: ${result.language||'unknown'}. Review text and timing before publishing.`;
       $('#captionStatus').textContent=message;announce(message);
-    }catch(e){$('#captionStatus').textContent='Caption generation stopped: '+e.message;announce('Caption generation stopped: '+e.message,true);}
+    }catch(e){
+      console.warn('Caption request failed:',e);
+      const cancelled=/cancelled|timed out/i.test(e.message);
+      const message=cancelled?'Caption request cancelled. Your existing captions are unchanged.':'Caption generation is temporarily unavailable. Please try again.';
+      $('#captionStatus').textContent=message;announce(message,!cancelled);
+      $('#btnRetryCaptions').classList.toggle('hidden',cancelled);
+    }
     finally{captionRequestBusy=false;$('#btnGenerateCaptions').disabled=false;$('#btnCancelCaptions').disabled=true;}
   }
   async function downloadSubtitles(format) {
@@ -124,7 +243,8 @@
     }catch(e){announce('Subtitle download failed: '+e.message,true);}
   }
   function initCaptions() {
-    $('#btnGenerateCaptions').addEventListener('click',generateCaptions);
+    $('#btnGenerateCaptions').addEventListener('click',()=>{$('#btnRetryCaptions').classList.add('hidden');generateCaptions();});
+    $('#btnRetryCaptions').addEventListener('click',()=>{$('#btnRetryCaptions').classList.add('hidden');generateCaptions();});
     $('#btnCancelCaptions').addEventListener('click',()=>currentRequest?.abort());
     $('#captionCueSelect').addEventListener('change',e=>{captionSelection=Number(e.target.value);renderCaptions();});
     $('#captionPreview').addEventListener('change',e=>{captionDefaults();project.captionSettings.preview=e.target.checked;pushHistory();updateCaptionPreview();});
@@ -248,8 +368,28 @@
   }
 
   // Rendering
+  function renderEdit(){
+    captionDefaults();
+    $('#cropPreset').value=project.crop.preset;
+    $('#cropX').value=project.crop.x;$('#cropY').value=project.crop.y;$('#cropW').value=project.crop.w;$('#cropH').value=project.crop.h;
+    $('#rotateAngle').value=String(project.rotation);
+    const custom=project.crop.preset==='custom';
+    ['cropX','cropY','cropW','cropH'].forEach(id=>{$('#'+id).disabled=!custom;});
+    const cropLabel=project.crop.preset==='original'?'original frame':project.crop.preset==='custom'?`left ${project.crop.x}%, top ${project.crop.y}%, ${project.crop.w}% by ${project.crop.h}%`:project.crop.preset;
+    $('#cropSummary').textContent=`Crop: ${cropLabel}. Rotation: ${project.rotation?project.rotation+' degrees':'none'}. Applied at export.`;
+    const list=$('#freezeList');list.innerHTML='';
+    [...project.freezes].sort((a,b)=>a.at-b.at).forEach(f=>{
+      const li=document.createElement('li');
+      li.textContent=`Freeze at ${formatTimeVerbose(f.at)} for ${f.hold} seconds. `;
+      const del=document.createElement('button');del.textContent='Delete freeze frame';
+      del.setAttribute('aria-label',`Delete freeze frame at ${formatTimeVerbose(f.at)}`);
+      del.addEventListener('click',()=>{project.freezes=project.freezes.filter(x=>x.id!==f.id);pushHistory();renderAll();announce('Freeze frame deleted.');});
+      li.appendChild(del);list.appendChild(li);
+    });
+  }
   function renderAll() {
-    renderCaptions();
+    captionDefaults();
+    renderCaptions();renderEdit();
     $('#projectNameInput').value = project.name;
     $('#skipAmountSelect').value = project.skipAmount;
     $('#playbackSpeedSelect').value = project.playbackSpeed;
@@ -467,7 +607,7 @@
         <option value="light" ${t.value==='light'?'selected':''}>Light</option>
         <option value="medium" ${t.value==='medium'?'selected':''}>Medium</option>
         <option value="strong" ${t.value==='strong'?'selected':''}>Strong</option>
-        <option value="custom" ${t.value==='custom'?'selected':''}>Custom</option>
+        <option value="voicefocus" ${t.value==='voicefocus'?'selected':''}>Voice Focus</option>
       </select></label>`;
       container.appendChild(div);
     });
@@ -477,10 +617,11 @@
         const val = e.target.value;
         if (id==='orig') {
           project.originalAudio.noiseReduction = val;
+          applyOriginalNR();
           announce(`Noise reduction for original audio set to ${val}.`);
         } else {
           const clip = project.clips.find(c=>c.id===id);
-          if (clip) { clip.noiseReduction = val; announce(`Noise reduction for ${escapeHTML(clip.name)} set to ${val}.`); }
+          if (clip) { clip.noiseReduction = val; createAudioNodeForClip(clip); announce(`Noise reduction for ${escapeHTML(clip.name)} set to ${val}.`); }
         }
         pushHistory();
         renderAll();
@@ -538,6 +679,7 @@
       Resolution: ${project.resolution}p<br>
       Frame rate: ${project.fps} fps<br>
       Format: ${project.format.toUpperCase()}<br>
+      Crop: ${project.crop?.preset||'original'} • Rotation: ${project.rotation||0}° • Freeze frames: ${(project.freezes||[]).length}<br>
       Audio tracks: Original Audio (${project.originalAudio.volume}%) + ${musicCount} music + ${voiceCount} voice-over<br>
       Ducking: ${project.ducking.enabled?'On at '+project.ducking.level+'%':'Off'}<br>
       Estimated file size: ${Math.round(totalDuration* (project.resolution==='1080'?2.5:1.5))} MB (approx)
@@ -567,9 +709,12 @@
       pushHistory();
       renderAll();
       announce(`Video loaded successfully. Duration ${formatTimeVerbose(video.duration)}.`, true);
-      $('#editorScreen').classList.remove('hidden');
-      $('#homeScreen').classList.add('hidden');
+      project.id = 'proj_'+Date.now();
+      captionDefaults();
+      applyPrefsToProject(true);
+      openEditor();
       $('#section-video').scrollIntoView({behavior:'smooth'});
+      autoSave();
     }, {once:true});
     video.addEventListener('error', ()=>{
       announce('Video load failed. Try MP4 at 1080p.', true);
@@ -640,27 +785,16 @@
       const source = audioContext.createMediaElementSource(audioEl);
       const gain = audioContext.createGain();
       gain.gain.value = (clip.muted?0:clip.volume/100);
-      // Filters for noise reduction
-      const highpass = audioContext.createBiquadFilter();
-      highpass.type='highpass';
-      highpass.frequency.value = clip.noiseReduction==='off'?0 : clip.noiseReduction==='light'?80 : clip.noiseReduction==='medium'?100 : 120;
-      const lowpass = audioContext.createBiquadFilter();
-      lowpass.type='lowpass';
-      lowpass.frequency.value = clip.noiseReduction==='off'?20000 : clip.noiseReduction==='light'?12000 : clip.noiseReduction==='medium'?8000 : 6000;
-      const compressor = audioContext.createDynamicsCompressor();
-      compressor.threshold.value = clip.noiseReduction==='off'?0 : clip.noiseReduction==='light'?-30 : -40;
-      compressor.knee.value = 20;
-      compressor.ratio.value = clip.noiseReduction==='off'?1 : clip.noiseReduction==='strong'?12 : 6;
-      compressor.attack.value = 0.01;
-      compressor.release.value = 0.25;
-
-      source.connect(highpass);
-      highpass.connect(lowpass);
-      lowpass.connect(compressor);
-      compressor.connect(gain);
+      if (clip.noiseReduction && clip.noiseReduction!=='off') {
+        const chain = buildNRChain(clip.noiseReduction);
+        source.connect(chain.input);
+        chain.output.connect(gain);
+      } else {
+        source.connect(gain);
+      }
       gain.connect(audioContext.destination);
 
-      audioNodes.set(clip.id, {element:audioEl, source, gain, highpass, lowpass, compressor});
+      audioNodes.set(clip.id, {element:audioEl, source, gain});
     } catch(e) {
       console.warn('Web Audio setup failed', e);
     }
@@ -902,6 +1036,14 @@
       recordingStream = stream;
       const mime = ['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));
       if (!mime) throw new Error('No supported audio recorder format.');
+      for (const n of [3,2,1]) {
+        if (requestId !== recordingRequest || !$('#recordDialog').open) { stream.getTracks().forEach(t=>t.stop()); return; }
+        $('#recordCountdown').textContent = 'Recording starts in '+n;
+        $('#recordCountdown').classList.remove('hidden');
+        announce('Recording starts in '+n);
+        await new Promise(r=>setTimeout(r,700));
+      }
+      if (requestId !== recordingRequest || !$('#recordDialog').open) { stream.getTracks().forEach(t=>t.stop()); return; }
       mediaRecorder = new MediaRecorder(stream,{mimeType:mime});
       const chunks = [];
       mediaRecorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
@@ -947,15 +1089,47 @@
   }
   let exportCancelled = false;
   let exportUrl = null;
+  const NR_CHAINS={
+    off:{hp:0,lp:20000,notch:0,presence:0,threshold:0,ratio:1},
+    light:{hp:80,lp:12000,notch:0,presence:0,threshold:-30,ratio:6},
+    medium:{hp:100,lp:8000,notch:0,presence:3,threshold:-40,ratio:6},
+    strong:{hp:120,lp:6000,notch:50,presence:4,threshold:-40,ratio:12},
+    voicefocus:{hp:120,lp:8000,notch:50,presence:6,threshold:-45,ratio:12}
+  };
+  function buildNRChain(level){
+    const p=NR_CHAINS[level]||NR_CHAINS.medium;
+    const highpass=audioContext.createBiquadFilter();highpass.type='highpass';highpass.frequency.value=p.hp;
+    const lowpass=audioContext.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=p.lp;
+    const notch=audioContext.createBiquadFilter();notch.type='notch';notch.frequency.value=50;notch.Q.value=8;
+    const presence=audioContext.createBiquadFilter();presence.type='peaking';presence.frequency.value=3000;presence.Q.value=0.9;presence.gain.value=p.presence;
+    const compressor=audioContext.createDynamicsCompressor();
+    compressor.threshold.value=p.threshold;compressor.knee.value=20;compressor.ratio.value=p.ratio;compressor.attack.value=0.01;compressor.release.value=0.25;
+    highpass.connect(lowpass);
+    let tail=lowpass;
+    if(p.notch){tail.connect(notch);tail=notch;}
+    tail.connect(presence);presence.connect(compressor);
+    return {input:highpass,output:compressor};
+  }
   function ensureOriginalGraph() {
     ensureAudioContext();
     if (!originalSource) {
       originalSource = audioContext.createMediaElementSource(video);
       originalGain = audioContext.createGain();
-      originalSource.connect(originalGain);
       originalGain.connect(audioContext.destination);
+      applyOriginalNR();
     }
     return originalGain;
+  }
+  function applyOriginalNR() {
+    if (!originalSource || !originalGain) return;
+    try { originalSource.disconnect(); } catch {}
+    if (!project.originalAudio || project.originalAudio.noiseReduction==='off') {
+      originalSource.connect(originalGain);
+    } else {
+      const chain = buildNRChain(project.originalAudio.noiseReduction);
+      originalSource.connect(chain.input);
+      chain.output.connect(originalGain);
+    }
   }
   function seekTo(time) {
     if (Math.abs(video.currentTime-time) < 0.001 && video.readyState >= 2) return Promise.resolve();
@@ -975,6 +1149,10 @@
       const ranges = VoiceCutCore.ranges(project);
       const mime = VoiceCutCore.mimeFor(project.format, value => MediaRecorder.isTypeSupported(value));
       const duration = ranges.reduce((sum,r) => sum+r.end-r.start,0);
+      const freezes = [...(project.freezes||[])].filter(f=>Number.isFinite(f.at)&&Number.isFinite(f.hold)).sort((a,b)=>a.at-b.at);
+      const exportDuration = duration + freezes.reduce((sum,f)=>sum+f.hold,0);
+      const rotation = ((Number(project.rotation)%360)+360)%360;
+      const portrait = rotation===90||rotation===270;
       video.pause();
       for (const node of audioNodes.values()) node.element.pause();
       isExporting = true; exportCancelled = false; lockExportControls(true);
@@ -992,11 +1170,29 @@
       for (const clip of project.clips) if (!audioNodes.has(clip.id)) createAudioNodeForClip(clip);
       for (const node of audioNodes.values()) { node.gain.disconnect(); node.gain.connect(dest); }
       const height = Number(project.resolution);
-      exportCanvas.height = height; exportCanvas.width = Math.round(height*16/9/2)*2;
+      exportCanvas.height = height;
+      exportCanvas.width = portrait?Math.round(height*9/16/2)*2:Math.round(height*16/9/2)*2;
       const ctx = exportCanvas.getContext('2d');
+      const drawFrame = () => {
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,exportCanvas.width,exportCanvas.height);
+        const rect = VoiceCutCore.cropRect(project.crop?.preset||'original',video.videoWidth,video.videoHeight,project.crop);
+        const cw = exportCanvas.width, ch = exportCanvas.height;
+        const fitW = portrait?ch:cw, fitH = portrait?cw:ch;
+        const scale = Math.min(fitW/rect.w,fitH/rect.h), w = rect.w*scale, h = rect.h*scale;
+        if (rotation===0) { ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,(cw-w)/2,(ch-h)/2,w,h); return; }
+        ctx.save(); ctx.translate(cw/2,ch/2); ctx.rotate(rotation*Math.PI/180);
+        ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,-w/2,-h/2,w,h); ctx.restore();
+      };
       const canvasStream = exportCanvas.captureStream(Number(project.fps));
       const stream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
       let raf, timeout, completed = 0, rangeIndex = 0, lastAnnouncement = -1;
+      let freezeIndex = 0, holdsDone = 0, freezeHoldUntil = 0, frozenTime = 0, currentHold = 0, holdStart = 0;
+      const reportProgress = (elapsed) => {
+        const percent = Math.min(99, Math.round(100*elapsed/exportDuration));
+        $('#exportProgressBar').style.width = percent+'%'; $('#exportProgressBar').setAttribute('aria-valuenow',String(percent));
+        const quarter = Math.floor(percent/25);
+        if (quarter > lastAnnouncement) { lastAnnouncement = quarter; announce('Exporting video. '+quarter*25+' percent.'); }
+      };
       const visibility = () => { if (document.hidden) cancelExport(); };
       document.addEventListener('visibilitychange', visibility);
       exportCleanup = () => {
@@ -1030,11 +1226,30 @@
       video.playbackRate = project.playbackSpeed;
       recorder.start(250);
       await video.play();
-      timeout = setTimeout(cancelExport, (duration / project.playbackSpeed + 60) * 1000);
+      timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
       async function frame() {
         if (!isExporting || exportCancelled) return;
         try {
           const range = ranges[rangeIndex];
+          if (freezeHoldUntil) {
+            if (performance.now() < freezeHoldUntil) {
+              drawFrame();
+              if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx,VoiceCutCaptions.active(project.captions,frozenTime),exportCanvas.width,exportCanvas.height);
+              reportProgress(completed+holdsDone+Math.min(currentHold,(performance.now()-holdStart)/1000));
+              raf = requestAnimationFrame(frame);
+              return;
+            }
+            holdsDone += currentHold; freezeHoldUntil = 0;
+            await video.play();
+          }
+          const freeze = freezes[freezeIndex];
+          if (freeze && video.currentTime >= freeze.at && video.currentTime < range.end) {
+            freezeIndex++;
+            video.pause();
+            for (const node of audioNodes.values()) node.element.pause();
+            frozenTime = video.currentTime; currentHold = freeze.hold; holdStart = performance.now();
+            freezeHoldUntil = holdStart + freeze.hold*1000;
+          }
           if (video.currentTime >= range.end - 0.015 || video.ended) {
             completed += range.end-range.start;
             rangeIndex++;
@@ -1042,19 +1257,14 @@
             recorder.pause(); video.pause();
             for (const node of audioNodes.values()) node.element.pause();
             await seekTo(ranges[rangeIndex].start);
+            while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
             recorder.resume(); await video.play();
           }
-          ctx.fillStyle = '#000'; ctx.fillRect(0,0,exportCanvas.width,exportCanvas.height);
-          const scale = Math.min(exportCanvas.width/video.videoWidth, exportCanvas.height/video.videoHeight);
-          const w = video.videoWidth*scale, h = video.videoHeight*scale;
-          ctx.drawImage(video,(exportCanvas.width-w)/2,(exportCanvas.height-h)/2,w,h);
+          drawFrame();
           if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx,VoiceCutCaptions.active(project.captions,video.currentTime),exportCanvas.width,exportCanvas.height);
           syncAudioPlayback(true);
-          const percent = Math.min(99, Math.round(100*(completed+video.currentTime-ranges[rangeIndex].start)/duration));
-          $('#exportProgressBar').style.width = percent+'%'; $('#exportProgressBar').setAttribute('aria-valuenow',String(percent));
-          const quarter = Math.floor(percent/25);
-          if (quarter > lastAnnouncement) { lastAnnouncement = quarter; announce('Export '+quarter*25+' percent complete.'); }
+          reportProgress(completed+holdsDone+video.currentTime-ranges[rangeIndex].start);
           raf = requestAnimationFrame(frame);
         } catch(e) { cancelExport(); announce('Export failed: '+e.message,true); }
       }
@@ -1200,10 +1410,10 @@
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
       const originalUrl = URL.createObjectURL(file);
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
-      currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:serverResult?.provider||'Local filters (not AI)',epoch};
+      currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:serverResult?.provider||'On-device filters',epoch};
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
-      $('#aiResultText').textContent = (serverResult?.provider || 'Local filters (not AI)') + ': complete. Listen before applying.';
+      $('#aiResultText').textContent = (serverResult?.provider || 'On-device filters') + ': complete. Listen before applying.';
       progress(100,'Complete'); announce('Audio processing complete. Preview before applying.');
     } catch(e) { $('#aiProgressText').textContent = 'Processing stopped: '+e.message; announce('Processing stopped: '+e.message,true); }
     finally { cleanupBusy = false; $('#btnCloseAI').classList.remove('hidden'); }
@@ -1300,71 +1510,85 @@
     currentAIJob = null;
   }
 
-  let serverAccessKey = '';
-  let serverKeyExpiry = 0;
-  function saveApiKeys() {
+  function backendConfig() {
     try {
-      const value = $('#aiServerUrl').value.trim();
-      const access = $('#serverAccessKey').value.trim();
-      if (/^sk[-_]/.test(access)) throw new Error('Do not paste a provider API key here. Enter your generated SERVER_ACCESS_KEY instead.');
-      if (value) {
-        const url = new URL(value);
-        if (url.protocol !== 'https:') throw new Error('Use an HTTPS server URL.');
-        localStorage.setItem('voicecut_ai_server', url.origin);
-      } else localStorage.removeItem('voicecut_ai_server');
-      serverAccessKey = $('#serverAccessKey').value.trim();
-      $('#serverAccessKey').value = '';
-      serverKeyExpiry = Date.now() + 15 * 60 * 1000;
-      announce('Server settings saved. Access key expires from memory in 15 minutes.');
-    } catch (e) { announce(e.message, true); }
+      const dev = window.VoiceCutConfig?.devOverride?.();
+      if (dev) return dev;
+      const url = window.VoiceCutConfig?.BACKEND_URL || null;
+      return url ? {url, key:''} : null;
+    } catch { return null; }
   }
-  function loadApiKeys() {
-    for (const key of ['voicecut_dolby_key','voicecut_hf_key','voicecut_replicate_key']) localStorage.removeItem(key);
-    $('#aiServerUrl').value = localStorage.getItem('voicecut_ai_server') || '';
+  let cachedCapabilities = null;
+  async function getCapabilities() {
+    if (cachedCapabilities) return cachedCapabilities;
+    cachedCapabilities = await requestServer('/capabilities');
+    return cachedCapabilities;
   }
-  setInterval(() => { if (Date.now() >= serverKeyExpiry) serverAccessKey = ''; }, 1000);
-  async function requestServer(endpoint,file=null,cloudName='',localName='ordinary FFmpeg filters (not AI)') {
-    const server=localStorage.getItem('voicecut_ai_server');
-    if(!server)throw new Error('Set your HTTPS server URL and SERVER_ACCESS_KEY in Settings first.');
-    if(Date.now()>=serverKeyExpiry||!serverAccessKey)throw new Error('Enter your server access key in Settings again. Its browser copy expires after 15 minutes.');
+  function userPrefs(){try{return JSON.parse(localStorage.getItem('voicecut_prefs')||'{}');}catch{return{};}}
+  function savePrefs(patch){localStorage.setItem('voicecut_prefs',JSON.stringify({...userPrefs(),...patch}));}
+  function loadPrefs(){
+    const p=userPrefs();
+    if(p.playbackSpeed)$('#settingPlaybackSpeed').value=p.playbackSpeed;
+    if(p.exportResolution)$('#settingExportResolution').value=p.exportResolution;
+    if(p.captionLanguage!==undefined)$('#settingCaptionLanguage').value=p.captionLanguage;
+    if(p.captionPreview!==undefined)$('#settingCaptionPreview').checked=!!p.captionPreview;
+    if(p.captionBurn!==undefined)$('#settingCaptionBurn').checked=!!p.captionBurn;
+    if(p.captionLanguage!==undefined)$('#captionLanguage').value=p.captionLanguage;
+  }
+  function applyPrefsToProject(isNew){
+    const p=userPrefs();
+    if(isNew){
+      if(p.playbackSpeed)project.playbackSpeed=Number(p.playbackSpeed);
+      if(p.exportResolution)project.resolution=p.exportResolution;
+      captionDefaults();
+      if(p.captionPreview!==undefined)project.captionSettings.preview=!!p.captionPreview;
+      if(p.captionBurn!==undefined)project.captionSettings.burnIn=!!p.captionBurn;
+    }
+    if(p.captionLanguage!==undefined)$('#captionLanguage').value=p.captionLanguage;
+  }
+  async function requestServer(endpoint,file=null,options={}) {
+    const backend=backendConfig();
+    if(!backend)throw new Error('SERVICE_UNAVAILABLE');
+    const {cloud=false,consent='Upload this file to the secure VoiceCut service for AI processing? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.'}=options;
     if(currentRequest)throw new Error('Another server request is running. Wait or cancel it first.');
     if(file?.size>100*1024*1024)throw new Error('Use a file smaller than 100 MB.');
-    if(file){
-      const message=cloudName
-        ? `Upload this source file to your server and send its extracted audio to ${cloudName}? This may use paid API credits. Maximum 10 minutes and 100 MB. Server copies expire within 15 minutes; provider retention follows its own policy. Cancellation may not stop provider billing.`
-        : `Upload this file to your server for ${localName}? Maximum 10 minutes and 100 MB. Server copies expire within 15 minutes.`;
-      if(!confirm(message))throw new Error('Upload cancelled.');
-    }
+    if(file&&!confirm(consent))throw new Error('Upload cancelled.');
     const controller=new AbortController();currentRequest=controller;
     const timer=setTimeout(()=>controller.abort(),file?14*60*1000:30000);
-    const status=file?'Uploading and processing. You can cancel; do not submit twice.':'Checking server connection…';
-    if(captionRequestBusy)$('#captionStatus').textContent=status;
+    if(captionRequestBusy)$('#captionStatus').textContent='Uploading and processing. You can cancel; do not submit twice.';
     try{
       const body=file?new FormData():undefined;if(file)body.append('file',file);
-      const response=await fetch(new URL(endpoint,server),{method:file?'POST':'GET',body,signal:controller.signal,
-        headers:{Authorization:'Bearer '+serverAccessKey,...(cloudName?{'X-Upload-Consent':'yes'}:{})}});
-      if(!response.ok){
-        let detail='';try{detail=(await response.json()).error||'';}catch{}
-        throw new Error(detail||`Server returned HTTP ${response.status}. Check connection, authorization and server logs without sharing secrets.`);
-      }
+      const headers={...(backend.key?{Authorization:'Bearer '+backend.key}:{}),...(cloud?{'X-Upload-Consent':'yes'}:{})};
+      const response=await fetch(new URL(endpoint,backend.url),{method:file?'POST':'GET',body,signal:controller.signal,headers});
+      if(!response.ok)throw new Error('SERVICE_UNAVAILABLE');
       return response.headers.get('content-type')?.includes('application/json')?await response.json():await response.blob();
     }catch(e){
-      if(controller.signal.aborted)throw new Error('Request cancelled or timed out. Your original media is unchanged; provider processing or billing may already have occurred.');
-      if(e instanceof TypeError)throw new Error('Cannot reach the server. Check its HTTPS URL, deployment health and allowed website origin.');
+      if(controller.signal.aborted)throw new Error('Request cancelled or timed out. Your original media is unchanged.');
+      if(e.message==='SERVICE_UNAVAILABLE'||e instanceof TypeError){console.warn('VoiceCut service request failed:',endpoint,e);throw new Error('SERVICE_UNAVAILABLE');}
       throw e;
     }finally{clearTimeout(timer);currentRequest=null;}
   }
   async function enhanceWithRealAI(file,level,onProgress) {
-    const method=$('#cleanupMethod').value;
-    if(method==='local')return null;
-    onProgress(5,'Waiting for server processing. No automatic paid retries.');
-    const endpoint=method==='elevenlabs'?'/api/isolate':method==='deepfilter'?'/api/denoise-local':'/enhance';
-    const cloudName=method==='elevenlabs'?'ElevenLabs AI Voice Isolator':'';
-    const localName=method==='deepfilter'?'DeepFilterNet AI noise removal running on your own server (free, no provider key)':'ordinary FFmpeg filters (not AI)';
-    const blob=await requestServer(endpoint,file,cloudName,localName);
-    if(!(blob instanceof Blob))throw new Error('The server did not return audio.');
-    onProgress(100,'Processing complete. Compare with the original before applying.');
-    return {blob,provider:method==='elevenlabs'?'ElevenLabs AI Voice Isolator':method==='deepfilter'?'DeepFilterNet AI (free, your server)':'FFmpeg filters (not AI)'};
+    if($('#enhanceMode').value==='device')return null;
+    onProgress(5,'Contacting the VoiceCut service.');
+    let capabilities=null;
+    try{capabilities=await getCapabilities();}catch(e){capabilities=null;}
+    const nrLevel=['light','medium','strong','voicefocus'].includes(level)?level:'medium';
+    const useService=async(endpoint,cloud)=>{
+      const blob=await requestServer(endpoint,file,{cloud});
+      if(!(blob instanceof Blob))throw new Error('SERVICE_UNAVAILABLE');
+      onProgress(100,'Processing complete. Compare with the original before applying.');
+      return {blob,provider:'VoiceCut AI enhancement'};
+    };
+    try{
+      if(capabilities?.deepFilterNet)return await useService('/api/denoise-local?level='+nrLevel,false);
+      if(capabilities?.isolation)return await useService('/api/isolate',true);
+    }catch(e){
+      if(/cancelled|timed out/i.test(e.message))throw e;
+      console.warn('Server enhancement failed; using on-device filters:',e);
+    }
+    announce('VoiceCut service unavailable. Using on-device filters.');
+    return null;
   }
   let currentRequest = null;
   // Project saving - SILENT auto-save to fix TalkBack chatter
@@ -1377,7 +1601,7 @@
     if (!dirty) return saveQueue;
     dirty = false;
     const snapshot = structuredClone(project);
-    saveQueue = saveQueue.catch(() => {}).then(() => VoiceCutStorage.save(snapshot)).catch(e => {
+    saveQueue = saveQueue.catch(() => {}).then(() => VoiceCutStorage.save(snapshot)).then(()=>{announce('Project saved.');}).catch(e => {
       dirty = true;
       $('#statusText').textContent = 'Could not save project: ' + e.message + '. Keep this tab open.';
       throw e;
@@ -1391,28 +1615,10 @@
   }
   async function saveProject() {
     dirty = true;
-    try { await silentSave(); announce('Project and media saved on this device.'); }
+    try { await silentSave(); }
     catch (e) { announce('Save failed. Storage may be full. ' + e.message, true); }
   }
-  async function loadProjectFromStorage() {
-    try {
-      await saveQueue.catch(() => {});
-      const saved = await VoiceCutStorage.load();
-      if (!saved) { announce('No saved project. Upload a video to begin.'); return; }
-      pauseAllAudio();
-      currentRequest?.abort(); mediaEpoch++;
-      project = saved;
-      project.videoUrl = project.videoFile ? URL.createObjectURL(project.videoFile) : null;
-      project.clips.forEach(c => { c.url = c.file ? URL.createObjectURL(c.file) : null; c.originalUrl = c.originalFile ? URL.createObjectURL(c.originalFile) : null; });
-      video.src = project.videoUrl || '';
-      for (const c of project.clips) createAudioNodeForClip(c);
-      historyStack = []; historyIndex = -1;
-      pushHistory(); renderAll();
-      $('#editorScreen').classList.remove('hidden'); $('#homeScreen').classList.add('hidden');
-      $('#videoPlaceholder').classList.toggle('hidden', !!project.videoUrl);
-      announce('Saved project and media restored.');
-    } catch(e) { announce('Cannot restore project: ' + e.message, true); }
-  }
+  async function loadProjectFromStorage() { return openProjectById(null); }
 
   // Confirm dialog
   let confirmCallback = null;
@@ -1426,12 +1632,13 @@
   function initEvents() {
     // Home buttons
     $('#homeUploadVideo').addEventListener('click', ()=>$('#fileVideo').click());
-    $('#homeRecordVoice').addEventListener('click', ()=>{ if(!project.videoUrl){ announce('Please upload a video first, then record voice-over.'); $('#fileVideo').click(); } else { openRecordDialog(); } });
-    $('#homeImportAudio').addEventListener('click', ()=>$('#fileAudio').click());
-    $('#homeOpenProject').addEventListener('click', loadProjectFromStorage);
-    $('#homeRecentProjects').addEventListener('click', loadProjectFromStorage);
-    $('#homeSettings').addEventListener('click', ()=>{ $('#editorScreen').classList.remove('hidden'); $('#homeScreen').classList.add('hidden'); $('#section-settings').scrollIntoView({behavior:'smooth'}); });
+    $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
+    $('#homeLibrary').addEventListener('click', ()=>{ location.hash='#/library'; });
     $('#homeHelp').addEventListener('click', ()=>$('#helpDialog').showModal());
+    $('#noProjectUpload').addEventListener('click', ()=>$('#fileVideo').click());
+    $('#noProjectOpen').addEventListener('click', ()=>openProjectById(null));
+    $$('#mainNav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); location.hash = a.getAttribute('href'); }));
+    window.addEventListener('hashchange', route);
 
     $('#btnCloseHelp').addEventListener('click', ()=>$('#helpDialog').close());
     $('#btnCloseHelp2').addEventListener('click', ()=>$('#helpDialog').close());
@@ -1452,7 +1659,7 @@
     $('#btnStopVO').addEventListener('click', stopRecording);
 
     document.addEventListener('change', e => {
-      if (e.target.matches('input,select') && !['aiServerUrl','serverAccessKey'].includes(e.target.id)) autoSave();
+      if (e.target.matches('input,select')) autoSave();
     });
     // File inputs
     $('#fileVideo').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) loadVideoFile(f); });
@@ -1522,13 +1729,31 @@
         }
       }
     });
-    $('#btnCrop').addEventListener('click', ()=>announce('Crop feature: In advanced mode, use canvas transform. Current video will be cropped at export based on resolution.'));
-    $('#btnRotate').addEventListener('click', ()=>announce('Rotate feature: Video rotation will be applied at export.'));
-    $('#btnFreezeFrame').addEventListener('click', ()=>{
-      const pos=video.currentTime;
-      announce(`Freeze frame at ${formatTimeVerbose(pos)}. This will hold the frame for 2 seconds at export.`);
-      // Implement as segment with freeze? For demo, just announce
+    $('#btnCrop').addEventListener('click', ()=>{ $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#cropPreset').focus(); announce('Crop settings.'); });
+    $('#btnRotate').addEventListener('click', ()=>{ $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#rotateAngle').focus(); announce('Rotation settings.'); });
+    $('#btnFreezeFrame').addEventListener('click', ()=>{ $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#freezeSeconds').focus(); announce('Freeze frame settings.'); });
+    $('#cropPreset').addEventListener('change',(e)=>{project.crop.preset=e.target.value;pushHistory();renderAll();announce(`Crop set to ${e.target.selectedOptions[0].textContent}. Applied at export.`);});
+    for(const id of ['cropX','cropY','cropW','cropH']){$('#'+id).addEventListener('change',()=>{
+      const v={x:Number($('#cropX').value),y:Number($('#cropY').value),w:Number($('#cropW').value),h:Number($('#cropH').value)};
+      try{
+        if(video.videoWidth)VoiceCutCore.cropRect('custom',video.videoWidth,video.videoHeight,v);
+        else if(!(v.x>=0&&v.y>=0&&v.w>0&&v.h>0&&v.x+v.w<=100.01&&v.y+v.h<=100.01))throw new Error('Crop values must be percentages inside the frame.');
+        project.crop={...project.crop,...v};
+        pushHistory();renderAll();announce('Custom crop area saved. Applied at export.');
+      }catch(err){announce(err.message,true);renderAll();}
+    });}
+    $('#rotateAngle').addEventListener('change',(e)=>{project.rotation=Number(e.target.value);pushHistory();renderAll();announce(`Rotation set to ${e.target.selectedOptions[0].textContent}. Applied at export.`);});
+    $('#btnAddFreeze').addEventListener('click',()=>{
+      if(!project.videoUrl){announce('Upload a video first.',true);return;}
+      const hold=Math.max(1,Math.min(10,Math.round(Number($('#freezeSeconds').value)||2)));
+      project.freezes.push({id:uid(),at:video.currentTime,hold});
+      pushHistory();renderAll();announce(`Freeze frame added at ${formatTimeVerbose(video.currentTime)} for ${hold} seconds.`);
     });
+    $('#settingPlaybackSpeed').addEventListener('change',(e)=>{savePrefs({playbackSpeed:e.target.value});project.playbackSpeed=Number(e.target.value);video.playbackRate=project.playbackSpeed;$('#playbackSpeedSelect').value=e.target.value;announce(`Default playback speed ${e.target.value}x.`);});
+    $('#settingExportResolution').addEventListener('change',(e)=>{savePrefs({exportResolution:e.target.value});project.resolution=e.target.value;updateExportSummary();renderAll();announce(`Default export quality ${e.target.value}p.`);});
+    $('#settingCaptionLanguage').addEventListener('change',(e)=>{savePrefs({captionLanguage:e.target.value});$('#captionLanguage').value=e.target.value;announce('Preferred caption language saved.');});
+    $('#settingCaptionPreview').addEventListener('change',(e)=>{savePrefs({captionPreview:e.target.checked});captionDefaults();project.captionSettings.preview=e.target.checked;announce(`Caption preview ${e.target.checked?'on':'off'}.`);});
+    $('#settingCaptionBurn').addEventListener('change',(e)=>{savePrefs({captionBurn:e.target.checked});captionDefaults();project.captionSettings.burnIn=e.target.checked;announce(`Burned-in captions ${e.target.checked?'on':'off'}.`);});
 
     // Original audio
     $('#origVolumeSlider').addEventListener('input', (e)=>{ project.originalAudio.volume=parseInt(e.target.value); $('#origVolumeNumber').value=e.target.value; $('#origVolumeText').textContent=e.target.value+'%'; e.target.setAttribute('aria-valuetext', `Volume ${e.target.value} percent`); });
@@ -1537,8 +1762,8 @@
     $('#origVolDec').addEventListener('click', ()=>{ project.originalAudio.volume=Math.max(0,project.originalAudio.volume-5); $('#origVolumeSlider').value=project.originalAudio.volume; $('#origVolumeNumber').value=project.originalAudio.volume; pushHistory(); renderAll(); announce(`Original audio volume ${project.originalAudio.volume} percent.`); });
     $('#origVolInc').addEventListener('click', ()=>{ project.originalAudio.volume=Math.min(100,project.originalAudio.volume+5); $('#origVolumeSlider').value=project.originalAudio.volume; $('#origVolumeNumber').value=project.originalAudio.volume; pushHistory(); renderAll(); announce(`Original audio volume ${project.originalAudio.volume} percent.`); });
     $('#btnMuteOrig').addEventListener('click', ()=>{ project.originalAudio.muted=!project.originalAudio.muted; pushHistory(); renderAll(); announce(project.originalAudio.muted?'Original audio muted.':'Original audio unmuted.'); });
-    $('#origNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
-    $('#globalNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; $('#origNoiseReduction').value=e.target.value; pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
+    $('#origNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
+    $('#globalNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; $('#origNoiseReduction').value=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
     $('#btnOrigFadeIn').addEventListener('click', ()=>{ project.originalAudio.fadeIn = project.originalAudio.fadeIn?0:2; pushHistory(); renderAll(); announce(`Original audio fade in ${project.originalAudio.fadeIn} seconds.`); });
     $('#btnOrigFadeOut').addEventListener('click', ()=>{ project.originalAudio.fadeOut = project.originalAudio.fadeOut?0:2; pushHistory(); renderAll(); announce(`Original audio fade out ${project.originalAudio.fadeOut} seconds.`); });
     $('#btnOrigAIEnhance').addEventListener('click', ()=>{
@@ -1610,7 +1835,7 @@
     $('#selApplyAllMusic').addEventListener('click', ()=>applyVolumeToScope('allMusic'));
     $('#selApplyAllAudio').addEventListener('click', ()=>applyVolumeToScope('allAudio'));
     $('#selNoiseReduction').addEventListener('change', (e)=>{
-      const clip=project.clips.find(c=>c.id===selectedClipId); if(!clip) return; clip.noiseReduction=e.target.value; pushHistory(); renderAll(); announce(`Noise reduction for ${escapeHTML(clip.name)} set to ${e.target.value}.`);
+      const clip=project.clips.find(c=>c.id===selectedClipId); if(!clip) return; clip.noiseReduction=e.target.value; createAudioNodeForClip(clip); pushHistory(); renderAll(); announce(`Noise reduction for ${escapeHTML(clip.name)} set to ${e.target.value}.`);
     });
     $('#selFadeIn').addEventListener('change', (e)=>{ const clip=project.clips.find(c=>c.id===selectedClipId); if(!clip) return; clip.fadeIn=parseFloat(e.target.value); pushHistory(); renderAll(); announce(`Fade in set to ${e.target.value} seconds.`); });
     $('#selFadeOut').addEventListener('change', (e)=>{ const clip=project.clips.find(c=>c.id===selectedClipId); if(!clip) return; clip.fadeOut=parseFloat(e.target.value); pushHistory(); renderAll(); announce(`Fade out set to ${e.target.value} seconds.`); });
@@ -1628,7 +1853,7 @@
     // audio cleanup ENHANCEMENT BUTTONS
     $('#btnAIEnhanceOriginal').addEventListener('click', ()=>{
       const level = $('#globalNoiseReduction').value;
-      if (level==='off') { announce('Noise reduction is off. Set to Light, Medium, or Strong first.', true); return; }
+      if (level==='off') { announce('Noise reduction is off. Choose Light, Medium, Strong or Voice Focus first.', true); return; }
       enhanceOriginalVideoAudioWithAI(level);
     });
     $('#btnAIEnhanceSelected').addEventListener('click', ()=>{
@@ -1656,7 +1881,7 @@
     $('#exportFps').addEventListener('change', (e)=>{ project.fps=parseInt(e.target.value); updateExportSummary(); });
     $('#exportFormat').addEventListener('change', (e)=>{ project.format=e.target.value; updateExportSummary(); });
     $('#btnDoExport').addEventListener('click', doExport);
-    $('#btnExport').addEventListener('click', ()=>{ $('#section-export').scrollIntoView({behavior:'smooth'}); doExport(); });
+    $('#btnExport').addEventListener('click', ()=>{ if(!hasProject()){ showView('none'); return; } openEditor(); $('#section-export').scrollIntoView({behavior:'smooth'}); doExport(); });
     $('#btnCancelExport').addEventListener('click', cancelExport);
     $('#btnPlayExported').addEventListener('click', ()=>{ exportedVideoEl.play(); });
     $('#btnDownloadExported').addEventListener('click', async ()=>{
@@ -1700,15 +1925,13 @@
         currentRequest?.abort(); mediaEpoch++;
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
-        await VoiceCutStorage.clear();
-        localStorage.removeItem('voicecut_current_project');
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        await VoiceCutStorage.remove(project.id);
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.src='';
         $('#videoPlaceholder').classList.remove('hidden');
-        $('#editorScreen').classList.add('hidden');
-        $('#homeScreen').classList.remove('hidden');
         historyStack=[]; historyIndex=-1;
+        location.hash='#/library';
         announce('Project deleted.');
       });
     });
@@ -1734,23 +1957,7 @@
       announce(advancedMode?'Advanced editing mode enabled.':'Simple editing mode enabled.');
     });
 
-    loadApiKeys();
-    $('#btnSaveApiKeys').addEventListener('click', saveApiKeys);
-    $('#btnCheckServer').addEventListener('click', async () => {
-      $('#apiKeysStatus').textContent='Checking server connection…';
-      try {
-        const status=await requestServer('/capabilities');
-        const configured=status.captionProviders||{openai:status.captions};
-        const names={groq:'Groq (free)',deepgram:'Deepgram',assemblyai:'AssemblyAI',openai:'OpenAI'};
-        const captions=Object.keys(names).map(id=>`${names[id]}: ${configured[id]?'key configured':'key missing'}`).join('. ');
-        $('#apiKeysStatus').textContent=`Connected. Captions — ${captions}. ElevenLabs isolation: ${status.isolation?'key configured':'key missing'}. DeepFilterNet local AI: ${status.deepFilterNet?'installed':'not installed'}. This checks configuration only, not provider billing or key validity.`;
-      } catch(e) { $('#apiKeysStatus').textContent=e.message; }
-    });
-    $('#btnClearApiKeys').addEventListener('click', () => {
-      localStorage.removeItem('voicecut_ai_server'); serverAccessKey = ''; serverKeyExpiry = 0;
-      $('#aiServerUrl').value = ''; $('#serverAccessKey').value = '';
-      announce('Server settings cleared. Processing stays on this device.');
-    });
+    loadPrefs();
 
     // Video time updates
     video.addEventListener('timeupdate', ()=>{
@@ -1773,6 +1980,7 @@
     // Keyboard shortcuts
     document.addEventListener('keydown', (e)=>{
       if(isExporting){if(e.key==='Escape')cancelExport();return;}
+      if(currentView!=='editor')return;
       const activeTag = document.activeElement.tagName;
       if (document.querySelector('dialog[open]') || ['INPUT','TEXTAREA','SELECT','BUTTON','A','VIDEO','AUDIO'].includes(activeTag)) {
         if (e.key==='Escape') document.activeElement.blur();
@@ -1815,8 +2023,9 @@
 
   // Init
   document.addEventListener('DOMContentLoaded', ()=>{
-    initEvents(); initCaptions();
-    renderAll();
+    initEvents(); initCaptions(); loadPrefs(); applyPrefsToProject(true);
+    for (const key of ['voicecut_ai_server','voicecut_dolby_key','voicecut_hf_key','voicecut_replicate_key']) localStorage.removeItem(key);
+    renderAll(); route();
     announce('Welcome to VoiceCut Studio. Upload a video to begin editing. Screen reader optimized. Press H for help. Use Tab to navigate controls.', false, true);
     // Add hidden help shortcut
     document.addEventListener('keydown', (e)=>{ if(e.key.toLowerCase()==='h' && !e.ctrlKey && !['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')){ $('#helpDialog').showModal(); } });

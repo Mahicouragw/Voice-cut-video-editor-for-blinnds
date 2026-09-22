@@ -167,3 +167,11 @@
 #section-captions label { display:block; margin-top:12px; }
 #section-captions button { margin:6px 6px 6px 0; }
 #currentCaption { border-left:3px solid var(--accent); padding:12px; }
+.primary-nav { display:flex; flex-wrap:wrap; gap:8px; padding:12px 20px; background: var(--bg); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100; }
+.primary-nav a { padding:10px 22px; background: var(--bg3); border:1px solid var(--border); border-radius:8px; text-decoration:none; color: var(--text); font-size:16px; font-weight:700; }
+.primary-nav a[aria-current="page"] { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+.primary-nav a:focus-visible, .primary-nav a:hover { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+.library-list { display:flex; flex-direction:column; gap:12px; margin-top:16px; }
+.library-card { margin:0; }
+#freezeList { list-style:none; padding:0; display:flex; flex-direction:column; gap:8px; }
+#freezeList li { padding:8px 12px; background: var(--bg3); border:1px solid var(--border); border-radius:8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }

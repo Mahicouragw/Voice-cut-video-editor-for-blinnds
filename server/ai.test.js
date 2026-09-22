@@ -62,3 +62,29 @@ test('DeepFilterNet denoising needs no cloud consent; missing binary gives insta
   assert.deepEqual(fs.readdirSync(t.root),[]);
  }finally{await t.close();if(old===undefined)delete process.env.DEEPFILTER_PATH;else process.env.DEEPFILTER_PATH=old;fs.rmSync(dir,{recursive:true,force:true});}
 });
+test('automatic provider prefers free tiers; explicit provider still honored',async()=>{
+ let seen='';const p={configured:{captions:true,isolation:false,captionProviders:{openai:true,groq:true,deepgram:false,assemblyai:false}},async transcribe(file,language,signal,provider){seen=provider;return {language:'english',words:[{word:'hello',start:.1,end:.8}]};}};
+ const t=await setup(p);try{
+  let r=await fetch(t.url+'/api/captions',upload(t.fixture));assert.equal(r.status,200);assert.equal(seen,'groq');
+  r=await fetch(t.url+'/api/captions?provider=openai',upload(t.fixture));assert.equal(r.status,200);assert.equal(seen,'openai');
+  assert.deepEqual(fs.readdirSync(t.root),[]);
+ }finally{await t.close();}
+});
+test('public mode skips access key and enforces per-IP AI quotas',async()=>{
+ const p={configured:{captions:true,isolation:false,captionProviders:{groq:true}},async transcribe(){return {language:'english',words:[{word:'hi',start:.1,end:.5}]};}};
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'vc-public-'));const fixture=path.join(os.tmpdir(),'vc-public-'+Math.random()+'.wav');
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=1','-y',fixture]);
+ const server=createApp({key:'x'.repeat(64),origin:'https://example.org',root,providers:p,public:true}).listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const url='http://127.0.0.1:'+server.address().port;
+ try{
+  const open=await(await fetch(url+'/capabilities')).json();assert.equal(open.publicMode,true);assert.equal(open.autoProvider,'groq');
+  const body=()=>{const b=new FormData();b.append('file',new Blob([fs.readFileSync(fixture)]),'a.wav');return {method:'POST',body:b,headers:{'X-Upload-Consent':'yes'}};};
+  assert.equal((await fetch(url+'/api/captions',body())).status,200);
+ }finally{server.closeAllConnections();await new Promise(r=>server.close(r));fs.rmSync(root,{recursive:true,force:true});fs.rmSync(fixture,{force:true});}
+});
+test('unknown noise reduction level is rejected before processing',async()=>{
+ const t=await setup({configured:{captions:false,isolation:false}});try{
+  const r=await fetch(t.url+'/enhance?level=nope',upload(t.fixture));assert.equal(r.status,400);assert.equal((await r.json()).code,'UNKNOWN_LEVEL');
+  assert.deepEqual(fs.readdirSync(t.root),[]);
+ }finally{await t.close();}
+});
