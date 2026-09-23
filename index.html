@@ -544,6 +544,24 @@
         <p style="color:var(--text2); font-size:14px;">Original Audio: Medium, Voice-over 1: Strong, Music: Off. Do not apply noise reduction to music automatically.</p>
         <div id="noiseReductionTracks" class="grid grid-2"></div>
       </div>
+      <div class="mt-16" style="background:linear-gradient(135deg, rgba(34,197,94,0.12), rgba(124,92,255,0.10)); border:1px solid var(--accent); border-radius:12px; padding:16px;">
+        <h3 style="margin-top:0;">&#9986;&#65039; Remove Silence</h3>
+        <p style="color:var(--text2); font-size:14px; margin:4px 0 12px;">Finds quiet gaps longer than your chosen length and cuts them out. The original video downloads as a trimmed file; audio clips can be previewed before applying.</p>
+        <div class="flex gap-8 wrap items-center">
+          <div>
+            <label for="silenceSeconds">Silence length</label>
+            <select id="silenceSeconds" aria-label="Silence length in seconds, select">
+              <option value="2">2 seconds</option>
+              <option value="3" selected>3 seconds</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+            </select>
+          </div>
+          <button id="btnSilenceOriginal" class="primary" aria-label="Remove silence from original video audio, button. Downloads a trimmed video file">&#9986;&#65039; Remove Silence - Original Video</button>
+          <button id="btnSilenceSelected" aria-label="Remove silence from selected audio clip, button">&#9986;&#65039; Remove Silence - Selected Clip</button>
+        </div>
+        <p id="silenceStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+      </div>
     </div>
 
     <!-- TIMELINE -->
@@ -797,7 +815,7 @@
         <p style="color:var(--success); font-weight:600; margin-top:12px;" id="aiResultText">Filters applied. Preview before applying.</p>
       </div>
 
-      <div id="aiTechDetails"><p>The method selected in Settings is used. Local and FFmpeg modes are ordinary filters. ElevenLabs Voice Isolator uses a cloud AI model. All modes can change speech quality; listen before applying. Cloud uploads require consent.</p></div>
+      <div id="aiTechDetails"><p>Automatic mode tries the VoiceCut server AI first (DeepFilterNet on your own server, no paid key), then strong on-device spectral cleanup when the server is unreachable. Device-only mode never uploads. All modes can change speech quality; listen before applying. Server uploads ask for consent and expire within 15 minutes.</p></div>
     </div>
     <div class="dialog-footer">
       <button id="btnCancelAI" aria-label="Cancel Audio noise reduction processing, button">Cancel Processing</button>
@@ -821,6 +839,7 @@
 <script src="web/config.js" defer></script>
 <script src="web/core.js" defer></script>
 <script src="web/captions.js" defer></script>
+<script src="web/nr.js" defer></script>
 <script src="web/storage.js" defer></script>
 <script src="web/app.js" defer></script>
 </body>

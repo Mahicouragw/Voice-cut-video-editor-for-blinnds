@@ -30,7 +30,22 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // Permanent VoiceCut debug key: every CI build stamps the same signature,
+        // so updates install over each other and never show "package appears invalid".
+        // Debug keystores are public-safe by design; Play Store uses a separate key.
+        getByName("debug") {
+            storeFile = file("voicecut-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             // Signed release is configured explicitly by scripts/android-signing.py.
             signingConfig = null // VOICECUT_RELEASE_SIGNING
