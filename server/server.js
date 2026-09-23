@@ -47,6 +47,7 @@ function createApp(options={}) {
       res.set('Access-Control-Allow-Origin',req.headers.origin);res.set('Vary','Origin');
       res.set('Access-Control-Allow-Headers','Authorization, Content-Type, X-Upload-Consent');
       res.set('Access-Control-Allow-Methods','POST, GET, OPTIONS');
+      res.set('Access-Control-Expose-Headers','X-Processing-Method, X-Silence-Removed, X-Silence-Seconds');
     }
     if(req.method==='OPTIONS') return res.sendStatus(204);
     next();
@@ -70,6 +71,8 @@ function createApp(options={}) {
     if(language&&!/^[a-z]{2}$/.test(language)) return res.status(400).json({error:'Language must be blank for automatic detection or a two-letter code.'});
     const level=String(req.query.level||'medium');
     if((kind==='filter'||kind==='deepfilter')&&!FILTER_LEVELS[level]) return res.status(400).json({code:'UNKNOWN_LEVEL',error:'Unknown noise reduction level.'});
+    const silenceSeconds=Number(req.query.seconds||3);
+    if(kind==='silence'&&(!Number.isFinite(silenceSeconds)||silenceSeconds<1||silenceSeconds>10)) return res.status(400).json({code:'BAD_SECONDS',error:'Silence length must be between 1 and 10 seconds.'});
     const captionKeys=providers.configured.captionProviders||{openai:providers.configured.captions};
     let provider=String(req.query.provider||'auto');
     if(provider==='auto') provider=CAPTION_ORDER.find(id=>captionKeys[id])||'openai';
@@ -111,6 +114,13 @@ function createApp(options={}) {
       child.on('error',()=>reject(new ServiceError(503,'PROCESSOR_UNAVAILABLE','FFmpeg or FFprobe is unavailable on the server.')));
       child.on('close',code=>{children.delete(child);if(code!==0)reject(new ServiceError(422,'BAD_MEDIA','Unsupported, damaged or unreadable audio/video.'));else resolve(output);});
     });
+    const runStderr=(binary,args)=>new Promise((resolve,reject)=>{
+      if(signal.aborted)return reject(new ServiceError(408,'EXPIRED','Request expired.'));
+      const child=spawn(binary,args,{stdio:['ignore','ignore','pipe']});children.add(child);let output='';
+      child.stderr.on('data',data=>{output+=data;if(output.length>2*1024*1024)child.kill('SIGKILL');});
+      child.on('error',()=>reject(new ServiceError(503,'PROCESSOR_UNAVAILABLE','FFmpeg or FFprobe is unavailable on the server.')));
+      child.on('close',code=>{children.delete(child);if(code!==0)reject(new ServiceError(422,'BAD_MEDIA','Unsupported, damaged or unreadable audio/video.'));else resolve(output);});
+    });
     const encode=async(input,output,args)=>{
       await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',input,'-vn','-t','600',...args,'-y',output]);signal.throwIfAborted();
     };
@@ -127,8 +137,38 @@ function createApp(options={}) {
       const audioStream=info.streams.find(s=>s.codec_type==='audio');
       const offset=Math.max(0,(Number(audioStream.start_time)||0)-(Number(info.format?.start_time)||0));
       const align=`adelay=${Math.round(offset*1000)}:all=1,apad,atrim=duration=${duration.toFixed(6)},asetpts=N/SR/TB`;
-      const output=path.join(req.workdir,'processed.wav');
-      if(kind==='filter') {
+      const hasVideo=info.streams.some(s=>s.codec_type==='video');
+      const output=path.join(req.workdir,(kind==='silence'&&hasVideo)?'trimmed.mp4':'processed.wav');
+      const downloadName=(kind==='silence'&&hasVideo)?'silence-removed.mp4':'processed.wav';
+      if(kind==='silence') {
+        // Real silence removal: detect quiet gaps, cut them from audio AND video.
+        const detect=await runStderr(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','info','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-af',`silencedetect=noise=-30dB:d=${silenceSeconds}`,'-vn','-sn','-dn','-f','null','-']);
+        signal.throwIfAborted();
+        const gaps=[];let pending=null;
+        for(const line of detect.split('\n')){
+          let m=/silence_start:\s*([0-9.]+)/.exec(line);if(m){pending=Number(m[1]);continue;}
+          m=/silence_end:\s*([0-9.]+)/.exec(line);if(m&&pending!==null){gaps.push([pending,Number(m[1])]);pending=null;}
+        }
+        if(pending!==null)gaps.push([pending,duration]);
+        const silent=gaps.filter(([a,b])=>Number.isFinite(a)&&Number.isFinite(b)&&b-a>=silenceSeconds-0.05&&a<duration);
+        const kept=[];let cursor=0,removed=0;
+        for(const [a,b] of silent){const st=Math.max(0,a),en=Math.min(duration,b);if(st>cursor+0.02)kept.push([cursor,st]);removed+=Math.max(0,en-st);cursor=Math.max(cursor,en);}
+        if(cursor<duration-0.02)kept.push([cursor,duration]);
+        if(!kept.length)throw new ServiceError(422,'SILENCE_ONLY','No speech found: the whole recording is quiet. Your original media is unchanged.');
+        const span=([a,b])=>`between(t\\,${a.toFixed(3)}\\,${b.toFixed(3)})`;
+        const expr=kept.map(span).join('+');
+        if(hasVideo){
+          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-vf',`select=${expr},setpts=N/FRAME_RATE/TB`,'-af',`aselect=${expr},asetpts=N/SR/TB`,'-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-y',output]);
+        }else{
+          await encode(req.file.path,output,['-af',`aselect=${expr},asetpts=N/SR/TB,aresample=48000`,'-ar','48000','-ac','2','-c:a','pcm_s16le']);
+        }
+        signal.throwIfAborted();
+        const expected=kept.reduce((t,[a,b])=>t+(b-a),0);
+        const trimmed=Number(await run(process.env.FFPROBE_PATH||'ffprobe',['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',output]));
+        if(!Number.isFinite(trimmed)||Math.abs(trimmed-expected)>Math.max(1.0,expected*0.05))throw new ServiceError(502,'TRIM_MISMATCH','Trimmed media duration changed unexpectedly. Not applied; retain your original.');
+        res.set('X-Silence-Removed',String(silent.length));
+        res.set('X-Silence-Seconds',removed.toFixed(1));
+      } else if(kind==='filter') {
         await encode(req.file.path,output,['-af',align+','+FILTER_LEVELS[level],'-ar','48000','-ac','2','-c:a','pcm_s16le']);
       } else if(kind==='deepfilter') {
         // Free, keyless neural denoising that runs on your own server. No provider account or credits.
@@ -168,8 +208,8 @@ function createApp(options={}) {
         if(!Number.isFinite(processed)||Math.abs(processed-duration)>Math.max(0.5,duration*0.01))throw new ServiceError(502,'DURATION_MISMATCH','Isolated audio duration changed unexpectedly. Not applied; retain your original.');
       }
       signal.throwIfAborted();
-      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':kind==='deepfilter'?'DeepFilterNet-local-AI':'ElevenLabs-Voice-Isolator');
-      res.download(output,'processed.wav',cleanup);
+      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':kind==='deepfilter'?'DeepFilterNet-local-AI':kind==='silence'?'FFmpeg-silence-removal':'ElevenLabs-Voice-Isolator');
+      res.download(output,downloadName,cleanup);
     }catch(e){
       if(!closed&&!res.headersSent)res.status(e instanceof ServiceError?e.status:502).json({code:e.code||'PROCESSING_FAILED',error:e instanceof ServiceError?e.message:'Processing failed or timed out. Your original media is unchanged. No automatic paid retry was made.'});
       cleanup();
@@ -179,6 +219,7 @@ function createApp(options={}) {
   app.post('/api/captions',authorized,job('captions'));
   app.post('/api/isolate',authorized,job('isolation'));
   app.post('/api/denoise-local',authorized,job('deepfilter'));
+  app.post('/api/silence',authorized,job('silence'));
   return app;
 }
 if(require.main===module){

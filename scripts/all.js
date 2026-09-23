@@ -87,13 +87,13 @@ async function publish(){
   await git(['switch','-c',branch]);
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
-  if(names.some(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)))throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.1.1: TalkBack fullscreen fix + cloud backend connected']);
+  const blockedStaged=names.filter(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)&&name!=='flutter_app/android/app/voicecut-debug.keystore');if(blockedStaged.length)throw new Error('A credential-related file was staged. Refusing to commit.');
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.2: offline NR-1 noise reduction, silence remover, reliable cloud retry']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');
-  fs.writeFileSync(body,'User-authorized VoiceCut app 2.1.1 update.\n\nTalkBack linear navigation got stuck on the native app bar and could not swipe into the page. The wrapper is now a fullscreen WebView with no native header, so TalkBack starts inside the page content. The website now points at the public cloud backend for everyone (keys stay in server env, never in the app).\n\nNo API keys are included. This automation merges only after the website and Android pull-request workflows succeed. It does not bypass protected-branch rules or delete branches.\n');
-  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.1.1: TalkBack fix + backend connected','--body-file',body]);
+  fs.writeFileSync(body,'User-authorized VoiceCut app 2.2 update.\n\nTalkBack linear navigation got stuck on the native app bar and could not swipe into the page. The wrapper is now a fullscreen WebView with no native header. Noise reduction now works fully offline via the NR-1 spectral engine, the cloud AI path retries patiently with honest errors, a silence remover cuts quiet gaps from audio and video, and a permanent install key lets updates install over each other. No keys in the app; keys stay in server env.\n\nNo API keys are included. This automation merges only after the website and Android pull-request workflows succeed. It does not bypass protected-branch rules or delete branches.\n');
+  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.2: reliable noise reduction + silence remover','--body-file',body]);
   const pr=await api(['pr','view',branch,'--repo',REPO,'--json','number,url']);console.log('Pull request: '+pr.url);
   await waitForRuns(branch,'pull_request',sha,['Test and deploy website','Android test APK and optional signed AAB'],40);
 

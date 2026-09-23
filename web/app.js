@@ -206,7 +206,14 @@
     captionRequestBusy=true;$('#btnGenerateCaptions').disabled=true;$('#btnCancelCaptions').disabled=false;
     $('#captionStatus').textContent='Waiting for upload confirmation. Your existing captions are unchanged.';
     try{
-      const result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),file,{cloud:true});
+      let result=null;
+      for(let captionAttempt=1;captionAttempt<=2;captionAttempt++){
+        try{result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),file,{cloud:true});break;}
+        catch(e){
+          if(captionAttempt===1&&e.message==='SERVICE_UNAVAILABLE'){$('#captionStatus').textContent='Connection stumbled. Retrying once…';await new Promise(r=>setTimeout(r,1500));}
+          else throw e;
+        }
+      }
       if(epoch!==mediaEpoch||id!==project.id)throw new Error('Project changed during processing. Result was not applied.');
       let cues=VoiceCutCaptions.validate(result.cues,result.duration);
       if(clipSnapshot){
@@ -1346,24 +1353,87 @@
     return await audioContext.decodeAudioData(arrayBuffer);
   }
 
-  // Advanced Audio Noise Reduction - Real Processing with OfflineAudioContext
+  // On-device spectral noise reduction (NR-1): real processing, fully offline.
   async function processAudioBufferWithAI(buffer, level, onProgress) {
     if (buffer.duration > 600) throw new Error('Local cleanup is limited to 10 minutes to protect device memory.');
-    onProgress(10, 'Preparing audio filters', 'Not a neural AI model');
-    const ctx = new OfflineAudioContext(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
-    const source = ctx.createBufferSource(); source.buffer = buffer;
-    const high = ctx.createBiquadFilter(); high.type = 'highpass'; high.frequency.value = level === 'strong' ? 120 : 80;
-    const low = ctx.createBiquadFilter(); low.type = 'lowpass'; low.frequency.value = level === 'strong' ? 7000 : 12000;
-    const notch = ctx.createBiquadFilter(); notch.type = 'notch'; notch.frequency.value = 50; notch.Q.value = 10;
-    source.connect(high); high.connect(notch); notch.connect(low); low.connect(ctx.destination); source.start();
-    onProgress(30, 'Rendering filtered audio', 'Reducing low-frequency rumble and high-frequency hiss');
-    const result = await ctx.startRendering();
+    if (!window.VoiceCutNR?.spectralDenoise) throw new Error('On-device cleanup engine missing. Reload the app.');
+    onProgress(5, 'Reducing noise on this device. No upload.');
+    const result = await window.VoiceCutNR.spectralDenoise(buffer, level, (pct, text) => onProgress(pct, text), (ch, len, sr) => new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr}), () => aiProcessingCancelled);
     if (aiProcessingCancelled) throw new Error('Cancelled');
-    onProgress(100, 'Filters applied. Preview before applying.', 'Noise removal is not guaranteed');
+    onProgress(100, 'On-device cleanup complete. Preview before applying.');
     return result;
   }
 
+  async function silenceClipWithAI() {
+    const clip = project.clips.find(c=>c.id===selectedClipId);
+    if (!clip || !(clip.file || clip.url)) { announce('Select an audio clip in the timeline first.', true); return; }
+    return processSilence(clip.file || clip.url, clip.name, clip.id);
+  }
+  async function silenceOriginalVideo() {
+    if (!project.videoFile) { announce('Upload a video first.', true); return; }
+    return processSilence(project.videoFile, 'Original video audio', null);
+  }
+  async function processSilence(input, name, clipId) {
+    if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.', true); return; }
+    const seconds = $('#silenceSeconds').value;
+    const statusEl = $('#silenceStatus');
+    cleanupBusy = true; aiProcessingCancelled = false;
+    video.pause(); for (const node of audioNodes.values()) node.element.pause();
+    const epoch = mediaEpoch;
+    statusEl.textContent = 'Uploading to your VoiceCut server…';
+    announce('Removing silence. Uploading to your VoiceCut server.');
+    try {
+      const file = input instanceof Blob ? input : await (await fetch(input)).blob();
+      if (file.size > 100 * 1024 * 1024) throw new Error('Cleanup supports media files up to 100 MB.');
+      statusEl.textContent = 'Detecting quiet gaps longer than ' + seconds + ' seconds…';
+      const blob = await requestServer('/api/silence?seconds=' + encodeURIComponent(seconds), file, {cloud:false, consent:'Upload this file to your VoiceCut server to remove silence? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.'});
+      if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
+      const removed = Number(lastResponseHeaders?.get('X-Silence-Removed') || 0);
+      const secs = Number(lastResponseHeaders?.get('X-Silence-Seconds') || 0);
+      const message = removed > 0
+        ? `Removed ${removed} silent ${removed === 1 ? 'gap' : 'gaps'}. Media is shorter by ${secs.toFixed(1)} seconds.`
+        : `No quiet gaps longer than ${seconds} seconds found. Background noise may be filling the pauses; try noise reduction first.`;
+      if (!clipId) {
+        if (removed > 0) {
+          const ext = (blob.type || '').includes('mp4') ? 'mp4' : 'wav';
+          if (window.flutter_inappwebview && blob.size <= 40 * 1024 * 1024) {
+            const base64 = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result.split(',')[1]); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
+            await window.flutter_inappwebview.callHandler('shareExport', base64, ext);
+          } else {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'silence-removed.' + ext;
+            a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+          }
+        }
+        statusEl.textContent = message + (removed > 0 ? ' Trimmed file downloaded.' : '');
+        announce(message + (removed > 0 ? ' Trimmed file downloaded.' : ''), removed === 0);
+        return;
+      }
+      const enhancedBuffer = await decodeAudioFile(blob);
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      const enhancedUrl = URL.createObjectURL(blob);
+      const originalUrl = URL.createObjectURL(file);
+      currentAIJob = {type:'clip', clipId, enhancedBlob:blob, enhancedBuffer, enhancedUrl, originalUrl, level:'silence-' + seconds + 's', provider:'VoiceCut silence removal', epoch};
+      $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
+      $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
+      $('#btnCloseAI').classList.remove('hidden');
+      $('#aiResultText').textContent = 'VoiceCut silence removal: complete. Listen before applying.';
+      const dialog = $('#aiProcessingDialog');
+      if (!dialog.open) dialog.showModal();
+      statusEl.textContent = message;
+      announce(message + ' Preview before applying.');
+    } catch(e) {
+      const msg = /cancelled|timed out/i.test(e.message) ? 'Processing stopped: ' + e.message
+        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again. Your media is unchanged.'
+        : 'Processing stopped: ' + e.message;
+      statusEl.textContent = msg; announce(msg, true);
+    } finally { cleanupBusy = false; }
+  }
   let cleanupBusy = false;
+  let lastResponseHeaders = null;
   async function enhanceAudioClipWithAI(clipId, level='medium') {
     const clip = project.clips.find(c => c.id === clipId);
     if (!clip) { announce('Select an audio clip first.', true); return; }
@@ -1410,10 +1480,10 @@
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
       const originalUrl = URL.createObjectURL(file);
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
-      currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:serverResult?.provider||'On-device filters',epoch};
+      currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:serverResult?.provider||'On-device spectral cleanup',epoch};
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
-      $('#aiResultText').textContent = (serverResult?.provider || 'On-device filters') + ': complete. Listen before applying.';
+      $('#aiResultText').textContent = (serverResult?.provider || 'On-device spectral cleanup') + ': complete. Listen before applying.';
       progress(100,'Complete'); announce('Audio processing complete. Preview before applying.');
     } catch(e) { $('#aiProgressText').textContent = 'Processing stopped: '+e.message; announce('Processing stopped: '+e.message,true); }
     finally { cleanupBusy = false; $('#btnCloseAI').classList.remove('hidden'); }
@@ -1521,8 +1591,12 @@
   let cachedCapabilities = null;
   async function getCapabilities() {
     if (cachedCapabilities) return cachedCapabilities;
-    cachedCapabilities = await requestServer('/capabilities');
-    return cachedCapabilities;
+    let lastError=null;
+    for (let attempt=1; attempt<=3; attempt++) {
+      try { cachedCapabilities=await requestServer('/capabilities'); return cachedCapabilities; }
+      catch(e){ lastError=e; if(attempt<3) await new Promise(r=>setTimeout(r,1000)); }
+    }
+    throw lastError;
   }
   function userPrefs(){try{return JSON.parse(localStorage.getItem('voicecut_prefs')||'{}');}catch{return{};}}
   function savePrefs(patch){localStorage.setItem('voicecut_prefs',JSON.stringify({...userPrefs(),...patch}));}
@@ -1554,12 +1628,13 @@
     if(file?.size>100*1024*1024)throw new Error('Use a file smaller than 100 MB.');
     if(file&&!confirm(consent))throw new Error('Upload cancelled.');
     const controller=new AbortController();currentRequest=controller;
-    const timer=setTimeout(()=>controller.abort(),file?14*60*1000:30000);
+    const timer=setTimeout(()=>controller.abort(),file?14*60*1000:60000);
     if(captionRequestBusy)$('#captionStatus').textContent='Uploading and processing. You can cancel; do not submit twice.';
     try{
       const body=file?new FormData():undefined;if(file)body.append('file',file);
       const headers={...(backend.key?{Authorization:'Bearer '+backend.key}:{}),...(cloud?{'X-Upload-Consent':'yes'}:{})};
       const response=await fetch(new URL(endpoint,backend.url),{method:file?'POST':'GET',body,signal:controller.signal,headers});
+      lastResponseHeaders=response.headers;
       if(!response.ok)throw new Error('SERVICE_UNAVAILABLE');
       return response.headers.get('content-type')?.includes('application/json')?await response.json():await response.blob();
     }catch(e){
@@ -1585,9 +1660,10 @@
       if(capabilities?.isolation)return await useService('/api/isolate',true);
     }catch(e){
       if(/cancelled|timed out/i.test(e.message))throw e;
-      console.warn('Server enhancement failed; using on-device filters:',e);
+      console.warn('Server enhancement failed; using on-device cleanup:',e);
+      announce('VoiceCut server unreachable after retries. Using strong on-device cleanup instead.');
     }
-    announce('VoiceCut service unavailable. Using on-device filters.');
+    announce('VoiceCut server unreachable. Using strong on-device cleanup instead.');
     return null;
   }
   let currentRequest = null;
@@ -1870,6 +1946,8 @@
     $('#btnCloseAI').addEventListener('click', stopCleanup);
     $('#aiProcessingDialog').addEventListener('cancel', stopCleanup);
     $('#btnApplyEnhanced').addEventListener('click', applyCurrentAIEnhancement);
+    $('#btnSilenceOriginal').addEventListener('click', silenceOriginalVideo);
+    $('#btnSilenceSelected').addEventListener('click', silenceClipWithAI);
     $('#aiOriginalAudio').addEventListener('play', () => $('#aiEnhancedAudio').pause());
     $('#aiEnhancedAudio').addEventListener('play', () => $('#aiOriginalAudio').pause());
 
