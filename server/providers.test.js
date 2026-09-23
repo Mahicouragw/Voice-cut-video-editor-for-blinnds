@@ -23,10 +23,10 @@ test('provider authentication and quota errors are sanitized and never auto-retr
  }
 }));
 test('missing provider key fails locally before network',()=>withFile(async file=>{let calls=0;const p=createProviders({fetchImpl:async()=>calls++});await assert.rejects(p.transcribe(file,'',new AbortController().signal),e=>e.code==='KEY_NOT_CONFIGURED');assert.equal(calls,0);}));
-test('Groq contract uses OpenAI-compatible endpoint with whisper-large-v3',()=>withFile(async file=>{
+test('Groq contract uses OpenAI-compatible endpoint with whisper-large-v3-turbo',()=>withFile(async file=>{
  const p=createProviders({groqKey:'PRIVATE-GROQ',fetchImpl:async(url,request)=>{
   assert.equal(url,'https://api.groq.com/openai/v1/audio/transcriptions');assert.equal(request.headers.Authorization,'Bearer PRIVATE-GROQ');
-  assert.equal(request.body.get('model'),'whisper-large-v3');assert.equal(request.body.get('response_format'),'verbose_json');assert.deepEqual(request.body.getAll('timestamp_granularities[]'),['word','segment']);
+  assert.equal(request.body.get('model'),'whisper-large-v3-turbo');assert.equal(request.body.get('response_format'),'verbose_json');assert.deepEqual(request.body.getAll('timestamp_granularities[]'),['word','segment']);
   return Response.json({words:[{word:'hi',start:0,end:0.5}],language:'english'});
  }});
  assert.equal((await p.transcribe(file,'',new AbortController().signal,'groq')).language,'english');
@@ -45,7 +45,7 @@ test('AssemblyAI uploads audio, polls once, and converts millisecond words to se
  let stage=0;const p=createProviders({assemblyKey:'PRIVATE-ASSEMBLY',fetchImpl:async(url,request)=>{
   stage++;const target=String(url);
   if(target.endsWith('/v2/upload')){assert.equal(request.headers.Authorization,'PRIVATE-ASSEMBLY');assert.ok(request.body instanceof Buffer||request.body instanceof Uint8Array);return Response.json({upload_url:'https://assembly.ai/audio'});}
-  if(target.endsWith('/v2/transcript')&&request.method==='POST'){assert.equal(JSON.parse(request.body).speech_model,'universal');return Response.json({id:'job1'});}
+  if(target.endsWith('/v2/transcript')&&request.method==='POST'){assert.equal('speech_model' in JSON.parse(request.body),false);return Response.json({id:'job1'});}
   assert.equal(target,'https://api.assemblyai.com/v2/transcript/job1');
   if(stage===3)return Response.json({status:'processing'});
   return Response.json({status:'completed',language_code:'en',words:[{text:'Hello',start:100,end:900,confidence:0.99}]});

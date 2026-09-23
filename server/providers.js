@@ -19,7 +19,7 @@ async function readJSON(response,limit,signal,name) {
 }
 async function requireSuccess(response,name) {
   if(response.ok) return;
-  await response.body?.cancel().catch(()=>{});
+  try{const snippet=(await readBounded(response,2048,null)).toString().slice(0,400);console.error(`[VoiceCut] ${name} error HTTP ${response.status}: ${snippet}`);}catch{await response.body?.cancel().catch(()=>{});}
   // Do not return arbitrary provider error bodies: they may contain sensitive details.
   if([401,403].includes(response.status)) throw new ServiceError(502,'PROVIDER_AUTH',`${name} rejected the server API key or its permissions. Update it in your host Environment settings.`);
   if(response.status===429) throw new ServiceError(503,'PROVIDER_QUOTA',`${name} quota or rate limit reached. Check API billing/credits, then retry manually.`);
@@ -49,7 +49,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,fe
       if(provider==='openai'||provider==='groq') {
         // Groq exposes an OpenAI-compatible transcription endpoint, including verbose_json timestamps.
         const form=new FormData();form.append('file',new Blob([data],{type:'audio/mpeg'}),'speech.mp3');
-        form.append('model',provider==='groq'?'whisper-large-v3':'whisper-1');form.append('response_format','verbose_json');
+        form.append('model',provider==='groq'?'whisper-large-v3-turbo':'whisper-1');form.append('response_format','verbose_json');
         form.append('timestamp_granularities[]','word');form.append('timestamp_granularities[]','segment');
         if(language) form.append('language',language);
         const url=provider==='groq'?'https://api.groq.com/openai/v1/audio/transcriptions':'https://api.openai.com/v1/audio/transcriptions';
@@ -73,15 +73,19 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,fe
       await requireSuccess(upload,'AssemblyAI');
       const audio_url=(await readJSON(upload,64*1024,signal,'AssemblyAI')).upload_url;
       if(!audio_url) throw new ServiceError(502,'BAD_TRANSCRIPT','AssemblyAI did not accept the audio upload.');
-      const created=await fetchImpl('https://api.assemblyai.com/v2/transcript',{method:'POST',headers:{Authorization:key,'Content-Type':'application/json'},body:JSON.stringify({audio_url,speech_model:'universal',...(language?{language_code:language}:{})}),signal,redirect:'error'});
+      const created=await fetchImpl('https://api.assemblyai.com/v2/transcript',{method:'POST',headers:{Authorization:key,'Content-Type':'application/json'},body:JSON.stringify({audio_url,...(language?{language_code:language}:{})}),signal,redirect:'error'});
       await requireSuccess(created,'AssemblyAI');
       const id=(await readJSON(created,64*1024,signal,'AssemblyAI')).id;
       if(!id) throw new ServiceError(502,'BAD_TRANSCRIPT','AssemblyAI did not start transcription.');
-      for(let poll=0;poll<240;poll++) {
+      for(let poll=0,pollErrors=0;poll<240;poll++) {
         signal.throwIfAborted();await sleep(3000);signal.throwIfAborted();
-        const status=await fetchImpl('https://api.assemblyai.com/v2/transcript/'+id,{headers:{Authorization:key},signal,redirect:'error'});
-        await requireSuccess(status,'AssemblyAI');
-        const job=await readJSON(status,8*1024*1024,signal,'AssemblyAI');
+        let job;
+        try{
+          const status=await fetchImpl('https://api.assemblyai.com/v2/transcript/'+id,{headers:{Authorization:key},signal,redirect:'error'});
+          await requireSuccess(status,'AssemblyAI');
+          job=await readJSON(status,8*1024*1024,signal,'AssemblyAI');
+        }catch(e){signal.throwIfAborted();if(++pollErrors>10)throw e;continue;}
+        pollErrors=0;
         if(job.status==='completed') return {language:String(job.language_code||language||''),words:(job.words||[]).map(w=>({word:String(w.text??''),start:Number(w.start)/1000,end:Number(w.end)/1000}))};
         if(job.status==='error') throw new ServiceError(502,'PROVIDER_REJECTED','AssemblyAI could not transcribe this audio. Try a clearer recording.');
       }

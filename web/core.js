@@ -34,7 +34,23 @@
     w = Math.max(2, Math.round(w)); h = Math.max(2, Math.round(h));
     return {x: Math.round((vw-w)/2), y: Math.round((vh-h)/2), w, h};
   }
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect };
+  // Remove [delStart, delEnd] from every segment, splitting segments that
+  // straddle the range. Pure: returns new {start,end} pieces without ids.
+  function deleteRange(project, delStart, delEnd) {
+    const ds = Number(delStart), de = Number(delEnd);
+    if (!Number.isFinite(ds) || !Number.isFinite(de) || ds < 0 || de - ds < 0.05 || de > project.duration + 0.01)
+      throw new Error('Type a valid range inside the video, at least 0.05 seconds long.');
+    const kept = ranges(project);
+    if (kept.every(r => r.start >= ds - 0.001 && r.end <= de + 0.001))
+      throw new Error('That range covers the whole video. Delete a smaller range instead.');
+    const out = [];
+    for (const s of project.segments) {
+      if (s.start < ds) out.push({start: s.start, end: Math.min(s.end, ds)});
+      if (s.end > de) out.push({start: Math.max(s.start, de), end: s.end});
+    }
+    return out.filter(s => s.end - s.start >= 0.01);
+  }
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

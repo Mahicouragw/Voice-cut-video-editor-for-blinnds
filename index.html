@@ -294,6 +294,13 @@
         <button id="btnTrimEnd" aria-label="Trim end, button">Trim End</button>
         <button id="btnSplitVideo" aria-label="Split at current position, button">Split at Current Position</button>
         <button id="btnDeleteSection" aria-label="Delete selected section, button">Delete Selected Section</button>
+        <div class="flex gap-8 wrap items-center" style="grid-column:1/-1;">
+          <label for="delRangeStart">Delete from</label>
+          <input id="delRangeStart" type="text" value="00:00" aria-label="Delete range start time, text input" style="width:90px;">
+          <label for="delRangeEnd">to</label>
+          <input id="delRangeEnd" type="text" value="00:00" aria-label="Delete range end time, text input" style="width:90px;">
+          <button id="btnDeleteRange" class="danger" aria-label="Delete typed time range, button">Delete This Range</button>
+        </div>
         <button id="btnKeepSection" aria-label="Keep selected section, button">Keep Selected Section</button>
         <button id="btnDuplicateSegment" aria-label="Duplicate segment, button">Duplicate Segment</button>
         <button id="btnCrop" aria-label="Crop settings, button">Crop…</button>
@@ -391,6 +398,7 @@
           <option value="medium" selected>Medium</option>
           <option value="strong">Strong</option>
           <option value="voicefocus">Voice Focus</option>
+          <option value="ultra">Ultra \u2014 strongest</option>
         </select>
       </div>
     </div>
@@ -513,6 +521,7 @@
             <option value="medium" selected>Medium</option>
             <option value="strong">Strong</option>
             <option value="voicefocus">Voice Focus</option>
+            <option value="ultra">Ultra \u2014 strongest</option>
           </select>
         </div>
         <div>
@@ -635,6 +644,7 @@
               <option value="medium">Medium</option>
               <option value="strong">Strong</option>
               <option value="voicefocus">Voice Focus</option>
+              <option value="ultra">Ultra \u2014 strongest</option>
             </select>
           </div>
           <div>
@@ -770,6 +780,13 @@
       <div id="recordCountdown" class="countdown hidden" role="status" aria-live="assertive">Recording</div>
       <div id="recordTimer" class="mt-16" role="timer" aria-live="off" style="font-family:monospace; font-size:20px; text-align:center;">00:00</div>
       <p style="color:var(--text2); text-align:center;">Microphone will capture your voice. Video playback pauses to prevent echo. Recording starts after microphone permission is granted.</p>
+      <div id="recordReview" class="hidden mt-16" style="text-align:center;">
+        <audio id="recordPreview" controls style="width:100%;" aria-label="Recorded voice preview"></audio>
+        <div class="flex gap-8 wrap" style="justify-content:center; margin-top:8px;">
+          <button id="btnApplyRecord" class="primary" aria-label="Apply recording as voice-over, button">Play Voice, then Apply</button>
+          <button id="btnDiscardRecord" aria-label="Discard recording, button">Discard</button>
+        </div>
+      </div>
     </div>
     <div class="dialog-footer">
       <button id="btnStartRecording" class="primary" aria-label="Start recording, button">Start Recording</button>
