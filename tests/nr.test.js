@@ -60,3 +60,23 @@ test('NR-1 rejects empty audio and falls back to medium for unknown levels', asy
   const out = await NR.spectralDenoise(buf, 'nope', () => {}, factory);
   assert.equal(out.length, sr);
 });
+
+test('NR-1 ultra is stronger than voice focus and keeps a loud tone usable', async () => {
+  const sr = 16000, len = sr * 4;
+  const sig = brown(len, mulberry32(11), 1);
+  async function supp(level) {
+    const buf = new MemBuffer(1, len, sr);
+    buf._d[0].set(sig);
+    const out = await NR.spectralDenoise(buf, level, () => {}, factory);
+    return 10 * Math.log10(energy(sig) / Math.max(energy(out.getChannelData(0)), 1e-12));
+  }
+  const vf = await supp('voicefocus'), ul = await supp('ultra');
+  assert.ok(ul >= 26, `expected ultra >=26 dB suppression, got ${ul.toFixed(1)} dB`);
+  assert.ok(ul > vf + 3, `ultra (${ul.toFixed(1)} dB) must beat voice focus (${vf.toFixed(1)} dB) by 3+ dB`);
+  const buf2 = new MemBuffer(1, len, sr);
+  const d = buf2._d[0], nz = brown(len, mulberry32(13), 0.15);
+  for (let i = 0; i < len; i++) d[i] = ((i > sr && i < sr * 3) ? 0.5 * Math.sin(2 * Math.PI * 440 * i / sr) : 0) + nz[i];
+  const out2 = await NR.spectralDenoise(buf2, 'ultra', () => {}, factory);
+  const loss = 10 * Math.log10(energy(d) / Math.max(energy(out2.getChannelData(0)), 1e-12));
+  assert.ok(loss < 12, `ultra tone should stay usable, lost ${loss.toFixed(1)} dB`);
+});

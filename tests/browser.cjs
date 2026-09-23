@@ -69,10 +69,15 @@ const path = require('node:path');
   await page.waitForFunction(()=>!document.querySelector('#btnStopRecordingDialog').disabled);
   await page.waitForTimeout(1200);
   await page.locator('#btnStopRecordingDialog').click();
+  await page.locator('#recordReview:not(.hidden)').waitFor();
+  assert.match(await page.locator('#recordPreview').getAttribute('src'),/^blob:/);
+  await page.locator('#btnApplyRecord').click();
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('Voiceover_'));
   // Voice Focus noise-reduction level applies live without errors.
   await page.locator('#globalNoiseReduction').selectOption('voicefocus');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Noise reduction set to voicefocus'));
+  await page.locator('#globalNoiseReduction').selectOption('ultra');
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Noise reduction set to ultra'));
   await page.locator('#globalNoiseReduction').selectOption('medium');
   // Real on-device cleanup (no backend configured), replacing original track.
   await page.locator('#btnAIEnhanceOriginal').click();
@@ -199,6 +204,8 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('<img'));
   assert.equal(await page.evaluate(()=>window.INJECTED),undefined);
   // Deletion routes to the library and must not reappear due to queued auto-save.
+  await page.locator('#delRangeStart').fill('00:01');await page.locator('#delRangeEnd').fill('00:02');await page.locator('#btnDeleteRange').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Deleted'));
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   await page.locator('#libraryScreen:not(.hidden)').waitFor();
@@ -207,6 +214,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, delete+undo, microphone recording, Voice Focus NR, on-device cleanup, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device cleanup, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

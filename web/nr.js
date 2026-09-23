@@ -14,7 +14,8 @@ var LEVELS={
   light:{frame:2048,thresh:1.3,floor:0.30,attack:0.70,release:0.10,smooth:1,hp:60},
   medium:{frame:2048,thresh:1.8,floor:0.15,attack:0.60,release:0.07,smooth:2,hp:80},
   strong:{frame:2048,thresh:2.5,floor:0.06,attack:0.50,release:0.05,smooth:3,hp:110},
-  voicefocus:{frame:2048,thresh:4.5,floor:0.01,attack:0.25,release:0.15,smooth:2,hp:140}
+  voicefocus:{frame:2048,thresh:4.5,floor:0.01,attack:0.25,release:0.15,smooth:2,hp:140},
+  ultra:{frame:2048,thresh:6.0,floor:0.002,attack:0.10,release:0.35,smooth:3,hp:160}
 };
 function makeFFT(n){
   var levels=Math.round(Math.log2(n));

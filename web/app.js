@@ -206,9 +206,20 @@
     captionRequestBusy=true;$('#btnGenerateCaptions').disabled=true;$('#btnCancelCaptions').disabled=false;
     $('#captionStatus').textContent='Waiting for upload confirmation. Your existing captions are unchanged.';
     try{
+      $('#captionStatus').textContent='Preparing small audio for upload. Your existing captions are unchanged.';
+      let uploadFile=file, uploadTrimmed=false;
+      try{
+        if(clipSnapshot){uploadFile=await captionAudioFile(file,clipSnapshot.trimStart||0,clipSnapshot.duration-(clipSnapshot.trimEnd||0));uploadTrimmed=true;}
+        else uploadFile=await captionAudioFile(file);
+      }catch(prepErr){console.warn('Caption audio prep fell back to original file:',prepErr);uploadFile=file;}
       let result=null;
       for(let captionAttempt=1;captionAttempt<=2;captionAttempt++){
-        try{result=await requestServer('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),file,{cloud:true});break;}
+        try{
+          result=await requestServerUpload('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),uploadFile,{cloud:true,onProgress:(pct)=>{
+            $('#captionStatus').textContent=pct>=100?'Upload complete. Transcribing. This can take a minute on a slow connection.':'Uploading caption audio: '+pct+'%. You can cancel; do not submit twice.';
+          }});
+          break;
+        }
         catch(e){
           if(captionAttempt===1&&e.message==='SERVICE_UNAVAILABLE'){$('#captionStatus').textContent='Connection stumbled. Retrying once…';await new Promise(r=>setTimeout(r,1500));}
           else throw e;
@@ -217,8 +228,13 @@
       if(epoch!==mediaEpoch||id!==project.id)throw new Error('Project changed during processing. Result was not applied.');
       let cues=VoiceCutCaptions.validate(result.cues,result.duration);
       if(clipSnapshot){
-        const start=clipSnapshot.trimStart||0,end=clipSnapshot.duration-(clipSnapshot.trimEnd||0);
-        cues=cues.map(c=>({text:c.text,start:Math.max(start,c.start)-start+clipSnapshot.startTime,end:Math.min(end,c.end)-start+clipSnapshot.startTime})).filter(c=>c.end>c.start);
+        if(uploadTrimmed){
+          const clipLen=(clipSnapshot.duration-(clipSnapshot.trimEnd||0))-(clipSnapshot.trimStart||0);
+          cues=cues.map(c=>({text:c.text,start:c.start+clipSnapshot.startTime,end:Math.min(c.end,clipLen)+clipSnapshot.startTime})).filter(c=>c.end>c.start);
+        }else{
+          const start=clipSnapshot.trimStart||0,end=clipSnapshot.duration-(clipSnapshot.trimEnd||0);
+          cues=cues.map(c=>({text:c.text,start:Math.max(start,c.start)-start+clipSnapshot.startTime,end:Math.min(end,c.end)-start+clipSnapshot.startTime})).filter(c=>c.end>c.start);
+        }
       }
       cues=cues.map(c=>({...c,start:Math.max(0,c.start),end:Math.min(project.duration,c.end)})).filter(c=>c.end>c.start);
       project.captions=VoiceCutCaptions.validate(cues,project.duration);
@@ -615,6 +631,7 @@
         <option value="medium" ${t.value==='medium'?'selected':''}>Medium</option>
         <option value="strong" ${t.value==='strong'?'selected':''}>Strong</option>
         <option value="voicefocus" ${t.value==='voicefocus'?'selected':''}>Voice Focus</option>
+        <option value="ultra" ${t.value==='ultra'?'selected':''}>Ultra \u2014 strongest</option>
       </select></label>`;
       container.appendChild(div);
     });
@@ -1029,6 +1046,8 @@
     $('#recordPosition').value = formatTime(video.currentTime);
   }
   let recordingStream = null;
+  let pendingRecording = null;
+  let recordPreviewUrl = null;
   let recordingRequest = 0;
   async function startRecording() {
     if (isRecording || recordingStream) return;
@@ -1036,6 +1055,7 @@
     const position = parseTime($('#recordPosition').value);
     if (!Number.isFinite(position) || position < 0) { announce('Enter a valid recording position.', true); return; }
     $('#btnStartRecording').disabled = true;
+    pendingRecording=null; $('#recordReview').classList.add('hidden'); $('#recordPreview').removeAttribute('src');
     try {
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Recording needs HTTPS and a browser with microphone support.');
       const stream = await navigator.mediaDevices.getUserMedia({audio:true});
@@ -1061,16 +1081,23 @@
         video.pause();
         if (chunks.length) {
           const blob = new Blob(chunks,{type:mediaRecorder.mimeType});
-          const extension = blob.type.includes('mp4') ? 'm4a' : 'webm';
-          addAudioFile(new File([blob],`Voiceover_${Date.now()}.${extension}`,{type:blob.type}),'voiceover',position);
+          pendingRecording = {blob, position};
+          if (recordPreviewUrl) URL.revokeObjectURL(recordPreviewUrl);
+          recordPreviewUrl = URL.createObjectURL(blob);
+          $('#recordPreview').src = recordPreviewUrl;
+          $('#recordReview').classList.remove('hidden');
+          $('#btnStopRecordingDialog').disabled = true;
+          $('#recordCountdown').textContent = 'Recording finished. Press Play Voice to preview, then Apply or Discard.';
+          announce('Recording stopped. Preview your voice, then Apply or Discard.');
+        } else {
+          $('#recordDialog').close();
+          announce('Recording stopped. No audio was captured.');
         }
-        $('#recordDialog').close();
-        announce('Recording stopped. Adding voice-over.');
       };
       mediaRecorder.onerror = () => { stopRecording(); announce('Recording failed.',true); };
       mediaRecorder.start(250); isRecording=true; recordStartTime=Date.now();
       $('#btnStopVO').disabled=false; $('#btnStopRecordingDialog').disabled=false; $('#btnRecordVO').disabled=true;
-      $('#recordCountdown').textContent='Recording'; $('#recordCountdown').classList.remove('hidden');
+      $('#recordCountdown').textContent='Recording your voice\u2026'; $('#recordCountdown').classList.remove('hidden');
       // No video sound through speakers during voice-over recording.
       video.pause(); for (const node of audioNodes.values()) node.element.pause();
       announce('Recording started. Speak now.');
@@ -1079,6 +1106,25 @@
       recordingStream?.getTracks().forEach(t=>t.stop()); recordingStream=null;
       $('#btnStartRecording').disabled=false; announce('Cannot record: '+e.message,true);
     }
+  }
+  function closeRecordDialog() { if ($('#recordDialog').open) $('#recordDialog').close(); }
+  function clearRecordPreview() {
+    pendingRecording = null;
+    $('#recordReview').classList.add('hidden');
+    $('#recordPreview').pause(); $('#recordPreview').removeAttribute('src');
+    if (recordPreviewUrl) { URL.revokeObjectURL(recordPreviewUrl); recordPreviewUrl = null; }
+  }
+  function applyPendingRecording() {
+    if (!pendingRecording) { closeRecordDialog(); return; }
+    const {blob, position} = pendingRecording;
+    const extension = blob.type.includes('mp4') ? 'm4a' : 'webm';
+    addAudioFile(new File([blob],`Voiceover_${Date.now()}.${extension}`,{type:blob.type}),'voiceover',position);
+    clearRecordPreview(); closeRecordDialog();
+    announce('Voice-over applied.');
+  }
+  function discardPendingRecording(silent) {
+    clearRecordPreview(); closeRecordDialog();
+    if (!silent) announce('Recording discarded.');
   }
   function stopRecording() {
     recordingRequest++;
@@ -1101,7 +1147,8 @@
     light:{hp:80,lp:12000,notch:0,presence:0,threshold:-30,ratio:6},
     medium:{hp:100,lp:8000,notch:0,presence:3,threshold:-40,ratio:6},
     strong:{hp:120,lp:6000,notch:50,presence:4,threshold:-40,ratio:12},
-    voicefocus:{hp:120,lp:8000,notch:50,presence:6,threshold:-45,ratio:12}
+    voicefocus:{hp:120,lp:8000,notch:50,presence:6,threshold:-45,ratio:12},
+    ultra:{hp:150,lp:7000,notch:50,presence:8,threshold:-40,ratio:20}
   };
   function buildNRChain(level){
     const p=NR_CHAINS[level]||NR_CHAINS.medium;
@@ -1620,6 +1667,55 @@
     }
     if(p.captionLanguage!==undefined)$('#captionLanguage').value=p.captionLanguage;
   }
+  // Shrink any source to 16 kHz mono WAV so caption uploads stay tiny on
+  // slow networks. Optional [start,end] slice (seconds) for trimmed clips.
+  async function captionAudioFile(file, start=0, end=Infinity) {
+    const decoded = await decodeAudioFile(file);
+    const sr = decoded.sampleRate;
+    const s0 = Math.max(0, Math.floor(start*sr));
+    const s1 = Math.min(decoded.length, Math.ceil(Math.min(end, decoded.duration)*sr));
+    if (s1-s0 < sr*0.2) throw new Error('Caption audio too short.');
+    const mono = new AudioBuffer({numberOfChannels:1, length:s1-s0, sampleRate:sr});
+    const out = mono.getChannelData(0), chs = [];
+    for (let c=0;c<decoded.numberOfChannels;c++) chs.push(decoded.getChannelData(c));
+    for (let i=0;i<s1-s0;i++){ let v=0; for (const d of chs) v+=d[s0+i]; out[i]=v/chs.length; }
+    const targetSr=16000;
+    const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil((s1-s0)/sr*targetSr)), targetSr);
+    const srcNode = offline.createBufferSource(); srcNode.buffer=mono; srcNode.connect(offline.destination); srcNode.start(0);
+    const rendered = await offline.startRendering();
+    return new File([audioBufferToWavBlob(rendered)], 'voicecut-caption-audio.wav', {type:'audio/wav'});
+  }
+  // Same guards as requestServer, but XMLHttpRequest so uploads report real
+  // progress and stay cancellable through currentRequest.
+  async function requestServerUpload(endpoint, file, options={}) {
+    const backend=backendConfig();
+    if(!backend)throw new Error('SERVICE_UNAVAILABLE');
+    const {cloud=false,consent='Upload this file to the secure VoiceCut service for AI processing? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.',onProgress=null}=options;
+    if(currentRequest)throw new Error('Another server request is running. Wait or cancel it first.');
+    if(file?.size>100*1024*1024)throw new Error('Use a file smaller than 100 MB.');
+    if(file&&!confirm(consent))throw new Error('Upload cancelled.');
+    return await new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();
+      currentRequest={abort:()=>xhr.abort()};
+      let settled=false;
+      const finish=(fn,val)=>{ if(settled)return; settled=true; currentRequest=null; fn(val); };
+      xhr.open('POST', String(new URL(endpoint,backend.url)));
+      if(backend.key)xhr.setRequestHeader('Authorization','Bearer '+backend.key);
+      if(cloud)xhr.setRequestHeader('X-Upload-Consent','yes');
+      xhr.timeout=14*60*1000;
+      xhr.upload.onprogress=(e)=>{ if(e.lengthComputable&&typeof onProgress==='function')onProgress(Math.round(e.loaded/e.total*100)); };
+      xhr.onload=()=>{
+        if(xhr.status<200||xhr.status>=300){finish(reject,new Error('SERVICE_UNAVAILABLE'));return;}
+        const ct=xhr.getResponseHeader('content-type')||'';
+        if(!ct.includes('application/json')){finish(reject,new Error('SERVICE_UNAVAILABLE'));return;}
+        try{finish(resolve,JSON.parse(xhr.responseText));}catch(e){finish(reject,new Error('SERVICE_UNAVAILABLE'));}
+      };
+      xhr.onerror=()=>{console.warn('VoiceCut service upload failed:',endpoint);finish(reject,new Error('SERVICE_UNAVAILABLE'));};
+      xhr.onabort=()=>finish(reject,new Error('Request cancelled or timed out. Your original media is unchanged.'));
+      xhr.ontimeout=()=>finish(reject,new Error('Request cancelled or timed out. Your original media is unchanged.'));
+      const body=new FormData(); body.append('file',file); xhr.send(body);
+    });
+  }
   async function requestServer(endpoint,file=null,options={}) {
     const backend=backendConfig();
     if(!backend)throw new Error('SERVICE_UNAVAILABLE');
@@ -1648,7 +1744,7 @@
     onProgress(5,'Contacting the VoiceCut service.');
     let capabilities=null;
     try{capabilities=await getCapabilities();}catch(e){capabilities=null;}
-    const nrLevel=['light','medium','strong','voicefocus'].includes(level)?level:'medium';
+    const nrLevel=['light','medium','strong','voicefocus','ultra'].includes(level)?level:'medium';
     const useService=async(endpoint,cloud)=>{
       const blob=await requestServer(endpoint,file,{cloud});
       if(!(blob instanceof Blob))throw new Error('SERVICE_UNAVAILABLE');
@@ -1726,11 +1822,14 @@
     $('#btnConfirmApply').addEventListener('click', ()=>{ $('#confirmDialog').close(); if(confirmCallback) confirmCallback(); confirmCallback=null; });
 
     $('#recordDialog').addEventListener('click', (e)=>{ if(e.target===e.currentTarget) e.currentTarget.close(); });
-    $('#btnCloseRecord').addEventListener('click', ()=>{ stopRecording(); $('#recordDialog').close(); });
+    $('#btnCloseRecord').addEventListener('click', ()=>{ stopRecording(); discardPendingRecording(true); });
     $('#recordDialog').addEventListener('close', stopRecording);
     $('#recordDialog').addEventListener('cancel', stopRecording);
     $('#btnStartRecording').addEventListener('click', startRecording);
     $('#btnStopRecordingDialog').addEventListener('click', stopRecording);
+    $('#btnApplyRecord').addEventListener('click', applyPendingRecording);
+    $('#btnDiscardRecord').addEventListener('click', ()=>discardPendingRecording(false));
+    $('#recordDialog').addEventListener('cancel', ()=>discardPendingRecording(true));
     $('#btnRecordVO').addEventListener('click', openRecordDialog);
     $('#btnStopVO').addEventListener('click', stopRecording);
 
@@ -1777,6 +1876,15 @@
     $('#btnDeleteSection').addEventListener('click', ()=>{
       if (!selectedClipId) { announce('No section selected. Select a video segment first.'); return; }
       deleteClip(selectedClipId);
+    });
+    $('#btnDeleteRange').addEventListener('click', ()=>{
+      try{
+        const ds=parseTime($('#delRangeStart').value), de=parseTime($('#delRangeEnd').value);
+        const pieces=VoiceCutCore.deleteRange(project,ds,de);
+        project.segments=pieces.map(s=>({...s,id:uid(),label:'Segment'}));
+        selectedClipId=null; pushHistory(); renderAll();
+        announce(`Deleted ${formatTimeVerbose(ds)} to ${formatTimeVerbose(de)}. Export will skip it.`);
+      }catch(e){ announce(e.message,true); }
     });
     $('#btnKeepSection').addEventListener('click', ()=>{
       if (!selectedClipId) { announce('No section selected.'); return; }
@@ -1844,7 +1952,7 @@
     $('#btnOrigFadeOut').addEventListener('click', ()=>{ project.originalAudio.fadeOut = project.originalAudio.fadeOut?0:2; pushHistory(); renderAll(); announce(`Original audio fade out ${project.originalAudio.fadeOut} seconds.`); });
     $('#btnOrigAIEnhance').addEventListener('click', ()=>{
       const level = $('#origNoiseReduction').value;
-      if (level==='off') { announce('Set noise reduction to Light, Medium, or Strong first.', true); return; }
+      if (level==='off') { announce('Set noise reduction to Light, Medium, Strong, Voice Focus or Ultra first.', true); return; }
       enhanceOriginalVideoAudioWithAI(level);
     });
 
@@ -1929,7 +2037,7 @@
     // audio cleanup ENHANCEMENT BUTTONS
     $('#btnAIEnhanceOriginal').addEventListener('click', ()=>{
       const level = $('#globalNoiseReduction').value;
-      if (level==='off') { announce('Noise reduction is off. Choose Light, Medium, Strong or Voice Focus first.', true); return; }
+      if (level==='off') { announce('Noise reduction is off. Choose Light, Medium, Strong, Voice Focus or Ultra first.', true); return; }
       enhanceOriginalVideoAudioWithAI(level);
     });
     $('#btnAIEnhanceSelected').addEventListener('click', ()=>{

@@ -11,9 +11,9 @@ const {createProviders,ServiceError}=require('./providers');
 const Captions=require('../web/captions');
 const VERSION='2.0.0';
 const CAPTION_ORDER=['groq','deepgram','assemblyai','openai']; // Automatic preference: free tiers first.
-const FILTER_LEVELS={light:'highpass=f=80,afftdn=nf=-20',medium:'highpass=f=100,lowpass=f=12000,afftdn=nf=-25',strong:'highpass=f=120,lowpass=f=8000,afftdn=nf=-35',voicefocus:'highpass=f=120,lowpass=f=8000,afftdn=nf=-40,equalizer=f=3000:t=q:w=1:g=5,acompressor=threshold=-20dB:ratio=4:attack=10:release=200'};
-const DF_LEVEL_ARGS={light:['--atten-lim-db','12'],medium:['--atten-lim-db','30'],strong:['--atten-lim-db','60','--pf'],voicefocus:['--atten-lim-db','100','--pf','--pf-beta','0.05']};
-const CAPTION_LABELS={openai:'OpenAI whisper-1',groq:'Groq whisper-large-v3',deepgram:'Deepgram Nova-3',assemblyai:'AssemblyAI Universal'};
+const FILTER_LEVELS={light:'highpass=f=80,afftdn=nf=-20',medium:'highpass=f=100,lowpass=f=12000,afftdn=nf=-25',strong:'highpass=f=120,lowpass=f=8000,afftdn=nf=-35',voicefocus:'highpass=f=120,lowpass=f=8000,afftdn=nf=-40,equalizer=f=3000:t=q:w=1:g=5,acompressor=threshold=-20dB:ratio=4:attack=10:release=200',ultra:'highpass=f=140,lowpass=f=7000,afftdn=nf=-45,equalizer=f=3000:t=q:w=1:g=6,acompressor=threshold=-24dB:ratio=6:attack=8:release=150'};
+const DF_LEVEL_ARGS={light:['--atten-lim-db','12'],medium:['--atten-lim-db','30'],strong:['--atten-lim-db','60','--pf'],voicefocus:['--atten-lim-db','100','--pf','--pf-beta','0.05'],ultra:['--atten-lim-db','100','--pf','--pf-beta','0.05']}; // ultra uses the server maximum; extra strength is the on-device single-pass maximum
+const CAPTION_LABELS={openai:'OpenAI whisper-1',groq:'Groq whisper-large-v3-turbo',deepgram:'Deepgram Nova-3',assemblyai:'AssemblyAI Universal'};
 const CAPTION_ENV={openai:'OPENAI_API_KEY',groq:'GROQ_API_KEY',deepgram:'DEEPGRAM_API_KEY',assemblyai:'ASSEMBLYAI_API_KEY'};
 function deepFilterAvailable() {
   try{return spawnSync(process.env.DEEPFILTER_PATH||'deep_filter',['--version'],{timeout:10000,stdio:'ignore'}).status===0;}
