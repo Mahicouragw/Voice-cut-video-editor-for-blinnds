@@ -56,6 +56,24 @@ const path = require('node:path');
   await page.locator('#settingsScreen:not(.hidden)').waitFor();
   await page.locator('#settingCaptionLanguage').selectOption('en');
   assert.equal(await page.locator('#captionLanguage').inputValue(),'en');
+  // Completion notifications: permission-gated pref, hidden-tab-only, app bridge contract.
+  await page.context().grantPermissions(['notifications']);
+  await page.locator('#settingNotifications').check();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Completion notifications on'));
+  {
+    const got=await page.evaluate(async()=>{
+      const calls=[];
+      window.flutter_inappwebview={callHandler:async(name,title,body)=>{calls.push([name,title,body]);return true;}};
+      const before=window.VoiceCutNotify.notifyComplete('T1','B1');
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+      const after=window.VoiceCutNotify.notifyComplete('T2','B2');
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});
+      delete window.flutter_inappwebview;
+      return {before,after,calls};
+    });
+    assert.equal(got.before,false);assert.equal(got.after,true);
+    assert.deepEqual(got.calls,[['showNotification','T2','B2']]);
+  }
   await page.locator('a[data-route="home"]').click();
   await page.waitForFunction(()=>document.querySelectorAll('#homeRecentList .library-card').length===1);
   await page.locator('#homeOpenProject').click();
@@ -133,6 +151,7 @@ const path = require('node:path');
     if(request.url().includes('/capabilities')){await route.fulfill({headers,contentType:'application/json',body:JSON.stringify(capabilities)});return;}
     if(request.url().includes('/api/isolate')){isolateCalls++;assert.equal(request.headers()['x-upload-consent'],'yes');await route.fulfill({headers,contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
     if(request.url().includes('/api/denoise-local')){denoiseCalls++;denoiseConsent=request.headers()['x-upload-consent'];await route.fulfill({headers,contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
+    if(request.url().includes('/api/silence')){if(request.url().includes('detect=1')){await route.fulfill({headers,contentType:'application/json',body:JSON.stringify({gaps:[[1,2]],gapCount:1,removedSeconds:1,duration:3})});return;}await route.fulfill({headers:{'access-control-allow-origin':'*','access-control-expose-headers':'x-silence-removed,x-silence-seconds','x-silence-removed':'1','x-silence-seconds':'1'},contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
     assert.ok(request.url().includes('/api/captions'));
     captionCalls.push({url:request.url(),consent:request.headers()['x-upload-consent']});
     assert.equal(request.headers()['x-upload-consent'],'yes');
@@ -149,6 +168,18 @@ const path = require('node:path');
   assert.equal(captionCalls[0].consent,'yes');
   assert.equal(captionCalls[0].url.includes('provider='),false);
   assert.equal(await page.locator('#captionText').inputValue(),'Hello from VoiceCut.');
+  // Caption review: counter, prev/next, read-all, wrong-language warning.
+  assert.equal(await text('#captionCounter'),'Caption 1 of 1');
+  assert.equal(await page.locator('#btnPrevCaption').isDisabled(),true);
+  assert.equal(await page.locator('#btnNextCaption').isDisabled(),true);
+  await page.locator('#btnReadAllCaptions').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('All 1 captions. Caption 1, 0.2 to 2.7 seconds: Hello from VoiceCut.'));
+  await page.locator('#mainVideo').evaluate(v=>{v.currentTime=2.9;});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>2.8);
+  await page.locator('#btnAddCaption').click();
+  await page.waitForFunction(()=>document.querySelector('#captionCounter').textContent==='Caption 2 of 2');
+  await page.locator('#btnPrevCaption').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Caption 1 of 2'));
   await page.locator('#captionStart').fill('0.25');await page.locator('#captionEnd').fill('2.75');await page.locator('#captionText').fill('Reviewed caption');await page.locator('#btnSaveCaption').click();
   for(const [button,extension,expected] of [['#btnDownloadSRT','srt','00:00:00,250 --> 00:00:02,750'],['#btnDownloadVTT','vtt','WEBVTT']]){
     const event=page.waitForEvent('download');await page.locator(button).click();const d=await event;assert.match(d.suggestedFilename(),new RegExp('\\.'+extension+'$'));
@@ -164,6 +195,12 @@ const path = require('node:path');
   providerFailure=false;await page.locator('#btnRetryCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:60000});
   assert.equal(await page.locator('#captionText').inputValue(),'Hello from VoiceCut.');
+  await page.locator('#captionLanguage').selectOption('hi');
+  await page.locator('#btnGenerateCaptions').click();
+  await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('Warning: you chose Hindi'),{},{timeout:60000});
+  assert.match(await text('#captionStatus'),/First caption: "Hello from VoiceCut\."/);
+  assert.match(await text('#captionStatus'),/covering .* of .* video/);
+  await page.locator('#captionLanguage').selectOption('en');
   // Cloud isolation is auto-selected when on-device neural denoise is unavailable.
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
@@ -185,6 +222,18 @@ const path = require('node:path');
   assert.equal(denoiseCalls,1);assert.equal(denoiseConsent,undefined);
   await page.locator('#btnApplyEnhanced').click();
   assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
+  // Silence: fast gap preview, then full removal with progress bar.
+  await page.locator('#btnDetectSilenceOriginal').click();
+  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Found 1 quiet gap'),{},{timeout:60000});
+  assert.match(await text('#silenceStatus'),/0:01 to 0:02/);
+  {
+    const event=page.waitForEvent('download');
+    await page.locator('#btnSilenceOriginal').click();
+    const d=await event;assert.match(d.suggestedFilename(),/\.wav$/);
+    const file=path.join(dir,'silence-removed.wav');await d.saveAs(file);
+    assert.ok(fs.statSync(file).size>1000);
+  }
+  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap'));
   // Crop, rotate, and freeze-frame controls update the edit summary.
   await page.locator('#cropPreset').selectOption('1:1');
   await page.waitForFunction(()=>document.querySelector('#cropSummary').textContent.includes('1:1'));
@@ -251,6 +300,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

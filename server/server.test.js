@@ -57,3 +57,30 @@ test('silence removal cuts quiet gaps and reports honest stats',async()=>{
   fs.unlinkSync(fixture);
  }finally{await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test('silence detect mode previews gaps and no-gap trim returns instantly',async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'voicecut-test-'));
+ const key='c'.repeat(64);
+ const server=createApp({key,origin:'https://example.org',root}).listen(0,'127.0.0.1');
+ await new Promise(resolve=>server.once('listening',resolve));
+ const url='http://127.0.0.1:'+server.address().port;
+ const fixture=path.join(os.tmpdir(),'voicecut-silence-d-'+process.pid+'.wav');
+ try{
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=1:sample_rate=44100','-f','lavfi','-i','anullsrc=r=44100:cl=mono','-f','lavfi','-i','sine=frequency=880:duration=1:sample_rate=44100','-filter_complex','[0]aformat=sample_rates=44100:channel_layouts=mono[a0];[1]atrim=duration=3,aformat=sample_rates=44100:channel_layouts=mono[a1];[2]aformat=sample_rates=44100:channel_layouts=mono[a2];[a0][a1][a2]concat=n=3:v=0:a=1','-y',fixture]);
+  const data=fs.readFileSync(fixture);
+  const det=new FormData();det.append('file',new Blob([data]),'gaps.wav');
+  const dres=await fetch(url+'/api/silence?seconds=2&detect=1',{method:'POST',headers:{Authorization:'Bearer '+key},body:det});
+  assert.equal(dres.status,200);
+  assert.ok(String(dres.headers.get('content-type')).includes('application/json'));
+  const preview=await dres.json();
+  assert.equal(preview.gapCount,1);
+  assert.ok(Math.abs(preview.removedSeconds-3)<0.3);
+  assert.deepEqual(preview.gaps.map(g=>g.map(t=>Math.round(t))),[[1,4]]);
+  const nogap=new FormData();nogap.append('file',new Blob([data]),'gaps.wav');
+  const nres=await fetch(url+'/api/silence?seconds=10',{method:'POST',headers:{Authorization:'Bearer '+key},body:nogap});
+  assert.equal(nres.status,200);
+  assert.equal(nres.headers.get('x-silence-removed'),'0');
+  assert.equal(Buffer.from(await nres.arrayBuffer()).subarray(0,4).toString(),'RIFF');
+  fs.unlinkSync(fixture);
+ }finally{await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});}
+});

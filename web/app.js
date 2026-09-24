@@ -192,6 +192,9 @@
     const cue=project.captions[captionSelection];
     $('#captionStart').value=cue?cue.start:'';$('#captionEnd').value=cue?cue.end:'';$('#captionText').value=cue?cue.text:'';
     for(const id of ['btnSaveCaption','btnDeleteCaption','btnDownloadSRT','btnDownloadVTT','btnClearCaptions']) $('#'+id).disabled=!cue;
+    $('#captionCounter').textContent=project.captions.length?`Caption ${captionSelection+1} of ${project.captions.length}`:'No captions';
+    $('#btnPrevCaption').disabled=!cue||captionSelection<=0;
+    $('#btnNextCaption').disabled=!cue||captionSelection>=project.captions.length-1;
     updateCaptionPreview();
   }
   function updateCaptionPreview() {
@@ -249,8 +252,22 @@
       project.captionLanguage=result.language;
       project.captionSource=source==='original'?'Original video audio':source==='voiceover'?'Voice-over track':'Audio clip: '+clipSnapshot.name;
       captionSelection=0;pushHistory();renderCaptions();
-      const message=`${cues.length} captions generated. Detected language: ${result.language||'unknown'}. Review text and timing before publishing.`;
+      const cover=cues.length?` covering ${formatTimeVerbose(cues[0].start)} to ${formatTimeVerbose(cues[cues.length-1].end)} of ${formatTimeVerbose(project.duration)} video`:'';
+      let langNote='';
+      const chosen=$('#captionLanguage').value,detected=String(result.language||'').toLowerCase();
+      if(chosen&&detected&&detected!=='unknown'&&detected!=='und'&&chosen.slice(0,2)!==detected.slice(0,2)){
+        const names={en:'English',hi:'Hindi',te:'Telugu',ta:'Tamil',kn:'Kannada',ml:'Malayalam',mr:'Marathi',bn:'Bengali',ur:'Urdu'};
+        langNote=` Warning: you chose ${names[chosen]||chosen} but the transcript was detected as ${names[detected.slice(0,2)]||result.language}. Wrong-language transcripts look like nonsense. Change Spoken language and regenerate.`;
+      }
+      let sparseNote='';
+      const span=cues.length?cues[cues.length-1].end-cues[0].start:0;
+      if(cues.length&&project.duration>20&&span<project.duration*0.5){
+        sparseNote=` Only ${formatTimeVerbose(span)} of ${formatTimeVerbose(project.duration)} has detected speech. The rest is likely music, silence, or unclear audio.`;
+      }
+      const firstCue=cues.length?` First caption: "${cues[0].text.slice(0,120)}".`:'';
+      const message=`${cues.length} captions generated${cover}. Detected language: ${result.language||'unknown'}.${langNote}${sparseNote}${firstCue} Review text and timing before publishing.`;
       $('#captionStatus').textContent=message;announce(message);
+      notifyComplete('Captions ready',`${cues.length} captions generated for your video.`);
     }catch(e){
       console.warn('Caption request failed:',e);
       const cancelled=/cancelled|timed out/i.test(e.message);
@@ -259,6 +276,18 @@
       $('#btnRetryCaptions').classList.toggle('hidden',cancelled);
     }
     finally{captionRequestBusy=false;$('#btnGenerateCaptions').disabled=false;$('#btnCancelCaptions').disabled=true;}
+  }
+  function stepCaption(dir) {
+    if(!project.captions.length){announce('No captions.',true);return;}
+    captionSelection=Math.min(project.captions.length-1,Math.max(0,captionSelection+dir));
+    renderCaptions();
+    const cue=project.captions[captionSelection];
+    announce(`Caption ${captionSelection+1} of ${project.captions.length}, ${cue.start.toFixed(1)} to ${cue.end.toFixed(1)} seconds: ${cue.text}`);
+  }
+  function readAllCaptions() {
+    if(!project.captions.length){announce('No captions to read.',true);return;}
+    const parts=project.captions.map((c,i)=>`Caption ${i+1}, ${c.start.toFixed(1)} to ${c.end.toFixed(1)} seconds: ${c.text}`);
+    announce(`All ${project.captions.length} captions. `+parts.join(' '),false,true);
   }
   async function downloadSubtitles(format) {
     try{
@@ -298,6 +327,9 @@
       }catch(e){announce(e.message,true);}
     });
     $('#btnDeleteCaption').addEventListener('click',()=>{project.captions.splice(captionSelection,1);pushHistory();renderCaptions();announce('Caption deleted. Undo is available.');});
+    $('#btnPrevCaption').addEventListener('click',()=>stepCaption(-1));
+    $('#btnNextCaption').addEventListener('click',()=>stepCaption(1));
+    $('#btnReadAllCaptions').addEventListener('click',readAllCaptions);
     $('#btnClearCaptions').addEventListener('click',()=>showConfirm('Clear every caption? You can undo.',()=>{project.captions=[];pushHistory();renderCaptions();announce('Captions cleared.');}));
     $('#btnDownloadSRT').addEventListener('click',()=>downloadSubtitles('srt'));
     $('#btnDownloadVTT').addEventListener('click',()=>downloadSubtitles('vtt'));
@@ -1282,6 +1314,7 @@
         $('#exportProgressBar').style.width = '100%'; $('#exportProgressBar').setAttribute('aria-valuenow','100');
         $('#exportStatus').textContent = 'Export complete. Preview, then download.';
         announce('Export complete. Preview, then download.', true);
+        notifyComplete('Export complete','Your video export is ready. Preview, then download.');
       };
       await seekTo(ranges[0].start);
       if (exportCancelled) { exportCleanup?.(); return; }
@@ -1498,6 +1531,70 @@
     return result;
   }
 
+  let silenceTicker=null;
+  function showSilenceProgress(pct){
+    const bar=$('#silenceProgress');
+    bar.style.display='block';
+    if(pct===null||pct===undefined){bar.removeAttribute('value');}
+    else{bar.value=Math.max(0,Math.min(100,pct));}
+  }
+  function hideSilenceProgress(){
+    const bar=$('#silenceProgress');
+    bar.style.display='none';bar.value=0;
+    $('#silenceElapsed').textContent='';
+  }
+  function silenceTickStart(label){
+    silenceTickStop();
+    const el=$('#silenceElapsed'),t0=Date.now();
+    el.textContent=label+'. Time elapsed: 0 seconds.';
+    silenceTicker=setInterval(()=>{
+      const s=Math.round((Date.now()-t0)/1000);
+      el.textContent=label+'. Time elapsed: '+formatTimeVerbose(s)+'.';
+    },1000);
+  }
+  function silenceTickStop(){if(silenceTicker){clearInterval(silenceTicker);silenceTicker=null;}}
+  async function detectSilenceClips(){return detectSilenceGaps(true);}
+  async function detectSilenceOriginal(){return detectSilenceGaps(false);}
+  async function detectSilenceGaps(fromClip) {
+    if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.', true); return; }
+    let input,name;
+    if(fromClip){
+      const clip = project.clips.find(c=>c.id===selectedClipId);
+      if (!clip || !(clip.file || clip.url)) { announce('Select an audio clip in the timeline first.', true); return; }
+      input=clip.file||clip.url;name=clip.name;
+    }else{
+      if (!project.videoFile) { announce('Upload a video first.', true); return; }
+      input=project.videoFile;name='Original video audio';
+    }
+    const seconds = $('#silenceSeconds').value;
+    const statusEl = $('#silenceStatus');
+    cleanupBusy = true; aiProcessingCancelled = false;
+    showSilenceProgress(0);
+    statusEl.textContent='Preparing a small audio copy for fast gap detection.';
+    announce('Detecting quiet gaps. Uploading a small audio copy.');
+    try {
+      const file = input instanceof Blob ? input : await (await fetch(input)).blob();
+      let uploadFile=file;
+      try{uploadFile=await shrinkAudioFile(file,0,Infinity,16000);}catch(e){uploadFile=file;}
+      const result = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds) + '&detect=1', uploadFile, {cloud:false, consent:'Upload a small audio copy to your VoiceCut server to preview quiet gaps? Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
+        showSilenceProgress(pct);
+        if(pct<100)statusEl.textContent='Uploading small audio for gap detection: '+pct+'%.';
+      }});
+      if(aiProcessingCancelled)throw new Error('Cancelled');
+      if(!(result&&typeof result==='object'))throw new Error('SERVICE_UNAVAILABLE');
+      const gaps=Array.isArray(result.gaps)?result.gaps:[];
+      const fmtT=(t)=>{const m=Math.floor(t/60),s2=Math.floor(t%60);return m+':'+String(s2).padStart(2,'0');};
+      const message=gaps.length
+        ?`Found ${gaps.length} quiet ${gaps.length===1?'gap':'gaps'} (${result.removedSeconds} seconds total): `+gaps.slice(0,8).map(g=>fmtT(g[0])+' to '+fmtT(g[1])).join(', ')+(gaps.length>8?', and more':'')+'. Tap Remove Silence to cut them out.'
+        :`No quiet gaps longer than ${seconds} seconds found.`;
+      statusEl.textContent=message;announce(message);
+    } catch(e) {
+      const msg = /cancelled|timed out/i.test(e.message) ? 'Detection stopped: ' + e.message
+        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again.'
+        : 'Detection stopped: ' + e.message;
+      statusEl.textContent = msg; announce(msg, true);
+    } finally { cleanupBusy = false; hideSilenceProgress(); silenceTickStop(); }
+  }
   async function silenceClipWithAI() {
     const clip = project.clips.find(c=>c.id===selectedClipId);
     if (!clip || !(clip.file || clip.url)) { announce('Select an audio clip in the timeline first.', true); return; }
@@ -1514,6 +1611,7 @@
     cleanupBusy = true; aiProcessingCancelled = false;
     video.pause(); for (const node of audioNodes.values()) node.element.pause();
     const epoch = mediaEpoch;
+    showSilenceProgress(0);
     statusEl.textContent = 'Uploading to your VoiceCut server…';
     announce('Removing silence. Uploading to your VoiceCut server.');
     try {
@@ -1521,7 +1619,9 @@
       if (file.size > 100 * 1024 * 1024) throw new Error('Cleanup supports media files up to 100 MB.');
       statusEl.textContent = 'Detecting quiet gaps longer than ' + seconds + ' seconds…';
       const blob = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds), file, {cloud:false, consent:'Upload this file to your VoiceCut server to remove silence? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
-        statusEl.textContent = pct>=100 ? 'Upload complete. Detecting quiet gaps longer than '+seconds+' seconds.' : 'Uploading to your VoiceCut server: '+pct+'%.';
+        showSilenceProgress(pct);
+        if(pct>=100){showSilenceProgress(null);silenceTickStart('Trimming on the server');statusEl.textContent='Upload complete. Detecting quiet gaps longer than '+seconds+' seconds.';}
+        else statusEl.textContent='Uploading to your VoiceCut server: '+pct+'%.';
       }});
       if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -1544,8 +1644,10 @@
             a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
           }
         }
+        silenceTickStop();showSilenceProgress(100);
         statusEl.textContent = message + (removed > 0 ? ' Trimmed file downloaded.' : '');
         announce(message + (removed > 0 ? ' Trimmed file downloaded.' : ''), removed === 0);
+        notifyComplete('Silence removal complete',removed>0?`Removed ${removed} silent gaps. Trimmed file downloaded.`:`No gaps longer than ${seconds} seconds found.`);
         return;
       }
       const enhancedBuffer = await decodeAudioFile(blob);
@@ -1559,14 +1661,16 @@
       $('#aiResultText').textContent = 'VoiceCut silence removal: complete. Listen before applying.';
       const dialog = $('#aiProcessingDialog');
       if (!dialog.open) dialog.showModal();
+      silenceTickStop();showSilenceProgress(100);
       statusEl.textContent = message;
       announce(message + ' Preview before applying.');
+      notifyComplete('Silence removal complete',message);
     } catch(e) {
       const msg = /cancelled|timed out/i.test(e.message) ? 'Processing stopped: ' + e.message
         : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again. Your media is unchanged.'
         : 'Processing stopped: ' + e.message;
       statusEl.textContent = msg; announce(msg, true);
-    } finally { cleanupBusy = false; }
+    } finally { cleanupBusy = false; hideSilenceProgress(); silenceTickStop(); }
   }
   let cleanupBusy = false;
   let lastResponseHeaders = null;
@@ -1623,6 +1727,7 @@
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#aiResultText').textContent = engineName+': complete. '+reportText+'Listen before applying.';
       progress(100,'Complete'); announce('Audio processing complete. '+reportText+'Preview before applying.');
+      notifyComplete('Noise reduction complete','Enhanced audio is ready. Preview before applying.');
     } catch(e) { $('#aiProgressText').textContent = 'Processing stopped: '+e.message; announce('Processing stopped: '+e.message,true); }
     finally { cleanupBusy = false; $('#btnCloseAI').classList.remove('hidden'); }
   }
@@ -1745,8 +1850,20 @@
     if(p.captionLanguage!==undefined)$('#settingCaptionLanguage').value=p.captionLanguage;
     if(p.captionPreview!==undefined)$('#settingCaptionPreview').checked=!!p.captionPreview;
     if(p.captionBurn!==undefined)$('#settingCaptionBurn').checked=!!p.captionBurn;
+    if(p.notifications!==undefined)$('#settingNotifications').checked=!!p.notifications;
     if(p.captionLanguage!==undefined)$('#captionLanguage').value=p.captionLanguage;
   }
+  function notificationsEnabled(){return userPrefs().notifications===true;}
+  function notifyComplete(title,body){
+    try{
+      if(!notificationsEnabled())return false;
+      if(!document.hidden)return false;
+      if(window.flutter_inappwebview&&window.flutter_inappwebview.callHandler){window.flutter_inappwebview.callHandler('showNotification',String(title),String(body));return true;}
+      if('Notification' in window&&Notification.permission==='granted'){new Notification(String(title),{body:String(body)});return true;}
+    }catch(e){console.warn('Completion notification failed:',e);}
+    return false;
+  }
+  if(typeof window!=='undefined')window.VoiceCutNotify={notifyComplete,notificationsEnabled};
   function applyPrefsToProject(isNew){
     const p=userPrefs();
     if(isNew){
@@ -2050,6 +2167,19 @@
     $('#settingCaptionLanguage').addEventListener('change',(e)=>{savePrefs({captionLanguage:e.target.value});$('#captionLanguage').value=e.target.value;announce('Preferred caption language saved.');});
     $('#settingCaptionPreview').addEventListener('change',(e)=>{savePrefs({captionPreview:e.target.checked});captionDefaults();project.captionSettings.preview=e.target.checked;announce(`Caption preview ${e.target.checked?'on':'off'}.`);});
     $('#settingCaptionBurn').addEventListener('change',(e)=>{savePrefs({captionBurn:e.target.checked});captionDefaults();project.captionSettings.burnIn=e.target.checked;announce(`Burned-in captions ${e.target.checked?'on':'off'}.`);});
+    $('#settingNotifications').addEventListener('change',async(e)=>{
+      const on=e.target.checked;
+      savePrefs({notifications:on});
+      if(on){
+        let granted=false;
+        try{
+          if(window.flutter_inappwebview&&window.flutter_inappwebview.callHandler){granted=(await window.flutter_inappwebview.callHandler('requestNotificationPermission'))===true;}
+          else if('Notification' in window){granted=(await Notification.requestPermission())==='granted';}
+        }catch(err){granted=false;}
+        if(!granted){savePrefs({notifications:false});e.target.checked=false;announce('Notifications were not allowed. In-app announcements still work.',true);return;}
+      }
+      announce(on?'Completion notifications on. You will be notified when long jobs finish while the app is in the background.':'Completion notifications off.');
+    });
 
     // Original audio
     $('#origVolumeSlider').addEventListener('input', (e)=>{ project.originalAudio.volume=parseInt(e.target.value); $('#origVolumeNumber').value=e.target.value; $('#origVolumeText').textContent=e.target.value+'%'; e.target.setAttribute('aria-valuetext', `Volume ${e.target.value} percent`); });
@@ -2168,6 +2298,8 @@
     $('#btnApplyEnhanced').addEventListener('click', applyCurrentAIEnhancement);
     $('#btnSilenceOriginal').addEventListener('click', silenceOriginalVideo);
     $('#btnSilenceSelected').addEventListener('click', silenceClipWithAI);
+    $('#btnDetectSilenceOriginal').addEventListener('click', detectSilenceOriginal);
+    $('#btnDetectSilenceSelected').addEventListener('click', detectSilenceClips);
     $('#aiOriginalAudio').addEventListener('play', () => $('#aiEnhancedAudio').pause());
     $('#aiEnhancedAudio').addEventListener('play', () => $('#aiOriginalAudio').pause());
 

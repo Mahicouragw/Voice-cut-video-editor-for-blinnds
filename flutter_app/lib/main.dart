@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -11,8 +12,13 @@ import 'package:share_plus/share_plus.dart';
 const siteUrl = 'https://mahicouragw.github.io/Voice-cut-video-editor-for-blinnds/';
 const siteOrigin = 'https://mahicouragw.github.io';
 
-void main() {
+final FlutterLocalNotificationsPlugin notificationsPlugin = FlutterLocalNotificationsPlugin();
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await notificationsPlugin.initialize(
+    const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
+  );
   runApp(const VoiceCutApp());
 }
 
@@ -92,6 +98,26 @@ class _EditorPageState extends State<EditorPage> {
             } finally {
               if (await file.exists()) await file.delete();
             }
+            return true;
+          });
+          controller.addJavaScriptHandler(handlerName: 'requestNotificationPermission', callback: (args) async {
+            final url = await controller.getUrl();
+            if (url?.origin != siteOrigin) throw StateError('Invalid notification request');
+            final android = notificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+            return await android?.requestNotificationsPermission() ?? false;
+          });
+          controller.addJavaScriptHandler(handlerName: 'showNotification', callback: (args) async {
+            final url = await controller.getUrl();
+            if (url?.origin != siteOrigin || args.length != 2 || args[0] is! String || args[1] is! String) throw StateError('Invalid notification request');
+            final title = (args[0] as String).trim();
+            final body = (args[1] as String).trim();
+            if (title.isEmpty || body.isEmpty || title.length > 100 || body.length > 500) throw StateError('Invalid notification text');
+            const details = NotificationDetails(android: AndroidNotificationDetails(
+              'voicecut_jobs', 'VoiceCut job updates',
+              channelDescription: 'Completion alerts for captions, cleanup, silence removal and export',
+              importance: Importance.high, priority: Priority.high,
+            ));
+            await notificationsPlugin.show(DateTime.now().millisecondsSinceEpoch ~/ 1000, title, body, details);
             return true;
           });
         },

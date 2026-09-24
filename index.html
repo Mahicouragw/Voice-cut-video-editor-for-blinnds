@@ -168,6 +168,9 @@
         <div style="display:flex; align-items:center; gap:8px;">
           <label for="settingCaptionBurn" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingCaptionBurn" checked> Include captions in exported video</label>
         </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label for="settingNotifications" style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingNotifications"> Completion notifications (when the app is in the background)</label>
+        </div>
       </div>
       <div class="divider"></div>
       <h3>Advanced Editing Mode</h3>
@@ -496,6 +499,12 @@
       <button id="btnReadCaption">Announce current caption</button>
       <div class="divider"></div>
       <label for="captionCueSelect">Caption to edit</label><select id="captionCueSelect" aria-describedby="captionTimingHelp"></select>
+      <div class="flex gap-8 wrap items-center" style="margin:8px 0;">
+        <span id="captionCounter" role="status" style="font-size:14px; color:var(--text2);">No captions</span>
+        <button id="btnPrevCaption" aria-label="Previous caption, button">◀ Previous</button>
+        <button id="btnNextCaption" aria-label="Next caption, button">Next ▶</button>
+        <button id="btnReadAllCaptions" aria-label="Read all captions aloud, button">🔊 Read all captions</button>
+      </div>
       <p id="captionTimingHelp">Times below refer to seconds in the original video timeline. Subtitle downloads automatically adjust for your video trim, deleted segments and playback speed. After moving an audio clip, regenerate or retime its captions.</p>
       <div class="grid grid-2">
         <div><label for="captionStart">Start, seconds</label><input id="captionStart" type="number" min="0" step="0.001"></div>
@@ -568,7 +577,11 @@
           </div>
           <button id="btnSilenceOriginal" class="primary" aria-label="Remove silence from original video audio, button. Downloads a trimmed video file">&#9986;&#65039; Remove Silence - Original Video</button>
           <button id="btnSilenceSelected" aria-label="Remove silence from selected audio clip, button">&#9986;&#65039; Remove Silence - Selected Clip</button>
+          <button id="btnDetectSilenceOriginal" aria-label="Detect quiet gaps in original video, fast preview without trimming, button">&#128269; Detect Gaps - Original Video</button>
+          <button id="btnDetectSilenceSelected" aria-label="Detect quiet gaps in selected clip, fast preview without trimming, button">&#128269; Detect Gaps - Selected Clip</button>
         </div>
+        <progress id="silenceProgress" max="100" value="0" style="width:100%; display:none; margin-top:8px;" aria-label="Silence removal progress"></progress>
+        <span id="silenceElapsed" role="timer" aria-live="off" style="font-size:14px; color:var(--text2);"></span>
         <p id="silenceStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
       </div>
     </div>
