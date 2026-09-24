@@ -151,14 +151,23 @@ function createApp(options={}) {
         }
         if(pending!==null)gaps.push([pending,duration]);
         const silent=gaps.filter(([a,b])=>Number.isFinite(a)&&Number.isFinite(b)&&b-a>=silenceSeconds-0.05&&a<duration);
+        if(req.query.detect) {
+          // Fast preview: report gaps without trimming anything.
+          const removedSeconds=silent.reduce((t,[a,b])=>t+Math.max(0,Math.min(duration,b)-Math.max(0,a)),0);
+          res.json({gaps:silent.map(([a,b])=>[Number(Math.max(0,a).toFixed(2)),Number(Math.min(duration,b).toFixed(2))]),gapCount:silent.length,removedSeconds:Number(removedSeconds.toFixed(1)),duration:Number(duration.toFixed(2))});
+          cleanup();return;
+        }
         const kept=[];let cursor=0,removed=0;
         for(const [a,b] of silent){const st=Math.max(0,a),en=Math.min(duration,b);if(st>cursor+0.02)kept.push([cursor,st]);removed+=Math.max(0,en-st);cursor=Math.max(cursor,en);}
         if(cursor<duration-0.02)kept.push([cursor,duration]);
         if(!kept.length)throw new ServiceError(422,'SILENCE_ONLY','No speech found: the whole recording is quiet. Your original media is unchanged.');
         const span=([a,b])=>`between(t\\,${a.toFixed(3)}\\,${b.toFixed(3)})`;
         const expr=kept.map(span).join('+');
-        if(hasVideo){
-          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-vf',`select=${expr},setpts=N/FRAME_RATE/TB`,'-af',`aselect=${expr},asetpts=N/SR/TB`,'-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-y',output]);
+        if(!silent.length){
+          // Nothing to cut: return the original bytes untouched (instant, no re-encode).
+          fs.copyFileSync(req.file.path,output);
+        }else if(hasVideo){
+          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-vf',`select=${expr},setpts=N/FRAME_RATE/TB`,'-af',`aselect=${expr},asetpts=N/SR/TB`,'-c:v','libx264','-preset','ultrafast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-y',output]);
         }else{
           await encode(req.file.path,output,['-af',`aselect=${expr},asetpts=N/SR/TB,aresample=48000`,'-ar','48000','-ac','2','-c:a','pcm_s16le']);
         }
