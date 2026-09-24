@@ -152,6 +152,7 @@ const path = require('node:path');
     if(request.url().includes('/api/isolate')){isolateCalls++;assert.equal(request.headers()['x-upload-consent'],'yes');await route.fulfill({headers,contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
     if(request.url().includes('/api/denoise-local')){denoiseCalls++;denoiseConsent=request.headers()['x-upload-consent'];await route.fulfill({headers,contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
     if(request.url().includes('/api/silence')){if(request.url().includes('detect=1')){await route.fulfill({headers,contentType:'application/json',body:JSON.stringify({gaps:[[1,2]],gapCount:1,removedSeconds:1,duration:3})});return;}await route.fulfill({headers:{'access-control-allow-origin':'*','access-control-expose-headers':'x-silence-removed,x-silence-seconds','x-silence-removed':'1','x-silence-seconds':'1'},contentType:'audio/wav',body:fs.readFileSync(audioPath)});return;}
+    if(request.url().includes('/api/reverse')){await route.fulfill({headers,contentType:'video/mp4',body:fs.readFileSync(videoPath)});return;}
     assert.ok(request.url().includes('/api/captions'));
     captionCalls.push({url:request.url(),consent:request.headers()['x-upload-consent']});
     assert.equal(request.headers()['x-upload-consent'],'yes');
@@ -187,9 +188,16 @@ const path = require('node:path');
   }
   await page.locator('#mainVideo').evaluate(v=>{v.currentTime=1;});
   await page.waitForFunction(()=>document.querySelector('#captionOverlay').textContent==='Reviewed caption'&&!document.querySelector('#captionOverlay').hidden);
-  // Friendly failure: existing cues preserved, Retry recovers.
+  // Friendly failure: existing cues preserved, Retry recovers, hidden tab notifies.
+  await page.evaluate(()=>{
+    window.__notifCalls=[];
+    window.flutter_inappwebview={callHandler:async(name,title,body)=>{window.__notifCalls.push([name,title,body]);return true;}};
+    Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+  });
   providerFailure=true;await page.locator('#btnGenerateCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('Caption generation is temporarily unavailable'));
+  assert.deepEqual(await page.evaluate(()=>window.__notifCalls),[['showNotification','Captions failed','Caption generation failed. Open the app and tap Retry.']]);
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});delete window.flutter_inappwebview;});
   await page.locator('#btnRetryCaptions:not(.hidden)').waitFor();
   assert.equal(await page.locator('#captionText').inputValue(),'Reviewed caption');
   providerFailure=false;await page.locator('#btnRetryCaptions').click();
@@ -234,6 +242,29 @@ const path = require('node:path');
     assert.ok(fs.statSync(file).size>1000);
   }
   await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap'));
+  // Clip reverse, audio merge with undo, video reverse download.
+  await page.locator('#timelineContainer .clip[aria-label^="Music Track"]').first().click();
+  await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await page.locator('#selReverse').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Clip audio reversed'));
+  const clipsBefore=await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip[data-clip-id]')].filter(el=>!el.getAttribute('aria-label').startsWith('Video Segment')).length);
+  await page.setInputFiles('#fileAudio',audioPath);
+  await page.waitForFunction((n)=>[...document.querySelectorAll('#timelineContainer .clip[data-clip-id]')].filter(el=>!el.getAttribute('aria-label').startsWith('Video Segment')).length===n+1,clipsBefore);
+  const beforeMerge=clipsBefore+1;
+  await page.locator('#btnMergeAudio').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Merged '),{},{timeout:60000});
+  assert.match(await text('#statusText'),new RegExp('Merged '+beforeMerge+' clips into one'));
+  await page.waitForFunction(()=>[...document.querySelectorAll('#timelineContainer .clip[data-clip-id]')].filter(el=>!el.getAttribute('aria-label').startsWith('Video Segment')).length===1);
+  await page.locator('#btnUndo').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Undo successful'));
+  {
+    const event=page.waitForEvent('download');
+    await page.locator('#btnReverseVideo').click();
+    const d=await event;assert.match(d.suggestedFilename(),/\.mp4$/);
+    const file=path.join(dir,'reversed-video.mp4');await d.saveAs(file);
+    assert.ok(fs.statSync(file).size>1000);
+  }
+  await page.waitForFunction(()=>document.querySelector('#reverseStatus').textContent.includes('Video reversed'));
   // Crop, rotate, and freeze-frame controls update the edit summary.
   await page.locator('#cropPreset').selectOption('1:1');
   await page.waitForFunction(()=>document.querySelector('#cropSummary').textContent.includes('1:1'));
@@ -300,6 +331,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

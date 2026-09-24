@@ -138,8 +138,9 @@ function createApp(options={}) {
       const offset=Math.max(0,(Number(audioStream.start_time)||0)-(Number(info.format?.start_time)||0));
       const align=`adelay=${Math.round(offset*1000)}:all=1,apad,atrim=duration=${duration.toFixed(6)},asetpts=N/SR/TB`;
       const hasVideo=info.streams.some(s=>s.codec_type==='video');
-      const output=path.join(req.workdir,(kind==='silence'&&hasVideo)?'trimmed.mp4':'processed.wav');
-      const downloadName=(kind==='silence'&&hasVideo)?'silence-removed.mp4':'processed.wav';
+      if(kind==='reverse'&&hasVideo&&duration>120.05)throw new ServiceError(413,'MEDIA_TOO_LONG','Video reverse supports up to 2 minutes. Reverse a shorter section instead.');
+      const output=path.join(req.workdir,((kind==='silence'||kind==='reverse')&&hasVideo)?(kind==='reverse'?'reversed.mp4':'trimmed.mp4'):'processed.wav');
+      const downloadName=((kind==='silence'||kind==='reverse')&&hasVideo)?(kind==='reverse'?'reversed-video.mp4':'silence-removed.mp4'):(kind==='reverse'?'reversed-audio.wav':'processed.wav');
       if(kind==='silence') {
         // Real silence removal: detect quiet gaps, cut them from audio AND video.
         const detect=await runStderr(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','info','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-af',`silencedetect=noise=-30dB:d=${silenceSeconds}`,'-vn','-sn','-dn','-f','null','-']);
@@ -177,6 +178,28 @@ function createApp(options={}) {
         if(!Number.isFinite(trimmed)||Math.abs(trimmed-expected)>Math.max(1.0,expected*0.05))throw new ServiceError(502,'TRIM_MISMATCH','Trimmed media duration changed unexpectedly. Not applied; retain your original.');
         res.set('X-Silence-Removed',String(silent.length));
         res.set('X-Silence-Seconds',removed.toFixed(1));
+      } else if(kind==='reverse') {
+        // Whole-file reverse. The reverse filter buffers entire streams, so
+        // video is reversed in short memory-safe chunks joined back to front.
+        if(hasVideo){
+          const CH=5,chunks=Math.max(1,Math.ceil(duration/CH)),parts=[];
+          for(let k=0;k<chunks;k++){
+            const split=path.join(req.workdir,'part'+k+'.mp4');
+            await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-ss',(k*CH).toFixed(3),'-t',String(CH),'-i',req.file.path,'-c:v','libx264','-preset','ultrafast','-crf','23','-g','30','-c:a','aac','-b:a','128k','-y',split]);
+            signal.throwIfAborted();
+            const rev=path.join(req.workdir,'rev'+k+'.mp4');
+            await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',split,'-vf','reverse','-af','areverse','-c:v','libx264','-preset','ultrafast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-y',rev]);
+            signal.throwIfAborted();
+            parts.unshift(rev);
+          }
+          fs.writeFileSync(path.join(req.workdir,'list.txt'),parts.map(p=>`file '${p.replace(/'/g,"'\\''")}'`).join('\n'));
+          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS+',concat','-f','concat','-safe','0','-i',path.join(req.workdir,'list.txt'),'-c','copy','-movflags','+faststart','-y',output]);
+        }else{
+          await encode(req.file.path,output,['-af','areverse,aresample=48000','-ar','48000','-ac','2','-c:a','pcm_s16le']);
+        }
+        signal.throwIfAborted();
+        const reversed=Number(await run(process.env.FFPROBE_PATH||'ffprobe',['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',output]));
+        if(!Number.isFinite(reversed)||Math.abs(reversed-duration)>Math.max(0.5,duration*0.01))throw new ServiceError(502,'DURATION_MISMATCH','Reversed media duration changed unexpectedly. Not applied; retain your original.');
       } else if(kind==='filter') {
         await encode(req.file.path,output,['-af',align+','+FILTER_LEVELS[level],'-ar','48000','-ac','2','-c:a','pcm_s16le']);
       } else if(kind==='deepfilter') {
@@ -217,7 +240,7 @@ function createApp(options={}) {
         if(!Number.isFinite(processed)||Math.abs(processed-duration)>Math.max(0.5,duration*0.01))throw new ServiceError(502,'DURATION_MISMATCH','Isolated audio duration changed unexpectedly. Not applied; retain your original.');
       }
       signal.throwIfAborted();
-      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':kind==='deepfilter'?'DeepFilterNet-local-AI':kind==='silence'?'FFmpeg-silence-removal':'ElevenLabs-Voice-Isolator');
+      res.set('X-Processing-Method',kind==='filter'?'FFmpeg-filters-not-AI':kind==='deepfilter'?'DeepFilterNet-local-AI':kind==='silence'?'FFmpeg-silence-removal':kind==='reverse'?'FFmpeg-reverse':'ElevenLabs-Voice-Isolator');
       res.download(output,downloadName,cleanup);
     }catch(e){
       if(!closed&&!res.headersSent)res.status(e instanceof ServiceError?e.status:502).json({code:e.code||'PROCESSING_FAILED',error:e instanceof ServiceError?e.message:'Processing failed or timed out. Your original media is unchanged. No automatic paid retry was made.'});
@@ -229,6 +252,7 @@ function createApp(options={}) {
   app.post('/api/isolate',authorized,job('isolation'));
   app.post('/api/denoise-local',authorized,job('deepfilter'));
   app.post('/api/silence',authorized,job('silence'));
+  app.post('/api/reverse',authorized,job('reverse'));
   return app;
 }
 if(require.main===module){

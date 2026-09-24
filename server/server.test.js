@@ -84,3 +84,28 @@ test('silence detect mode previews gaps and no-gap trim returns instantly',async
   fs.unlinkSync(fixture);
  }finally{await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test('reverse plays video backwards in memory-safe chunks and reverses audio',async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'voicecut-test-'));
+ const key='d'.repeat(64);
+ const server=createApp({key,origin:'https://example.org',root}).listen(0,'127.0.0.1');
+ await new Promise(resolve=>server.once('listening',resolve));
+ const url='http://127.0.0.1:'+server.address().port;
+ const vfix=path.join(os.tmpdir(),'voicecut-reverse-'+process.pid+'.mp4');
+ try{
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc=duration=11:size=320x240:rate=15','-f','lavfi','-i','sine=frequency=440:duration=11','-shortest','-c:v','libx264','-preset','ultrafast','-c:a','aac','-y',vfix]);
+  const vid=new FormData();vid.append('file',new Blob([fs.readFileSync(vfix)]),'fwd.mp4');
+  const vres=await fetch(url+'/api/reverse',{method:'POST',headers:{Authorization:'Bearer '+key},body:vid});
+  assert.equal(vres.status,200);
+  assert.equal(vres.headers.get('x-processing-method'),'FFmpeg-reverse');
+  const vbuf=Buffer.from(await vres.arrayBuffer());
+  assert.equal(vbuf.subarray(4,8).toString(),'ftyp');
+  const afix=path.join(os.tmpdir(),'voicecut-reverse-a-'+process.pid+'.wav');
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=660:duration=2','-y',afix]);
+  const aud=new FormData();aud.append('file',new Blob([fs.readFileSync(afix)]),'fwd.wav');
+  const ares=await fetch(url+'/api/reverse',{method:'POST',headers:{Authorization:'Bearer '+key},body:aud});
+  assert.equal(ares.status,200);
+  assert.equal(Buffer.from(await ares.arrayBuffer()).subarray(0,4).toString(),'RIFF');
+  fs.unlinkSync(afix);fs.unlinkSync(vfix);
+ }finally{await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});}
+});

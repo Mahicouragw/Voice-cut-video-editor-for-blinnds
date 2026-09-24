@@ -80,3 +80,40 @@ test('NR-1 ultra is stronger than voice focus and keeps a loud tone usable', asy
   const loss = 10 * Math.log10(energy(d) / Math.max(energy(out2.getChannelData(0)), 1e-12));
   assert.ok(loss < 12, `ultra tone should stay usable, lost ${loss.toFixed(1)} dB`);
 });
+
+test('NR notch removes steady hum while preserving wobbling voice', async () => {
+  const sr = 16000, len = sr * 4, rng = mulberry32(21);
+  const buf = new MemBuffer(1, len, sr);
+  const d = buf._d[0], nz = brown(len, rng, 0.1);
+  for (let i = 0; i < len; i++) {
+    const t = i / sr;
+    const paused = t > 3; // 1 s of hum-only audio for the noise print
+    const vib = 440 + 20 * Math.sin(2 * Math.PI * 5 * t);
+    d[i] = (paused ? 0 : 0.4 * Math.sin(2 * Math.PI * vib * t)) + 0.3 * Math.sin(2 * Math.PI * 50 * t) + nz[i];
+  }
+  function bandMag(sig, hz) {
+    const N = 2048, hop = 1024;
+    let acc = 0, n = 0;
+    for (let s0 = 0; s0 + N <= sig.length; s0 += hop) {
+      // voice-active frames only for the voice check; hum checked on pause span
+      let re = 0, im = 0;
+      for (let i = 0; i < N; i++) {
+        const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N), ph = 2 * Math.PI * hz * i / sr;
+        re += sig[s0 + i] * w * Math.cos(ph); im -= sig[s0 + i] * w * Math.sin(ph);
+      }
+      acc += Math.sqrt(re * re + im * im); n++;
+    }
+    return acc / Math.max(1, n);
+  }
+  const humBefore = bandMag(d.slice(sr * 3), 50);
+  const out = await NR.notchStationaryTones(buf, () => {}, factory);
+  assert.ok(out.tones >= 1, 'expected hum tones notched, got ' + out.tones);
+  const o = out.buffer.getChannelData(0);
+  const humAfter = bandMag(o.slice(sr * 3), 50);
+  const humDb = 20 * Math.log10(humBefore / Math.max(humAfter, 1e-9));
+  assert.ok(humDb >= 10, `expected hum down >=10 dB, got ${humDb.toFixed(1)} dB`);
+  const voiceBefore = bandMag(d.slice(0, sr * 3), 440);
+  const voiceAfter = bandMag(o.slice(0, sr * 3), 440);
+  const voiceLoss = 20 * Math.log10(voiceBefore / Math.max(voiceAfter, 1e-9));
+  assert.ok(voiceLoss < 2, `voice should survive, lost ${voiceLoss.toFixed(1)} dB`);
+});
