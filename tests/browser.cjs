@@ -35,6 +35,11 @@ const path = require('node:path');
   await page.locator('#editorScreen:not(.hidden)').waitFor();
   await page.locator('#navEditor:not(.hidden)').waitFor();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Project saved'));
+  // Back/forward stays inside the app instead of exiting to the device home.
+  await page.goBack();
+  await page.locator('#homeScreen:not(.hidden)').waitFor();
+  await page.goForward();
+  await page.locator('#editorScreen:not(.hidden)').waitFor();
   // Library lists, renames, and reopens the project.
   await page.locator('a[data-route="library"]').click();
   await page.locator('#libraryScreen:not(.hidden)').waitFor();
@@ -79,9 +84,41 @@ const path = require('node:path');
   await page.locator('#globalNoiseReduction').selectOption('ultra');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Noise reduction set to ultra'));
   await page.locator('#globalNoiseReduction').selectOption('medium');
-  // Real on-device cleanup (no backend configured), replacing original track.
+  // Section links scroll inside the editor and never route home.
+  {
+    const hashBefore = await page.evaluate(()=>location.hash);
+    await page.locator('a[href="#section-captions"]').click();
+    await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='section-captions');
+    assert.equal(await page.evaluate(()=>location.hash),hashBefore);
+    assert.equal(await page.locator('#editorScreen:not(.hidden)').count(),1);
+    assert.equal(await page.locator('#homeScreen:not(.hidden)').count(),0);
+    await page.locator('a[href="#section-aitools"]').click();
+    await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='section-aitools');
+    assert.equal(await page.locator('#editorScreen:not(.hidden)').count(),1);
+  }
+  // Real on-device neural cleanup (no backend configured), replacing original track.
   await page.locator('#btnAIEnhanceOriginal').click();
-  await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:30000});
+  await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
+  await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('neural cleanup'),{},{timeout:60000});
+  assert.match(await page.locator('#aiResultText').textContent(),/No steady engine-like rumble/);
+  {
+    const ratio = await page.evaluate(async()=>{
+      const energyOf = async (url) => {
+        const raw = await (await fetch(url)).arrayBuffer();
+        const C = new (window.AudioContext || window.webkitAudioContext)();
+        try{
+          const ab = await C.decodeAudioData(raw);
+          const d = ab.getChannelData(0); let s = 0;
+          for (let i = 0; i < d.length; i++) s += d[i] * d[i];
+          return s / Math.max(1, d.length);
+        } finally { try{await C.close();}catch(e){} }
+      };
+      const e = await energyOf(document.querySelector('#aiEnhancedAudio').src);
+      const o = await energyOf(document.querySelector('#aiOriginalAudio').src);
+      return e / o;
+    });
+    assert.ok(ratio > 0.25 && ratio < 2, 'neural cleanup must preserve a clean tone (ratio ' + ratio + ')');
+  }
   await page.locator('#btnApplyEnhanced').click();
   assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
   // Provider responses are mocked in browser tests. No paid API call or quality claim.
@@ -214,6 +251,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device cleanup, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

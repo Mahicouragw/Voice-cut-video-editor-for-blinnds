@@ -72,11 +72,19 @@
     window.scrollTo(0,0);
   }
   function route() {
-    const name = (location.hash||'').replace(/^#\/?/,'').split('?')[0] || 'home';
+    const h = location.hash || '';
+    if (h.startsWith('#') && !h.startsWith('#/')) {
+      // In-page anchor, not a route: stay on the current view.
+      const target = document.querySelector(h.split('?')[0]);
+      if (target && currentView === 'editor') target.scrollIntoView();
+      history.replaceState(null, '', '#/' + (currentView || 'home'));
+      return;
+    }
+    const name = h.replace(/^#\/?/,'').split('?')[0] || 'home';
     showView(VIEW_IDS[name] ? name : 'home');
   }
   function hashQuery() { const h=location.hash||''; return h.includes('?') ? '?'+h.split('?').slice(1).join('?') : ''; }
-  function openEditor() { showView('editor'); const target='#/editor'+hashQuery(); if ((location.hash||'') !== target) history.replaceState(null,'',target); }
+  function openEditor() { showView('editor'); const target='#/editor'+hashQuery(); if ((location.hash||'') !== target) history.pushState(null,'',target); }
   function projectCardHTML(p) {
     return `<div class="card library-card" role="group" aria-label="Project: ${escapeHTML(p.name)}. Duration ${formatTimeVerbose(p.duration)}. Last modified ${new Date(p.modified).toLocaleString()}.">
       <div><strong>${escapeHTML(p.name)}</strong></div>
@@ -209,8 +217,8 @@
       $('#captionStatus').textContent='Preparing small audio for upload. Your existing captions are unchanged.';
       let uploadFile=file, uploadTrimmed=false;
       try{
-        if(clipSnapshot){uploadFile=await captionAudioFile(file,clipSnapshot.trimStart||0,clipSnapshot.duration-(clipSnapshot.trimEnd||0));uploadTrimmed=true;}
-        else uploadFile=await captionAudioFile(file);
+        if(clipSnapshot){uploadFile=await shrinkAudioFile(file,clipSnapshot.trimStart||0,clipSnapshot.duration-(clipSnapshot.trimEnd||0));uploadTrimmed=true;}
+        else uploadFile=await shrinkAudioFile(file);
       }catch(prepErr){console.warn('Caption audio prep fell back to original file:',prepErr);uploadFile=file;}
       let result=null;
       for(let captionAttempt=1;captionAttempt<=2;captionAttempt++){
@@ -1400,9 +1408,88 @@
     return await audioContext.decodeAudioData(arrayBuffer);
   }
 
-  // On-device spectral noise reduction (NR-1): real processing, fully offline.
+  let lastCleanupEngine = 'classic';
+  let lastScanReport = '';
+  // Scan the whole audio (downsampled for speed) for engine-like BRR regions.
+  function scanWholeAudio(buffer) {
+    try{
+      if (!window.VoiceCutNDetect?.scanNoise) return {};
+      const sr = buffer.sampleRate, len = buffer.length, ch = buffer.numberOfChannels;
+      const dec = Math.max(1, Math.floor(sr / 4000));
+      const dn = Math.floor(len / dec);
+      if (dn < 2000) return {};
+      const chs = [];
+      for (let c = 0; c < ch; c++) chs.push(buffer.getChannelData(c));
+      const mono = new Float32Array(dn);
+      for (let k = 0; k < dn; k++) {
+        let acc = 0;
+        for (let j = 0; j < dec; j++) { const idx = k * dec + j; for (let c = 0; c < ch; c++) acc += chs[c][idx]; }
+        mono[k] = acc / (dec * ch);
+      }
+      const report = window.VoiceCutNDetect.scanNoise(mono, sr / dec);
+      return {report, strengthAt: report.strengthAt};
+    }catch(e){ console.warn('Noise scan fell back to uniform strength:', e); return {}; }
+  }
+  async function resampleChannel(data, fromSr, toSr, exactLen) {
+    if (fromSr === toSr) return data.slice(0, exactLen || data.length);
+    const targetLen = exactLen || Math.max(1, Math.ceil(data.length / fromSr * toSr));
+    const off = new OfflineAudioContext(1, targetLen, toSr);
+    const tmp = off.createBuffer(1, data.length, fromSr);
+    tmp.copyToChannel(data, 0);
+    const src = off.createBufferSource();
+    src.buffer = tmp; src.connect(off.destination); src.start(0);
+    const rendered = await off.startRendering();
+    return rendered.getChannelData(0).slice();
+  }
+  // NR-2 neural cleanup: full-file scan plus a recurrent neural network that
+  // removes noise as loud as the voice. Fully offline; per-channel states.
+  async function neuralCleanup(buffer, level, scan, onProgress) {
+    const NR2 = window.VoiceCutNR2;
+    if (!NR2?.process48k) throw new Error('Neural engine unavailable.');
+    const mixCfg = NR2.MIX[level] || NR2.MIX.medium;
+    const strengthAt = scan.strengthAt;
+    const mixAt = strengthAt ? ((t) => strengthAt(t, mixCfg.base, mixCfg.boost)) : (() => mixCfg.base);
+    const sr = buffer.sampleRate, len = buffer.length, ch = buffer.numberOfChannels;
+    let peak = 0;
+    for (let c = 0; c < ch; c++) { const d = buffer.getChannelData(c); for (let i = 0; i < d.length; i += 7) { const a = Math.abs(d[i]); if (a > peak) peak = a; } }
+    const moduleUrl = String(new URL('web/vendor/rnnoise.js', document.baseURI));
+    const out = new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr});
+    for (let c = 0; c < ch; c++) {
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      onProgress(5 + Math.round(c / ch * 90), 'Neural cleanup: preparing channel ' + (c + 1) + ' of ' + ch + '.');
+      const up = await resampleChannel(buffer.getChannelData(c), sr, 48000);
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      const r = await NR2.process48k(up, {moduleUrl, peak, mixAt,
+        onProgress: (p) => onProgress(5 + Math.round((c + p) / ch * 90), 'Neural cleanup: removing noise (channel ' + (c + 1) + ' of ' + ch + ').'),
+        shouldCancel: () => aiProcessingCancelled});
+      const back = await resampleChannel(r.out, 48000, sr, len);
+      out.copyToChannel(back, c);
+    }
+    return out;
+  }
+  // On-device cleanup: neural first (NR-2), classic spectral (NR-1) fallback.
   async function processAudioBufferWithAI(buffer, level, onProgress) {
     if (buffer.duration > 600) throw new Error('Local cleanup is limited to 10 minutes to protect device memory.');
+    onProgress(3, 'Scanning the whole audio for noise. No upload.');
+    await new Promise(r => setTimeout(r, 0));
+    const scan = scanWholeAudio(buffer);
+    lastScanReport = scan.report ? scan.report.summary.text : '';
+    lastCleanupEngine = 'classic';
+    if (window.VoiceCutNR2?.process48k) {
+      try{
+        const result = await neuralCleanup(buffer, level, scan, onProgress);
+        if (aiProcessingCancelled) throw new Error('Cancelled');
+        lastCleanupEngine = 'neural';
+        onProgress(100, 'On-device neural cleanup complete. Preview before applying.');
+        return result;
+      }catch(e){
+        if (/cancelled/i.test(e.message)) throw e;
+        console.warn('Neural cleanup failed; using classic cleanup:', e);
+        announce('Neural engine unavailable. Used classic cleanup instead.');
+      }
+    } else {
+      announce('Neural engine unavailable. Used classic cleanup instead.');
+    }
     if (!window.VoiceCutNR?.spectralDenoise) throw new Error('On-device cleanup engine missing. Reload the app.');
     onProgress(5, 'Reducing noise on this device. No upload.');
     const result = await window.VoiceCutNR.spectralDenoise(buffer, level, (pct, text) => onProgress(pct, text), (ch, len, sr) => new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr}), () => aiProcessingCancelled);
@@ -1433,7 +1520,9 @@
       const file = input instanceof Blob ? input : await (await fetch(input)).blob();
       if (file.size > 100 * 1024 * 1024) throw new Error('Cleanup supports media files up to 100 MB.');
       statusEl.textContent = 'Detecting quiet gaps longer than ' + seconds + ' seconds…';
-      const blob = await requestServer('/api/silence?seconds=' + encodeURIComponent(seconds), file, {cloud:false, consent:'Upload this file to your VoiceCut server to remove silence? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.'});
+      const blob = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds), file, {cloud:false, consent:'Upload this file to your VoiceCut server to remove silence? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
+        statusEl.textContent = pct>=100 ? 'Upload complete. Detecting quiet gaps longer than '+seconds+' seconds.' : 'Uploading to your VoiceCut server: '+pct+'%.';
+      }});
       if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
       if (aiProcessingCancelled) throw new Error('Cancelled');
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
@@ -1492,7 +1581,7 @@
   }
   async function processSelectedAudio(input, name, level, clipId) {
     if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.',true); return; }
-    cleanupBusy = true; aiProcessingCancelled = false; currentAIJob = null;
+    cleanupBusy = true; aiProcessingCancelled = false; currentAIJob = null; lastScanReport='';
     video.pause(); for (const node of audioNodes.values()) node.element.pause();
     const epoch = mediaEpoch;
     const dialog = $('#aiProcessingDialog');
@@ -1527,11 +1616,13 @@
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
       const originalUrl = URL.createObjectURL(file);
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
-      currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:serverResult?.provider||'On-device spectral cleanup',epoch};
+      const engineName = serverResult?.provider || (lastCleanupEngine==='classic'?'On-device classic cleanup':'On-device neural cleanup');
+      const reportText = (!serverResult && lastScanReport) ? lastScanReport+' ' : '';
+      currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:engineName,epoch};
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
-      $('#aiResultText').textContent = (serverResult?.provider || 'On-device spectral cleanup') + ': complete. Listen before applying.';
-      progress(100,'Complete'); announce('Audio processing complete. Preview before applying.');
+      $('#aiResultText').textContent = engineName+': complete. '+reportText+'Listen before applying.';
+      progress(100,'Complete'); announce('Audio processing complete. '+reportText+'Preview before applying.');
     } catch(e) { $('#aiProgressText').textContent = 'Processing stopped: '+e.message; announce('Processing stopped: '+e.message,true); }
     finally { cleanupBusy = false; $('#btnCloseAI').classList.remove('hidden'); }
   }
@@ -1669,7 +1760,7 @@
   }
   // Shrink any source to 16 kHz mono WAV so caption uploads stay tiny on
   // slow networks. Optional [start,end] slice (seconds) for trimmed clips.
-  async function captionAudioFile(file, start=0, end=Infinity) {
+  async function shrinkAudioFile(file, start=0, end=Infinity, targetSr=16000) {
     const decoded = await decodeAudioFile(file);
     const sr = decoded.sampleRate;
     const s0 = Math.max(0, Math.floor(start*sr));
@@ -1679,7 +1770,6 @@
     const out = mono.getChannelData(0), chs = [];
     for (let c=0;c<decoded.numberOfChannels;c++) chs.push(decoded.getChannelData(c));
     for (let i=0;i<s1-s0;i++){ let v=0; for (const d of chs) v+=d[s0+i]; out[i]=v/chs.length; }
-    const targetSr=16000;
     const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil((s1-s0)/sr*targetSr)), targetSr);
     const srcNode = offline.createBufferSource(); srcNode.buffer=mono; srcNode.connect(offline.destination); srcNode.start(0);
     const rendered = await offline.startRendering();
@@ -1704,11 +1794,15 @@
       if(cloud)xhr.setRequestHeader('X-Upload-Consent','yes');
       xhr.timeout=14*60*1000;
       xhr.upload.onprogress=(e)=>{ if(e.lengthComputable&&typeof onProgress==='function')onProgress(Math.round(e.loaded/e.total*100)); };
+      xhr.responseType='arraybuffer';
       xhr.onload=()=>{
         if(xhr.status<200||xhr.status>=300){finish(reject,new Error('SERVICE_UNAVAILABLE'));return;}
+        lastResponseHeaders={get:(n)=>xhr.getResponseHeader(n)};
         const ct=xhr.getResponseHeader('content-type')||'';
-        if(!ct.includes('application/json')){finish(reject,new Error('SERVICE_UNAVAILABLE'));return;}
-        try{finish(resolve,JSON.parse(xhr.responseText));}catch(e){finish(reject,new Error('SERVICE_UNAVAILABLE'));}
+        const bytes=xhr.response;
+        if(ct.includes('application/json')){
+          try{finish(resolve,JSON.parse(new TextDecoder().decode(bytes)));}catch(e){finish(reject,new Error('SERVICE_UNAVAILABLE'));}
+        }else finish(resolve,new Blob([bytes],{type:ct||'application/octet-stream'}));
       };
       xhr.onerror=()=>{console.warn('VoiceCut service upload failed:',endpoint);finish(reject,new Error('SERVICE_UNAVAILABLE'));};
       xhr.onabort=()=>finish(reject,new Error('Request cancelled or timed out. Your original media is unchanged.'));
@@ -1745,8 +1839,15 @@
     let capabilities=null;
     try{capabilities=await getCapabilities();}catch(e){capabilities=null;}
     const nrLevel=['light','medium','strong','voicefocus','ultra'].includes(level)?level:'medium';
+    let uploadFile=file;
+    try{
+      onProgress(8,'Preparing small audio for upload. The full video stays on this device.');
+      uploadFile=await shrinkAudioFile(file,0,Infinity,48000);
+    }catch(prepErr){console.warn('Enhancement upload prep fell back to original file:',prepErr);uploadFile=file;}
     const useService=async(endpoint,cloud)=>{
-      const blob=await requestServer(endpoint,file,{cloud});
+      const blob=await requestServerUpload(endpoint,uploadFile,{cloud,onProgress:(pct)=>{
+        onProgress(Math.min(90,8+Math.round(pct*0.5)),pct>=100?'Upload complete. Enhancing on the server. This can take a minute.':'Uploading small audio: '+pct+'%. You can cancel.');
+      }});
       if(!(blob instanceof Blob))throw new Error('SERVICE_UNAVAILABLE');
       onProgress(100,'Processing complete. Compare with the original before applying.');
       return {blob,provider:'VoiceCut AI enhancement'};
@@ -1810,6 +1911,17 @@
     $('#noProjectUpload').addEventListener('click', ()=>$('#fileVideo').click());
     $('#noProjectOpen').addEventListener('click', ()=>openProjectById(null));
     $$('#mainNav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); location.hash = a.getAttribute('href'); }));
+    $$('a[href^="#section-"]').forEach(a => a.addEventListener('click', e => {
+      e.preventDefault();
+      const target = document.querySelector(a.getAttribute('href'));
+      if (!target) return;
+      if (!hasProject()) { announce('Upload a video first.', true); return; }
+      if (currentView !== 'editor') openEditor();
+      target.scrollIntoView({behavior: 'smooth', block: 'start'});
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.focus({preventScroll: true});
+      announce((a.getAttribute('aria-label') || 'Section').replace(/^Go to /, '') + '. Swipe to explore.');
+    }));
     window.addEventListener('hashchange', route);
 
     $('#btnCloseHelp').addEventListener('click', ()=>$('#helpDialog').close());
@@ -2212,6 +2324,11 @@
     initEvents(); initCaptions(); loadPrefs(); applyPrefsToProject(true);
     for (const key of ['voicecut_ai_server','voicecut_dolby_key','voicecut_hf_key','voicecut_replicate_key']) localStorage.removeItem(key);
     renderAll(); route();
+    if (history.length <= 1 && currentView !== 'home') {
+      const here = '#/' + currentView + hashQuery();
+      history.replaceState(null, '', '#/home');
+      history.pushState(null, '', here);
+    }
     announce('Welcome to VoiceCut Studio. Upload a video to begin editing. Screen reader optimized. Press H for help. Use Tab to navigate controls.', false, true);
     // Add hidden help shortcut
     document.addEventListener('keydown', (e)=>{ if(e.key.toLowerCase()==='h' && !e.ctrlKey && !['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')){ $('#helpDialog').showModal(); } });
