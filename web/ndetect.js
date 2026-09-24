@@ -78,9 +78,10 @@
       for (k = runStart; k < end; k++) score += wins[k].periodic;
       score /= (end - runStart);
       var ns = wins[runStart].t0, ne = wins[end - 1].t1;
+      var hz = med > 0 ? dsr / med : 0;
       var prev = regions[regions.length - 1];
       if (prev && ns - prev.end < 0.75) { prev.end = ne; prev.score = Math.max(prev.score, score); }
-      else regions.push({start: ns, end: ne, score: score});
+      else regions.push({start: ns, end: ne, score: score, hz: hz});
       runStart = -1;
     }
     for (k = 0; k <= cand.length; k++) {
@@ -89,6 +90,16 @@
     }
     regions = regions.filter(function(r) { return r.end - r.start >= 1.0; });
     var brrSeconds = regions.reduce(function(s, r) { return s + (r.end - r.start); }, 0);
+    // Engine fundamental: median region pitch, for comb notching of drone harmonics.
+    var combHz = 0;
+    if (regions.length) {
+      var hzs = regions.map(function(r) { return r.hz || 0; }).filter(function(h) { return h > 20 && h < 160; }).sort(function(x, y) { return x - y; });
+      if (hzs.length) combHz = hzs[Math.floor(hzs.length / 2)];
+    }
+    // Rough speech-to-floor ratio: median window level vs the quiet 10%.
+    // Near 0 dB the noise dominates everywhere and the cleanup cascades.
+    var floor = levels[Math.floor(levels.length * 0.1)] || 0;
+    var snrDb = (median > 1e-9 && floor > 1e-9) ? 20 * Math.log10(median / floor) : 0;
     var text;
     if (!regions.length) text = 'No steady engine-like rumble found. General background noise will still be reduced.';
     else if (regions.length <= 3) text = 'Engine-like noise found at ' + regions.map(function(r) { return fmt(r.start) + '\u2013' + fmt(r.end); }).join(', ') + '. Cleanup will work hardest there.';
@@ -109,11 +120,11 @@
     }
     return {
       regions: regions,
-      summary: {brrCount: regions.length, brrSeconds: brrSeconds, text: text},
+      summary: {brrCount: regions.length, brrSeconds: brrSeconds, text: text, combHz: combHz, snrDb: snrDb},
       strengthAt: strengthAt
     };
   }
-  var api = {scanNoise: scanNoise, version: '1.0.0'};
+  var api = {scanNoise: scanNoise, version: '1.1.0'};
   root.VoiceCutNDetect = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

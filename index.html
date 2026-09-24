@@ -296,6 +296,7 @@
         <button id="btnTrimStart" aria-label="Trim start, button">Trim Start</button>
         <button id="btnTrimEnd" aria-label="Trim end, button">Trim End</button>
         <button id="btnSplitVideo" aria-label="Split at current position, button">Split at Current Position</button>
+        <button id="btnReverseVideo" aria-label="Reverse video, button. Plays the whole video backwards">Reverse Video</button>
         <button id="btnDeleteSection" aria-label="Delete selected section, button">Delete Selected Section</button>
         <div class="flex gap-8 wrap items-center" style="grid-column:1/-1;">
           <label for="delRangeStart">Delete from</label>
@@ -310,6 +311,7 @@
         <button id="btnRotate" aria-label="Rotation settings, button">Rotate…</button>
         <button id="btnFreezeFrame" aria-label="Freeze frame settings, button">Freeze Frame…</button>
       </div>
+      <p id="reverseStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
 
       <div class="grid grid-2 mt-16">
         <div class="slider-group">
@@ -412,6 +414,7 @@
       <p id="audioHelp" style="color:var(--text2)">Each music clip is independently editable. Changing one does not affect others.</p>
       <div id="musicTracksList" class="timeline" role="list" aria-label="Music tracks list"></div>
       <button id="btnAddMusic2" class="mt-16" aria-label="Add Music, button. Adds new music track at current position">+ Add Music Track</button>
+      <button id="btnMergeAudio" class="mt-16" aria-label="Merge audio clips, button. Mixes all unmuted audio clips into one clip">Merge Audio Clips</button>
     </div>
 
     <!-- VOICE-OVER -->
@@ -607,6 +610,7 @@
           <button id="selPause" aria-label="Pause selected clip, button">Pause</button>
           <button id="selTrim" aria-label="Trim selected clip, button">Trim</button>
           <button id="selSplit" aria-label="Split selected clip at current position, button">Split</button>
+          <button id="selReverse" aria-label="Reverse selected clip audio, button">Reverse</button>
           <button id="selMoveEarlier" aria-label="Move earlier, button">Move Earlier</button>
           <button id="selMoveLater" aria-label="Move later, button">Move Later</button>
           <button id="selMoveToCurrent" aria-label="Move to current position, button">Move to Current Position</button>

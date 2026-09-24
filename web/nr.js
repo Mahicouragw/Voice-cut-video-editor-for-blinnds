@@ -148,6 +148,91 @@ async function spectralDenoise(buffer,level,onProgress,createBuffer,isCancelled)
   prog(100,'Noise reduced on this device');
   return result;
 }
-root.VoiceCutNR={spectralDenoise:spectralDenoise,LEVELS:LEVELS,version:'1.0.0'};
+/* First cascade stage for noise-dominated audio: find needle-sharp steady
+ * tones (engine firing harmonics, electrical hum, TRRR carriers) in the
+ * quietest half-second and notch only those narrow bands for the whole file.
+ * Voice harmonics wobble and smear, so they fail the sharpness test and
+ * survive; broadband noise is untouched here and left for the neural stage.
+ * Output via createBuffer factory like spectralDenoise. */
+async function notchStationaryTones(buffer,onProgress,createBuffer,isCancelled){
+  var sr=buffer.sampleRate|0,ch=Math.max(1,buffer.numberOfChannels|0),len=buffer.length|0;
+  if(!(sr>0)||!(len>0))throw new Error('Empty audio.');
+  if(typeof createBuffer!=='function')throw new Error('Output buffer factory missing.');
+  var N=2048,hop=N>>1,bins=(N>>1)+1,c,i;
+  var fft=makeFFT(N);
+  var win=new Float32Array(N);
+  for(i=0;i<N;i++)win[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/N));
+  var prog=typeof onProgress==='function'?onProgress:function(){};
+  var cancelled=typeof isCancelled==='function'?isCancelled:function(){return false;};
+  function tick(){return new Promise(function(r){setTimeout(r,0);});}
+  var inCh=[];for(c=0;c<ch;c++)inCh.push(buffer.getChannelData(c));
+  var block=Math.max(256,(sr/20)|0),bestStart=0,bestMean=Infinity,b,nBlocks;
+  nBlocks=Math.max(1,(len/block)|0);
+  for(b=0;b<nBlocks;b++){
+    var s0=b*block,s1=Math.min(len,s0+block),acc=0,n=0;
+    for(c=0;c<ch;c++){var d=inCh[c];for(i=s0;i<s1;i+=7){acc+=d[i]*d[i];n++;}}
+    var mean=n?acc/n:0;
+    if(mean<bestMean){bestMean=mean;bestStart=s0;}
+  }
+  var est=new Float32Array(bins),accP=new Float32Array(bins),primeN=0;
+  var re=new Float32Array(N),im=new Float32Array(N),f,bb;
+  var span=Math.min(len-bestStart,sr>>1);
+  var primeFrames=Math.min(24,Math.max(1,Math.ceil(span/Math.max(1,hop))));
+  for(f=0;f<primeFrames;f++){
+    var s=bestStart+f*hop;
+    for(i=0;i<N;i++){var p=s+i,v=0;if(p>=0&&p<len)for(c=0;c<ch;c++)v+=inCh[c][p];re[i]=v/ch*win[i];im[i]=0;}
+    fft.forward(re,im);
+    for(bb=0;bb<bins;bb++)accP[bb]+=Math.sqrt(re[bb]*re[bb]+im[bb]*im[bb]);
+    primeN++;
+  }
+  for(bb=0;bb<bins;bb++)est[bb]=primeN>0?accP[bb]/primeN:0;
+  var sorted=Array.prototype.slice.call(est).sort(function(x,y){return x-y;});
+  var globalMed=sorted[Math.floor(sorted.length/2)]||0;
+  var gain=new Float32Array(bins).fill(1),notched=0,jj;
+  var maxNotch=Math.floor(bins*0.04);
+  function carve(bb){
+    if(bb<2||bb>bins-3||notched>=maxNotch)return;
+    if(gain[bb]!==1)return;
+    gain[bb]=0.15;
+    if(gain[bb-1]===1)gain[bb-1]=0.35;
+    if(gain[bb+1]===1)gain[bb+1]=0.35;
+    if(bb>2&&gain[bb-2]===1)gain[bb-2]=0.7;
+    if(bb<bins-3&&gain[bb+2]===1)gain[bb+2]=0.7;
+    notched++;
+  }
+  // Auto-detect: needle peaks above a wide smoothed envelope. Dense engine
+  // harmonics cannot hide behind each other because the window spans them.
+  for(bb=2;bb<bins-2&&notched<maxNotch;bb++){
+    var arr=[];
+    for(jj=bb-25;jj<=bb+25;jj++){if(jj<2||jj>bins-3||Math.abs(jj-bb)<=1)continue;arr.push(est[jj]);}
+    arr.sort(function(x,y){return x-y;});
+    var localMed=arr.length?arr[Math.floor(arr.length/2)]:0;
+    if(est[bb]>4*Math.max(localMed,1e-9)&&est[bb]>2*globalMed)carve(bb);
+  }
+  var out=[];for(c=0;c<ch;c++)out.push(new Float32Array(len));
+  var reC=new Float32Array(N),imC=new Float32Array(N);
+  var totalFrames=Math.max(1,Math.ceil(len/hop)),framesDone=0,k,off,q,mb;
+  for(k=0;k*hop<len;k++){
+    if((k&63)===0&&cancelled())throw new Error('Cancelled');
+    s=k*hop;
+    for(c=0;c<ch;c++){
+      var src=inCh[c];
+      for(i=0;i<N;i++){var pp=s+i;reC[i]=(pp>=0&&pp<len?src[pp]:0)*win[i];imC[i]=0;}
+      fft.forward(reC,imC);
+      for(bb=0;bb<bins;bb++){reC[bb]*=gain[bb];imC[bb]*=gain[bb];}
+      for(bb=bins;bb<N;bb++){mb=N-bb;reC[bb]*=gain[mb];imC[bb]*=gain[mb];}
+      fft.inverse(reC,imC);
+      var dst=out[c];
+      for(i=0;i<N;i++){q=s+i;if(q>=0&&q<len)dst[q]+=reC[i]*win[i];}
+    }
+    framesDone++;
+    if(framesDone%50===0){prog(Math.min(99,Math.round(framesDone/totalFrames*100)),'Removing steady drone');await tick();}
+  }
+  var result=createBuffer(ch,len,sr);
+  for(c=0;c<ch;c++)result.copyToChannel(out[c],c);
+  prog(100,'Steady drone removed');
+  return {buffer:result,tones:notched};
+}
+root.VoiceCutNR={spectralDenoise:spectralDenoise,notchStationaryTones:notchStationaryTones,LEVELS:LEVELS,version:'1.2.0'};
 if(typeof module!=='undefined'&&module.exports)module.exports=root.VoiceCutNR;
 })(typeof window!=='undefined'?window:globalThis);

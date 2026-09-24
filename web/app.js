@@ -274,6 +274,7 @@
       const message=cancelled?'Caption request cancelled. Your existing captions are unchanged.':'Caption generation is temporarily unavailable. Please try again.';
       $('#captionStatus').textContent=message;announce(message,!cancelled);
       $('#btnRetryCaptions').classList.toggle('hidden',cancelled);
+      if(!cancelled)notifyComplete('Captions failed','Caption generation failed. Open the app and tap Retry.');
     }
     finally{captionRequestBusy=false;$('#btnGenerateCaptions').disabled=false;$('#btnCancelCaptions').disabled=true;}
   }
@@ -1371,10 +1372,12 @@
       $('#btnDoExport').disabled = false;
       $('#exportStatus').textContent = 'Export failed: '+e.message;
       announce('Export failed: '+e.message,true);
+      notifyComplete('Export failed','Video export failed. Open the app to try again.');
     }
   }
   function cancelExport() {
     exportCancelled = true;
+    notifyComplete('Export stopped','Video export stopped before finishing.');
     if (exportRecorder && exportRecorder.state !== 'inactive') exportRecorder.stop();
     else exportCleanup?.();
     video.pause();
@@ -1443,6 +1446,7 @@
 
   let lastCleanupEngine = 'classic';
   let lastScanReport = '';
+  let lastBuriedRescue = false;
   // Scan the whole audio (downsampled for speed) for engine-like BRR regions.
   function scanWholeAudio(buffer) {
     try{
@@ -1476,7 +1480,7 @@
   }
   // NR-2 neural cleanup: full-file scan plus a recurrent neural network that
   // removes noise as loud as the voice. Fully offline; per-channel states.
-  async function neuralCleanup(buffer, level, scan, onProgress) {
+  async function neuralCleanup(buffer, level, scan, onProgress, buriedVoice=false) {
     const NR2 = window.VoiceCutNR2;
     if (!NR2?.process48k) throw new Error('Neural engine unavailable.');
     const mixCfg = NR2.MIX[level] || NR2.MIX.medium;
@@ -1492,9 +1496,10 @@
       onProgress(5 + Math.round(c / ch * 90), 'Neural cleanup: preparing channel ' + (c + 1) + ' of ' + ch + '.');
       const up = await resampleChannel(buffer.getChannelData(c), sr, 48000);
       if (aiProcessingCancelled) throw new Error('Cancelled');
-      const r = await NR2.process48k(up, {moduleUrl, peak, mixAt,
+      const r = await NR2.process48k(up, {moduleUrl, peak, mixAt, buriedVoice,
         onProgress: (p) => onProgress(5 + Math.round((c + p) / ch * 90), 'Neural cleanup: removing noise (channel ' + (c + 1) + ' of ' + ch + ').'),
         shouldCancel: () => aiProcessingCancelled});
+      if (r.buriedBlend > 0) lastBuriedRescue = true;
       const back = await resampleChannel(r.out, 48000, sr, len);
       out.copyToChannel(back, c);
     }
@@ -1508,15 +1513,28 @@
     const scan = scanWholeAudio(buffer);
     lastScanReport = scan.report ? scan.report.summary.text : '';
     lastCleanupEngine = 'classic';
+    lastBuriedRescue = false;
+    const sum = scan.report ? scan.report.summary : null;
+    const droneFirst = !!(sum && sum.snrDb < 6 && sum.combHz > 20 && window.VoiceCutNR?.notchStationaryTones);
     if (window.VoiceCutNR2?.process48k) {
       try{
-        const result = await neuralCleanup(buffer, level, scan, onProgress);
+        let neuralInput = buffer;
+        let neuralProgress = onProgress;
+        if (droneFirst) {
+          onProgress(4, 'Very noisy audio: first removing steady drone. No upload.');
+          const st1 = await window.VoiceCutNR.notchStationaryTones(buffer, (pct) => onProgress(4 + Math.round(pct * 0.2)), (ch2, len2, sr2) => new AudioBuffer({numberOfChannels: ch2, length: len2, sampleRate: sr2}), () => aiProcessingCancelled);
+          if (aiProcessingCancelled) throw new Error('Cancelled');
+          neuralInput = st1.buffer;
+          neuralProgress = (pct, text) => onProgress(24 + Math.round(pct * 0.76), text);
+        }
+        const result = await neuralCleanup(neuralInput, level, scan, neuralProgress, droneFirst);
         if (aiProcessingCancelled) throw new Error('Cancelled');
         lastCleanupEngine = 'neural';
         onProgress(100, 'On-device neural cleanup complete. Preview before applying.');
         return result;
       }catch(e){
         if (/cancelled/i.test(e.message)) throw e;
+        lastBuriedRescue=false;
         console.warn('Neural cleanup failed; using classic cleanup:', e);
         announce('Neural engine unavailable. Used classic cleanup instead.');
       }
@@ -1593,7 +1611,117 @@
         : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again.'
         : 'Detection stopped: ' + e.message;
       statusEl.textContent = msg; announce(msg, true);
+      if(!/cancelled/i.test(e.message))notifyComplete('Gap detection stopped','Quiet-gap detection stopped before finishing. Open the app to try again.');
     } finally { cleanupBusy = false; hideSilenceProgress(); silenceTickStop(); }
+  }
+  async function reverseSelectedClipAudio() {
+    const clip = project.clips.find(c=>c.id===selectedClipId);
+    if (!clip) { announce('Select an audio clip first.', true); return; }
+    if (!(clip.file || clip.url)) { announce('Selected clip has no audio.', true); return; }
+    announce('Reversing clip audio.');
+    try {
+      const buf = await decodeAudioFile(clip.file || clip.url);
+      if (buf.duration > 600) throw new Error('Reversing is limited to 10 minutes.');
+      const rev = new AudioBuffer({numberOfChannels: buf.numberOfChannels, length: buf.length, sampleRate: buf.sampleRate});
+      for (let c = 0; c < buf.numberOfChannels; c++) {
+        const src = buf.getChannelData(c), dst = rev.getChannelData(c);
+        for (let i = 0, j = buf.length - 1; i < buf.length; i++, j--) dst[i] = src[j];
+      }
+      const blob = audioBufferToWavBlob(rev);
+      clip.file = new File([blob], (clip.name || 'clip') + ' reversed.wav', {type:'audio/wav'});
+      clip.url = URL.createObjectURL(clip.file);
+      clip.duration = buf.duration;
+      const ts = clip.trimStart || 0, te = clip.trimEnd || 0;
+      clip.trimStart = te; clip.trimEnd = ts;
+      createAudioNodeForClip(clip);
+      pushHistory(); renderAll();
+      announce('Clip audio reversed. The same section plays backwards. Undo is available.');
+    } catch(e) { announce('Could not reverse clip audio: ' + e.message, true); }
+  }
+  async function mergeAudioClips() {
+    const parts = project.clips.filter(c=>!c.muted && (c.file || c.url) && (c.type === 'music' || c.type === 'voiceover'));
+    if (parts.length < 2) { announce(parts.length === 1 ? 'Only one unmuted audio clip. Nothing to merge.' : 'No unmuted audio clips to merge.', true); return; }
+    const keptMuted = project.clips.filter(c=>c.muted).length;
+    announce(`Merging ${parts.length} audio clips.`);
+    try {
+      const decoded = [];
+      let totalEnd = 0;
+      for (const clip of parts) {
+        const buf = await decodeAudioFile(clip.file || clip.url);
+        const audible = Math.max(0, (clip.duration || buf.duration) - (clip.trimStart || 0) - (clip.trimEnd || 0));
+        const end = (clip.startTime || 0) + audible;
+        if (end > totalEnd) totalEnd = end;
+        decoded.push({clip, buf, audible});
+      }
+      if (totalEnd <= 0.01) throw new Error('Merged audio would be empty.');
+      if (totalEnd > 600) throw new Error('Merged audio is limited to 10 minutes.');
+      const sr = decoded[0].buf.sampleRate;
+      const off = new OfflineAudioContext(2, Math.max(1, Math.ceil(totalEnd * sr)), sr);
+      for (const {clip, buf, audible} of decoded) {
+        if (audible <= 0) continue;
+        const startAt = Math.max(0, clip.startTime || 0);
+        const vol = (clip.volume ?? 100) / 100;
+        const src = off.createBufferSource(); src.buffer = buf;
+        const volNode = off.createGain(); volNode.gain.value = vol;
+        const fadeNode = off.createGain(); fadeNode.gain.value = 1;
+        const fi = Math.min(Math.max(0, clip.fadeIn || 0), audible);
+        const fo = Math.min(Math.max(0, clip.fadeOut || 0), audible);
+        if (fi > 0) { fadeNode.gain.setValueAtTime(0.0001, startAt); fadeNode.gain.linearRampToValueAtTime(1, startAt + fi); }
+        if (fo > 0) { fadeNode.gain.setValueAtTime(1, Math.max(startAt, startAt + audible - fo)); fadeNode.gain.linearRampToValueAtTime(0.0001, startAt + audible); }
+        src.connect(volNode); volNode.connect(fadeNode); fadeNode.connect(off.destination);
+        src.start(startAt, Math.max(0, clip.trimStart || 0), audible);
+      }
+      const mixed = await off.startRendering();
+      const blob = audioBufferToWavBlob(mixed);
+      const ids = new Set(parts.map(c=>c.id));
+      project.clips = project.clips.filter(c=>!ids.has(c.id));
+      for (const id of ids) { const node = audioNodes.get(id); if (node) { try { node.element.pause(); } catch(e){} audioNodes.delete(id); } }
+      const clip = {id: uid(), name: 'Merged audio', type: 'music', file: new File([blob], 'merged-audio.wav', {type:'audio/wav'}), url: URL.createObjectURL(blob), startTime: 0, trimStart: 0, trimEnd: 0, duration: mixed.duration, volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'off', trackIndex: 1};
+      project.clips.push(clip);
+      createAudioNodeForClip(clip);
+      selectedClipId = clip.id;
+      pushHistory(); renderAll();
+      announce(`Merged ${parts.length} clips into one Merged audio clip. Original video sound is not included. Clip noise reduction was not applied in the merge.` + (keptMuted ? ` ${keptMuted} muted clips kept.` : ''));
+    } catch(e) { announce('Could not merge audio clips: ' + e.message, true); }
+  }
+  async function reverseVideoViaServer() {
+    if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.', true); return; }
+    if (!project.videoFile) { announce('Upload a video first.', true); return; }
+    if (project.duration > 120) { announce('Video reverse supports up to 2 minutes. Trim a shorter section first.', true); return; }
+    const statusEl = $('#reverseStatus');
+    cleanupBusy = true; aiProcessingCancelled = false;
+    video.pause(); for (const node of audioNodes.values()) node.element.pause();
+    const epoch = mediaEpoch;
+    statusEl.textContent = 'Uploading to your VoiceCut server…';
+    announce('Reversing video. Uploading to your VoiceCut server.');
+    try {
+      const file = project.videoFile;
+      if (file.size > 100 * 1024 * 1024) throw new Error('Cleanup supports media files up to 100 MB.');
+      const blob = await requestServerUpload('/api/reverse', file, {cloud:false, consent:'Upload this video to your VoiceCut server to reverse it? Maximum 2 minutes and 100 MB. Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
+        statusEl.textContent = pct>=100 ? 'Upload complete. Reversing on the server.' : 'Uploading to your VoiceCut server: '+pct+'%.';
+      }});
+      if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
+      if (window.flutter_inappwebview && blob.size <= 40 * 1024 * 1024) {
+        const base64 = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result.split(',')[1]); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
+        await window.flutter_inappwebview.callHandler('shareExport', base64, 'mp4');
+      } else {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'reversed-video.mp4';
+        a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      }
+      statusEl.textContent = 'Video reversed. Reversed file downloaded.';
+      announce('Video reversed. Reversed file downloaded. Upload it as a new project to edit it.');
+      notifyComplete('Video reversed','Your reversed video downloaded.');
+    } catch(e) {
+      const msg = /cancelled|timed out/i.test(e.message) ? 'Reversing stopped: ' + e.message
+        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again. Your media is unchanged.'
+        : 'Reversing stopped: ' + e.message;
+      statusEl.textContent = msg; announce(msg, true);
+      if(!/cancelled/i.test(e.message))notifyComplete('Video reverse stopped','Video reverse stopped before finishing. Open the app to try again.');
+    } finally { cleanupBusy = false; }
   }
   async function silenceClipWithAI() {
     const clip = project.clips.find(c=>c.id===selectedClipId);
@@ -1670,6 +1798,7 @@
         : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again. Your media is unchanged.'
         : 'Processing stopped: ' + e.message;
       statusEl.textContent = msg; announce(msg, true);
+      if(!/cancelled/i.test(e.message))notifyComplete('Silence removal stopped','Silence removal stopped before finishing. Open the app to try again.');
     } finally { cleanupBusy = false; hideSilenceProgress(); silenceTickStop(); }
   }
   let cleanupBusy = false;
@@ -1720,15 +1849,17 @@
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
       const originalUrl = URL.createObjectURL(file);
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
-      const engineName = serverResult?.provider || (lastCleanupEngine==='classic'?'On-device classic cleanup':'On-device neural cleanup');
-      const reportText = (!serverResult && lastScanReport) ? lastScanReport+' ' : '';
+      const engineName = serverResult?.provider || (lastCleanupEngine==='classic'?'On-device classic cleanup':(lastBuriedRescue?'On-device neural cleanup with buried-voice rescue':'On-device neural cleanup'));
+      const rescueText = (!serverResult && lastBuriedRescue) ? 'Buried voice rescue kept your voice audible. ' : '';
+      const reportText = (!serverResult && lastScanReport) ? lastScanReport+' '+rescueText : rescueText;
       currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:engineName,epoch};
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#aiResultText').textContent = engineName+': complete. '+reportText+'Listen before applying.';
       progress(100,'Complete'); announce('Audio processing complete. '+reportText+'Preview before applying.');
       notifyComplete('Noise reduction complete','Enhanced audio is ready. Preview before applying.');
-    } catch(e) { $('#aiProgressText').textContent = 'Processing stopped: '+e.message; announce('Processing stopped: '+e.message,true); }
+    } catch(e) { $('#aiProgressText').textContent = 'Processing stopped: '+e.message; announce('Processing stopped: '+e.message,true);
+      if(!/cancelled/i.test(e.message))notifyComplete('Noise reduction stopped','Audio cleanup stopped before finishing. Open the app to try again.'); }
     finally { cleanupBusy = false; $('#btnCloseAI').classList.remove('hidden'); }
   }
 
@@ -2091,6 +2222,8 @@
     $('#playbackSpeedSelect').addEventListener('change', (e)=>{ project.playbackSpeed=parseFloat(e.target.value); video.playbackRate=project.playbackSpeed; announce(`Playback speed set to ${e.target.value}x.`); });
 
     $('#btnSplitVideo').addEventListener('click', splitVideo);
+    $('#btnReverseVideo').addEventListener('click', reverseVideoViaServer);
+    $('#btnMergeAudio').addEventListener('click', mergeAudioClips);
     $('#btnTrimStart').addEventListener('click', trimStart);
     $('#btnTrimEnd').addEventListener('click', trimEnd);
     $('#btnSetStart').addEventListener('click', ()=>{ project.trimStart=video.currentTime; renderAll(); pushHistory(); announce(`Start set to ${formatTimeVerbose(project.trimStart)}`); });
@@ -2204,6 +2337,7 @@
       if(selectedClipId){ const n=audioNodes.get(selectedClipId); if(n) n.element.pause(); announce('Clip paused.'); }
     });
     $('#selTrim').addEventListener('click', ()=>announce('Use start and end time inputs to trim selected clip.'));
+    $('#selReverse').addEventListener('click', reverseSelectedClipAudio);
     $('#selSplit').addEventListener('click', ()=>{
       if(!selectedClipId) return;
       const clip=project.clips.find(c=>c.id===selectedClipId);

@@ -130,3 +130,36 @@ test('NR-2 mix envelope blends original and neural output', async () => {
   assert.ok(Math.abs(dryDb) < 1, `mix 0 must leave audio untouched, got ${dryDb.toFixed(1)} dB`);
   assert.ok(wetDb >= 30, `mix 1 must fully clean, got ${wetDb.toFixed(1)} dB`);
 });
+
+test('NR-2 buried-voice rescue keeps voice audible under dominating bike noise', async () => {
+  const len = SR * 4;
+  const v = voiceProxy(len, 11);
+  const nz = (function bike(len, rng) {
+    const o = new Float32Array(len); let last = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / SR, ph = 2 * Math.PI * 48 * t;
+      const w = rng() * 2 - 1; last = (last + 0.02 * w) / 1.02;
+      const chug = Math.sin(ph) + 0.7 * Math.sin(2 * ph) + 0.5 * Math.sin(3 * ph);
+      const trill = Math.sin(2 * Math.PI * 220 * t) * Math.max(0, Math.sin(2 * Math.PI * 28 * t));
+      let click = 0; const ct = t % 0.37; if (ct < 0.005) click = (rng() * 2 - 1) * Math.exp(-ct * 800);
+      o[i] = 0.5 * chug + last * 3.0 + 0.4 * trill + click * 2.0;
+    }
+    return o;
+  })(len, mulberry32(3));
+  const ce = Math.sqrt(energy(v)), ne = Math.sqrt(energy(nz));
+  const mix = new Float32Array(len);
+  for (let i = 0; i < len; i++) mix[i] = v[i] / ce * 0.1 + nz[i] / ne * 0.316; // -10 dB
+  const r = await NR2.process48k(mix, {moduleUrl: MOD, buriedVoice: true});
+  const B = Math.floor(SR * 0.2), nb = Math.floor(len / B);
+  let vIn = 0, vOut = 0, nIn = 0, nOut = 0;
+  for (let b = 0; b < nb; b++) {
+    const paused = ((b * 7919 + 11) % 7) === 0;
+    let si = 0, so = 0;
+    for (let i = b * B; i < (b + 1) * B; i++) { si += mix[i] * mix[i]; so += r.out[i] * r.out[i]; }
+    if (!paused) { vIn += si; vOut += so; } else { nIn += si; nOut += so; }
+  }
+  const pres = 10 * Math.log10(vOut / vIn), supp = -10 * Math.log10(nOut / nIn);
+  assert.ok(pres >= -6, `buried voice must stay audible (>= -6 dB), got ${pres.toFixed(1)} dB`);
+  assert.ok(supp >= 4, `extreme noise must still reduce (>= 4 dB), got ${supp.toFixed(1)} dB`);
+  assert.equal(r.buriedBlend, 0.55);
+});
