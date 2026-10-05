@@ -60,7 +60,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,fe
       }
       if(provider==='deepgram') {
         const params=new URLSearchParams({model:'nova-3',smart_format:'true',utterances:'true'});
-        if(language) params.set('language',language);
+        if(language) params.set('language',language); else params.set('detect_language','true');
         const response=await fetchImpl('https://api.deepgram.com/v1/listen?'+params,{method:'POST',headers:{Authorization:'Token '+key,'Content-Type':'audio/mpeg'},body:data,signal,redirect:'error'});
         await requireSuccess(response,'Deepgram');
         const payload=await readJSON(response,8*1024*1024,signal,'Deepgram');
@@ -73,7 +73,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,fe
       await requireSuccess(upload,'AssemblyAI');
       const audio_url=(await readJSON(upload,64*1024,signal,'AssemblyAI')).upload_url;
       if(!audio_url) throw new ServiceError(502,'BAD_TRANSCRIPT','AssemblyAI did not accept the audio upload.');
-      const created=await fetchImpl('https://api.assemblyai.com/v2/transcript',{method:'POST',headers:{Authorization:key,'Content-Type':'application/json'},body:JSON.stringify({audio_url,...(language?{language_code:language}:{})}),signal,redirect:'error'});
+      const created=await fetchImpl('https://api.assemblyai.com/v2/transcript',{method:'POST',headers:{Authorization:key,'Content-Type':'application/json'},body:JSON.stringify({audio_url,...(language?{language_code:language}:{language_detection:true})}),signal,redirect:'error'});
       await requireSuccess(created,'AssemblyAI');
       const id=(await readJSON(created,64*1024,signal,'AssemblyAI')).id;
       if(!id) throw new ServiceError(502,'BAD_TRANSCRIPT','AssemblyAI did not start transcription.');

@@ -15,6 +15,8 @@
     duration: 0,
     trimStart: 0,
     trimEnd: 0,
+    markStart: null,
+    markEnd: null,
     crop: {preset:'original',x:0,y:0,w:100,h:100},
     rotation: 0,
     freezes: [],
@@ -163,7 +165,7 @@
     pauseAllAudio();
     currentRequest?.abort(); mediaEpoch++;
     clearTimeout(autoSaveTimeout); dirty = false;
-    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
     applyPrefsToProject(true);
     selectedClipId = null;
     video.src = '';
@@ -453,7 +455,7 @@
   }
   function renderAll() {
     captionDefaults();
-    renderCaptions();renderEdit();
+    renderCaptions();renderEdit();renderMarkStatus();
     $('#projectNameInput').value = project.name;
     $('#skipAmountSelect').value = project.skipAmount;
     $('#playbackSpeedSelect').value = project.playbackSpeed;
@@ -1040,6 +1042,74 @@
     renderAll();
     announce(`Trim end set to ${formatTimeVerbose(project.trimEnd)}.`);
   }
+  // Marked range: play, stop, mark start, play, mark end, then delete/split/keep.
+  function getMarks() {
+    const rawMs = project.markStart, rawMe = project.markEnd;
+    const ms = (typeof rawMs==='number' && Number.isFinite(rawMs)) ? rawMs : null;
+    const me = (typeof rawMe==='number' && Number.isFinite(rawMe)) ? rawMe : null;
+    return {ms, me};
+  }
+  function renderMarkStatus() {
+    const el = $('#markStatus');
+    if (!el) return;
+    const {ms, me} = getMarks();
+    if (ms===null && me===null) el.textContent = 'No marked part yet. Play the video, stop where the part starts, and press Select as Start Time.';
+    else if (ms!==null && me===null) el.textContent = `Start marked at ${formatTimeVerbose(ms)}. Play to where the part ends and press Select as End Time.`;
+    else if (ms===null) el.textContent = `End marked at ${formatTimeVerbose(me)}. Press Select as Start Time to mark where the part starts.`;
+    else el.textContent = `Marked part: ${formatTimeVerbose(ms)} to ${formatTimeVerbose(me)}, length ${formatTimeVerbose(me-ms)}. Choose Delete Marked Part, Split at Marks, or Keep Only Marked Part.`;
+  }
+  function markStartPoint() {
+    if (!project.videoFile && !project.duration) { announce('Upload a video first.', true); return; }
+    const pos = Math.round(video.currentTime*100)/100;
+    project.markStart = pos;
+    if (project.markEnd!==null && project.markEnd!==undefined && project.markEnd<=pos) project.markEnd = null;
+    pushHistory(); renderMarkStatus();
+    const {me} = getMarks();
+    announce(me===null?`Start time selected: ${formatTimeVerbose(pos)}. Now play to the end and press Select as End Time.`:`Marked part updated: ${formatTimeVerbose(pos)} to ${formatTimeVerbose(me)}.`);
+  }
+  function markEndPoint() {
+    if (!project.videoFile && !project.duration) { announce('Upload a video first.', true); return; }
+    const pos = Math.round(video.currentTime*100)/100;
+    const {ms} = getMarks();
+    if (ms===null) { announce('Select a start time first.', true); return; }
+    if (pos<=ms) { announce(`End must be after the start at ${formatTimeVerbose(ms)}. Play further and try again.`, true); return; }
+    project.markEnd = pos;
+    pushHistory(); renderMarkStatus();
+    announce(`End time selected: ${formatTimeVerbose(pos)}. Marked part ${formatTimeVerbose(ms)} to ${formatTimeVerbose(pos)}. Choose Delete, Split or Keep.`);
+  }
+  function clearMarks() { project.markStart=null; project.markEnd=null; pushHistory(); renderMarkStatus(); announce('Marked times cleared.'); }
+  function validMarks() {
+    const {ms, me} = getMarks();
+    if (ms===null || me===null) { announce('Mark a start and an end time first. Play the video and use Select as Start Time and Select as End Time.', true); return null; }
+    if (me-ms<0.05) { announce('Marked part is too short. Mark a longer part.', true); return null; }
+    return {ms, me};
+  }
+  function deleteMarkedPart() {
+    const m = validMarks(); if (!m) return;
+    try {
+      const pieces = VoiceCutCore.deleteRange(project, m.ms, m.me);
+      project.segments = pieces.map(s=>({...s, id:uid(), label:'Segment'}));
+      selectedClipId = null; pushHistory(); renderAll();
+      announce(`Deleted ${formatTimeVerbose(m.ms)} to ${formatTimeVerbose(m.me)}. Export will skip it. Undo is available.`);
+    } catch(e) { announce(e.message, true); }
+  }
+  function splitMarkedPart() {
+    const m = validMarks(); if (!m) return;
+    try {
+      project.segments = VoiceCutCore.splitAt(project, m.ms).map(s=>({...s, id:uid(), label:'Segment'}));
+      project.segments = VoiceCutCore.splitAt(project, m.me).map(s=>({...s, id:uid(), label:'Segment'}));
+      const mid = project.segments.find(s=>Math.abs(s.start-m.ms)<0.02 && Math.abs(s.end-m.me)<0.02);
+      selectedClipId = mid?mid.id:null;
+      pushHistory(); renderAll();
+      announce(`Split at ${formatTimeVerbose(m.ms)} and ${formatTimeVerbose(m.me)}. The marked part is now its own section${mid?' and is selected':''}.`);
+    } catch(e) { announce(e.message, true); }
+  }
+  function keepMarkedPart() {
+    const m = validMarks(); if (!m) return;
+    project.trimStart = m.ms; project.trimEnd = m.me;
+    pushHistory(); renderAll();
+    announce(`Kept only ${formatTimeVerbose(m.ms)} to ${formatTimeVerbose(m.me)}. The rest will not export. Undo is available.`);
+  }
 
   // Selected clip controls
   function updateSelectedClipVolume(vol) {
@@ -1387,6 +1457,33 @@
   let aiProcessingCancelled = false;
   let currentAIJob = null;
 
+  // User balance: residual = fraction of the original (noise left in the
+  // result), boost = voice gain 0..1. Gain never reduces loud audio and the
+  // peak is capped so boosting cannot distort.
+  function applyNoiseVoiceBalance(origBuf, cleanBuf, residual, boost) {
+    const sr = cleanBuf.sampleRate, len = cleanBuf.length, ch = cleanBuf.numberOfChannels;
+    const out = new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr});
+    const canMix = !!(origBuf && origBuf.sampleRate===sr && origBuf.numberOfChannels===ch && residual>0);
+    const oLen = canMix ? origBuf.length : 0;
+    for (let c=0;c<ch;c++) {
+      const dst = out.getChannelData(c), cl = cleanBuf.getChannelData(c);
+      const og = canMix ? origBuf.getChannelData(c) : null;
+      for (let i=0;i<len;i++) {
+        const o = og ? (i<oLen?og[i]:0) : 0;
+        dst[i] = og ? cl[i]*(1-residual)+o*residual : cl[i];
+      }
+    }
+    if (boost>0) {
+      let peak = 0;
+      for (let c=0;c<ch;c++) { const d = out.getChannelData(c); for (let i=0;i<len;i++) { const a=Math.abs(d[i]); if(a>peak)peak=a; } }
+      const g = 1+boost;
+      const gg = peak>0 ? Math.max(1, Math.min(g, 0.98/peak)) : g;
+      if (gg!==1) for (let c=0;c<ch;c++) { const d = out.getChannelData(c); for (let i=0;i<len;i++) d[i]*=gg; }
+    }
+    return out;
+  }
+  function getNoiseLeft() { const v = Number($('#noiseLeftSlider')?.value); return Number.isFinite(v)?Math.max(0,Math.min(100,v)):31; }
+  function getSpeechBoost() { const v = Number($('#speechBoostSlider')?.value); return Number.isFinite(v)?Math.max(0,Math.min(100,v)):70; }
   // Convert AudioBuffer to WAV Blob (real audio processing)
   function audioBufferToWavBlob(buffer) {
     const numChannels = buffer.numberOfChannels;
@@ -1601,9 +1698,10 @@
       if(aiProcessingCancelled)throw new Error('Cancelled');
       if(!(result&&typeof result==='object'))throw new Error('SERVICE_UNAVAILABLE');
       const gaps=Array.isArray(result.gaps)?result.gaps:[];
+      const sensNote=Number(result.thresholdDb||-30)>-30?' High sensitivity was used because of background noise.':'';
       const fmtT=(t)=>{const m=Math.floor(t/60),s2=Math.floor(t%60);return m+':'+String(s2).padStart(2,'0');};
       const message=gaps.length
-        ?`Found ${gaps.length} quiet ${gaps.length===1?'gap':'gaps'} (${result.removedSeconds} seconds total): `+gaps.slice(0,8).map(g=>fmtT(g[0])+' to '+fmtT(g[1])).join(', ')+(gaps.length>8?', and more':'')+'. Tap Remove Silence to cut them out.'
+        ?`Found ${gaps.length} quiet ${gaps.length===1?'gap':'gaps'} (${result.removedSeconds} seconds total): `+gaps.slice(0,8).map(g=>fmtT(g[0])+' to '+fmtT(g[1])).join(', ')+(gaps.length>8?', and more':'')+'. Tap Remove Silence to cut them out.'+sensNote
         :`No quiet gaps longer than ${seconds} seconds found.`;
       statusEl.textContent=message;announce(message);
     } catch(e) {
@@ -1756,8 +1854,9 @@
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
       const removed = Number(lastResponseHeaders?.get('X-Silence-Removed') || 0);
       const secs = Number(lastResponseHeaders?.get('X-Silence-Seconds') || 0);
+      const sensNote2 = removed > 0 && Number(lastResponseHeaders?.get('X-Silence-Threshold') || -30) > -30 ? ' High sensitivity was used because of background noise.' : '';
       const message = removed > 0
-        ? `Removed ${removed} silent ${removed === 1 ? 'gap' : 'gaps'}. Media is shorter by ${secs.toFixed(1)} seconds.`
+        ? `Removed ${removed} silent ${removed === 1 ? 'gap' : 'gaps'}. Media is shorter by ${secs.toFixed(1)} seconds.` + sensNote2
         : `No quiet gaps longer than ${seconds} seconds found. Background noise may be filling the pauses; try noise reduction first.`;
       if (!clipId) {
         if (removed > 0) {
@@ -1833,17 +1932,31 @@
       progress(0,'Preparing audio');
       const file = input instanceof Blob ? input : await (await fetch(input)).blob();
       if (file.size > 100 * 1024 * 1024) throw new Error('Cleanup supports media files up to 100 MB.');
-      let enhancedBlob, enhancedBuffer;
+      let enhancedBlob, enhancedBuffer, originalBuffer = null;
       const serverResult = await enhanceWithRealAI(file,level,progress);
       if (aiProcessingCancelled) throw new Error('Cancelled');
       if (serverResult) {
         enhancedBlob = serverResult.blob; enhancedBuffer = await decodeAudioFile(enhancedBlob);
       } else {
         progress(5,'Decoding audio. Some video codecs cannot be decoded by Web Audio.');
-        const original = await decodeAudioFile(file);
+        originalBuffer = await decodeAudioFile(file);
         if (aiProcessingCancelled) throw new Error('Cancelled');
-        enhancedBuffer = await processAudioBufferWithAI(original,level,progress);
+        enhancedBuffer = await processAudioBufferWithAI(originalBuffer,level,progress);
         enhancedBlob = audioBufferToWavBlob(enhancedBuffer);
+      }
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      const noiseLeft = getNoiseLeft(), speechBoost = getSpeechBoost();
+      if (noiseLeft>0 || speechBoost>0) {
+        progress(96,'Applying your noise and voice balance');
+        try {
+          if (!originalBuffer) originalBuffer = await decodeAudioFile(file);
+          if (aiProcessingCancelled) throw new Error('Cancelled');
+          enhancedBuffer = applyNoiseVoiceBalance(originalBuffer, enhancedBuffer, noiseLeft/100, speechBoost/100);
+          enhancedBlob = audioBufferToWavBlob(enhancedBuffer);
+        } catch(e) {
+          if (/cancelled/i.test(e.message)) throw e;
+          console.warn('Noise/voice balance skipped:', e);
+        }
       }
       if (aiProcessingCancelled) throw new Error('Cancelled');
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
@@ -1983,6 +2096,10 @@
     if(p.captionBurn!==undefined)$('#settingCaptionBurn').checked=!!p.captionBurn;
     if(p.notifications!==undefined)$('#settingNotifications').checked=!!p.notifications;
     if(p.captionLanguage!==undefined)$('#captionLanguage').value=p.captionLanguage;
+    if(p.noiseLeft!==undefined)$('#noiseLeftSlider').value=p.noiseLeft;
+    if(p.speechBoost!==undefined)$('#speechBoostSlider').value=p.speechBoost;
+    $('#noiseLeftValue').textContent=$('#noiseLeftSlider').value+'%';
+    $('#speechBoostValue').textContent=$('#speechBoostSlider').value+'%';
   }
   function notificationsEnabled(){return userPrefs().notifications===true;}
   function notifyComplete(title,body){
@@ -2222,6 +2339,12 @@
     $('#playbackSpeedSelect').addEventListener('change', (e)=>{ project.playbackSpeed=parseFloat(e.target.value); video.playbackRate=project.playbackSpeed; announce(`Playback speed set to ${e.target.value}x.`); });
 
     $('#btnSplitVideo').addEventListener('click', splitVideo);
+    $('#btnMarkStart').addEventListener('click', markStartPoint);
+    $('#btnMarkEnd').addEventListener('click', markEndPoint);
+    $('#btnClearMarks').addEventListener('click', clearMarks);
+    $('#btnDeleteMarked').addEventListener('click', deleteMarkedPart);
+    $('#btnSplitMarked').addEventListener('click', splitMarkedPart);
+    $('#btnKeepMarked').addEventListener('click', keepMarkedPart);
     $('#btnReverseVideo').addEventListener('click', reverseVideoViaServer);
     $('#btnMergeAudio').addEventListener('click', mergeAudioClips);
     $('#btnTrimStart').addEventListener('click', trimStart);
@@ -2490,7 +2613,7 @@
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
         await VoiceCutStorage.remove(project.id);
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.src='';
         $('#videoPlaceholder').classList.remove('hidden');
@@ -2509,6 +2632,10 @@
     $('#settingReducedMotion').addEventListener('change', (e)=>{ document.documentElement.setAttribute('data-reduced-motion', e.target.checked); announce(`Reduced motion ${e.target.checked?'enabled':'disabled'}.`); });
     $('#settingDefaultSkip').addEventListener('change', (e)=>{ project.skipAmount=parseInt(e.target.value); $('#skipAmountSelect').value=e.target.value; announce(`Default skip amount set to ${e.target.value} seconds.`); });
     $('#settingDefaultVolume').addEventListener('input', (e)=>{ $('#settingDefaultVolumeVal').textContent=e.target.value+'%'; });
+    $('#noiseLeftSlider').addEventListener('input', (e)=>{ $('#noiseLeftValue').textContent=e.target.value+'%'; });
+    $('#noiseLeftSlider').addEventListener('change', (e)=>{ savePrefs({noiseLeft:Number(e.target.value)}); announce(`Background noise left at ${e.target.value} percent.`); });
+    $('#speechBoostSlider').addEventListener('input', (e)=>{ $('#speechBoostValue').textContent=e.target.value+'%'; });
+    $('#speechBoostSlider').addEventListener('change', (e)=>{ savePrefs({speechBoost:Number(e.target.value)}); announce(`Speech enhancement ${e.target.value} percent.`); });
     $('#settingSimpleMode').addEventListener('change', (e)=>{
       if(e.target.checked){ advancedMode=false; $('#modeBadge').textContent='Simple Mode'; announce('Simple editing mode enabled. Main controls: Upload Video, Add Music, Record Voice-over, Play/Pause, Trim, Split, Volume, Noise Reduction, Undo, Redo, Export.'); }
       else { advancedMode=true; $('#modeBadge').textContent='Advanced Mode'; announce('Advanced editing mode enabled. Multiple tracks, precise timeline, fades, ducking, noise reduction strength, playback speed, detailed export.'); }

@@ -115,27 +115,51 @@ const path = require('node:path');
     assert.equal(await page.locator('#editorScreen:not(.hidden)').count(),1);
   }
   // Real on-device neural cleanup (no backend configured), replacing original track.
+  const setBalance = (noise, speech) => page.evaluate(([n, s]) => {
+    for (const [sel, val] of [['#noiseLeftSlider', n], ['#speechBoostSlider', s]]) {
+      const el = document.querySelector(sel); el.value = String(val);
+      el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+  }, [noise, speech]);
+  const measureCleanup = () => page.evaluate(async()=>{
+    const statsOf = async (url) => {
+      const raw = await (await fetch(url)).arrayBuffer();
+      const C = new (window.AudioContext || window.webkitAudioContext)();
+      try{
+        const ab = await C.decodeAudioData(raw);
+        const d = ab.getChannelData(0); let s = 0, peak = 0;
+        for (let i = 0; i < d.length; i++) { s += d[i] * d[i]; const a = Math.abs(d[i]); if (a > peak) peak = a; }
+        return {energy: s / Math.max(1, d.length), peak};
+      } finally { try{await C.close();}catch(e){} }
+    };
+    const e = await statsOf(document.querySelector('#aiEnhancedAudio').src);
+    const o = await statsOf(document.querySelector('#aiOriginalAudio').src);
+    return {ratio: e.energy / o.energy, peak: e.peak};
+  });
+  // Neutral balance: the engine itself must preserve a clean tone.
+  await setBalance(0, 0);
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
   await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('neural cleanup'),{},{timeout:60000});
   assert.match(await page.locator('#aiResultText').textContent(),/No steady engine-like rumble/);
   {
-    const ratio = await page.evaluate(async()=>{
-      const energyOf = async (url) => {
-        const raw = await (await fetch(url)).arrayBuffer();
-        const C = new (window.AudioContext || window.webkitAudioContext)();
-        try{
-          const ab = await C.decodeAudioData(raw);
-          const d = ab.getChannelData(0); let s = 0;
-          for (let i = 0; i < d.length; i++) s += d[i] * d[i];
-          return s / Math.max(1, d.length);
-        } finally { try{await C.close();}catch(e){} }
-      };
-      const e = await energyOf(document.querySelector('#aiEnhancedAudio').src);
-      const o = await energyOf(document.querySelector('#aiOriginalAudio').src);
-      return e / o;
-    });
+    const {ratio, peak} = await measureCleanup();
     assert.ok(ratio > 0.25 && ratio < 2, 'neural cleanup must preserve a clean tone (ratio ' + ratio + ')');
+    assert.ok(peak <= 1.0, 'cleaned audio must not clip (peak ' + peak + ')');
+  }
+  // User balance 31/70: voice gets louder, never clips.
+  await page.locator('#btnCloseAI').click();
+  await page.waitForFunction(()=>!document.querySelector('#aiProcessingDialog').open);
+  await setBalance(31, 70);
+  {
+    const srcBefore = await page.locator('#aiEnhancedAudio').getAttribute('src');
+    await page.locator('#btnAIEnhanceOriginal').click();
+    await page.waitForFunction((s)=>document.querySelector('#aiEnhancedAudio').src!==s, srcBefore, {timeout:60000});
+    await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('neural cleanup'),{},{timeout:60000});
+    const boosted = await measureCleanup();
+    assert.ok(boosted.ratio > 1, 'speech enhancement must make the voice louder (ratio ' + boosted.ratio + ')');
+    assert.ok(boosted.ratio < 3.5, 'speech enhancement must stay bounded (ratio ' + boosted.ratio + ')');
+    assert.ok(boosted.peak <= 1.0, 'boosted audio must not clip (peak ' + boosted.peak + ')');
   }
   await page.locator('#btnApplyEnhanced').click();
   assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
@@ -265,6 +289,32 @@ const path = require('node:path');
     assert.ok(fs.statSync(file).size>1000);
   }
   await page.waitForFunction(()=>document.querySelector('#reverseStatus').textContent.includes('Video reversed'));
+  // Marked range: mark start/end at the playhead, then split, delete, keep.
+  await page.locator('#mainVideo').evaluate(v=>{v.currentTime=0.5;});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>=0.4);
+  await page.locator('#btnMarkStart').click();
+  await page.waitForFunction(()=>document.querySelector('#markStatus').textContent.includes('Start marked'));
+  await page.locator('#mainVideo').evaluate(v=>{v.currentTime=1.5;});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>=1.4);
+  await page.locator('#btnMarkEnd').click();
+  await page.waitForFunction(()=>document.querySelector('#markStatus').textContent.includes('Marked part'));
+  await page.locator('#btnSplitMarked').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Split at'));
+  assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].filter(el=>(el.getAttribute('aria-label')||'').startsWith('Video Segment')).length),3);
+  await page.locator('#btnDeleteMarked').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Deleted'));
+  await page.locator('#btnUndo').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Undo successful'));
+  await page.locator('#btnKeepMarked').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Kept only'));
+  await page.locator('#btnUndo').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Undo successful'));
+  await page.locator('#btnUndo').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Undo successful'));
+  assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].filter(el=>(el.getAttribute('aria-label')||'').startsWith('Video Segment')).length),1);
+  // Noise/voice balance sliders default to 31/70.
+  assert.equal(await page.locator('#noiseLeftSlider').inputValue(),'31');
+  assert.equal(await page.locator('#speechBoostSlider').inputValue(),'70');
   // Crop, rotate, and freeze-frame controls update the edit summary.
   await page.locator('#cropPreset').selectOption('1:1');
   await page.waitForFunction(()=>document.querySelector('#cropSummary').textContent.includes('1:1'));
@@ -331,6 +381,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -30,3 +30,17 @@ test('deleteRange refuses whole-video and invalid ranges',()=>{
  assert.throws(()=>deleteRange(p,8,20));
  assert.throws(()=>deleteRange(p,-1,2));
 });
+test('splitAt divides the containing segment at the playhead point',()=>{
+ const p={trimStart:0,trimEnd:10,duration:10,segments:[{start:0,end:10}]};
+ assert.deepEqual(VoiceCutCore.splitAt(p,4),[{start:0,end:4},{start:4,end:10}]);
+});
+test('splitAt leaves boundary points alone and rejects outside points',()=>{
+ const p={trimStart:1,trimEnd:9,duration:10,segments:[{start:1,end:5},{start:5,end:9}]};
+ assert.deepEqual(VoiceCutCore.splitAt(p,5),[{start:1,end:5},{start:5,end:9}]);
+ assert.throws(()=>VoiceCutCore.splitAt(p,0.5));
+ assert.throws(()=>VoiceCutCore.splitAt(p,9.5));
+});
+test('splitAt works when segments are empty by using the trimmed range',()=>{
+ const p={trimStart:2,trimEnd:8,duration:10,segments:[]};
+ assert.deepEqual(VoiceCutCore.splitAt(p,6),[{start:2,end:6},{start:6,end:8}]);
+});

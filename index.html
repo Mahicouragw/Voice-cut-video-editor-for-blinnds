@@ -305,6 +305,17 @@
           <input id="delRangeEnd" type="text" value="00:00" aria-label="Delete range end time, text input" style="width:90px;">
           <button id="btnDeleteRange" class="danger" aria-label="Delete typed time range, button">Delete This Range</button>
         </div>
+        <div class="flex gap-8 wrap items-center" style="grid-column:1/-1;">
+          <button id="btnMarkStart" aria-label="Select current position as start time, button">Select as Start Time</button>
+          <button id="btnMarkEnd" aria-label="Select current position as end time, button">Select as End Time</button>
+          <button id="btnClearMarks" aria-label="Clear marked start and end times, button">Clear Marks</button>
+        </div>
+        <p id="markStatus" role="status" style="grid-column:1/-1; font-size:14px; margin:4px 0;">No marked part yet. Play the video, stop where the part starts, and press Select as Start Time.</p>
+        <div class="flex gap-8 wrap items-center" style="grid-column:1/-1;">
+          <button id="btnDeleteMarked" class="danger" aria-label="Delete marked part, button">Delete Marked Part</button>
+          <button id="btnSplitMarked" aria-label="Split at marked start and end, button">Split at Marks</button>
+          <button id="btnKeepMarked" aria-label="Keep only marked part, button">Keep Only Marked Part</button>
+        </div>
         <button id="btnKeepSection" aria-label="Keep selected section, button">Keep Selected Section</button>
         <button id="btnDuplicateSegment" aria-label="Duplicate segment, button">Duplicate Segment</button>
         <button id="btnCrop" aria-label="Crop settings, button">Crop…</button>
@@ -557,6 +568,18 @@
           <button id="btnAIEnhanceSelected" aria-label="Reduce Noise - Audio Enhance Selected Clip, button. Process selected clip to remove noise">🤖 Enhance Selected Clip</button>
           <button id="btnAIEnhanceAllVoice" aria-label="Audio Enhance All Voice-overs, button. Process all voice-over tracks" disabled title="Process one clip at a time and preview before applying">🤖 Enhance All Voice-overs</button>
           <button id="btnAIEnhanceAll" aria-label="Audio Enhance All Audio Tracks, button" disabled title="Process one clip at a time and preview before applying">🤖 Enhance All Audio</button>
+        </div>
+        <div class="grid grid-2 mt-8">
+          <div>
+            <label for="noiseLeftSlider">Background noise left in result: <span id="noiseLeftValue">31%</span></label>
+            <input id="noiseLeftSlider" type="range" min="0" max="100" value="31" aria-label="Background noise left in result slider. Lower means cleaner audio">
+            <div style="font-size:12px; color:var(--text3);">Lower removes more noise. 0% keeps only the cleaned voice.</div>
+          </div>
+          <div>
+            <label for="speechBoostSlider">Speech enhancement: <span id="speechBoostValue">70%</span></label>
+            <input id="speechBoostSlider" type="range" min="0" max="100" value="70" aria-label="Speech enhancement slider. Higher means louder, clearer voice">
+            <div style="font-size:12px; color:var(--text3);">Higher makes the voice louder. The app prevents distortion automatically.</div>
+          </div>
         </div>
         <div class="mt-8" style="font-size:12px; color:var(--text3);">Automatic mode may upload audio to the secure VoiceCut service with your approval. Results vary.</div>
       </div>

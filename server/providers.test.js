@@ -60,3 +60,19 @@ test('unknown or unconfigured caption provider fails locally with exact key name
  await assert.rejects(p.transcribe(file,'',new AbortController().signal,'deepgram'),e=>e.code==='KEY_NOT_CONFIGURED'&&e.message.includes('DEEPGRAM_API_KEY'));
  assert.equal(calls,0);
 }));
+test('Deepgram auto language sends detect_language instead of defaulting to English',()=>withFile(async file=>{
+ const p=createProviders({deepgramKey:'PRIVATE-DEEPGRAM',fetchImpl:async(url)=>{
+  const parsed=new URL(url);assert.equal(parsed.searchParams.get('detect_language'),'true');assert.equal(parsed.searchParams.get('language'),null);
+  return Response.json({results:{channels:[{detected_language:'te',alternatives:[{words:[{word:'oka',start:0,end:0.5}]}]}]}});
+ }});
+ assert.equal((await p.transcribe(file,'',new AbortController().signal,'deepgram')).language,'te');
+}));
+test('AssemblyAI auto language enables language_detection',()=>withFile(async file=>{
+ const p=createProviders({assemblyKey:'PRIVATE-ASSEMBLY',fetchImpl:async(url,request)=>{
+  const target=String(url);
+  if(target.endsWith('/v2/upload'))return Response.json({upload_url:'https://assembly.ai/audio'});
+  if(target.endsWith('/v2/transcript')&&request.method==='POST'){assert.equal(JSON.parse(request.body).language_detection,true);return Response.json({id:'job9'});}
+  return Response.json({status:'completed',language_code:'hi',words:[]});
+ }});
+ assert.equal((await p.transcribe(file,'',new AbortController().signal,'assemblyai')).language,'hi');
+}));
