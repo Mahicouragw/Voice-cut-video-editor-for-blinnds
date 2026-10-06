@@ -50,7 +50,22 @@
     }
     return out.filter(s => s.end - s.start >= 0.01);
   }
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange };
+  // Split the segment containing pos into two pieces at pos. Pure: returns
+  // new {start,end} pieces without ids. Points on a boundary are a no-op.
+  function splitAt(project, pos) {
+    const p = Number(pos);
+    const start = Number(project.trimStart), end = Number(project.trimEnd || project.duration);
+    if (!Number.isFinite(p) || p <= start || p >= end)
+      throw new Error('Split point must be inside the trimmed video.');
+    const segs = (project.segments && project.segments.length) ? project.segments : [{start, end}];
+    const out = [];
+    for (const s of segs) {
+      if (p > s.start + 0.001 && p < s.end - 0.001) out.push({start: s.start, end: p}, {start: p, end: s.end});
+      else out.push({start: s.start, end: s.end});
+    }
+    return out;
+  }
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

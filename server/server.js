@@ -47,7 +47,7 @@ function createApp(options={}) {
       res.set('Access-Control-Allow-Origin',req.headers.origin);res.set('Vary','Origin');
       res.set('Access-Control-Allow-Headers','Authorization, Content-Type, X-Upload-Consent');
       res.set('Access-Control-Allow-Methods','POST, GET, OPTIONS');
-      res.set('Access-Control-Expose-Headers','X-Processing-Method, X-Silence-Removed, X-Silence-Seconds');
+      res.set('Access-Control-Expose-Headers','X-Processing-Method, X-Silence-Removed, X-Silence-Seconds, X-Silence-Threshold');
     }
     if(req.method==='OPTIONS') return res.sendStatus(204);
     next();
@@ -143,19 +143,30 @@ function createApp(options={}) {
       const downloadName=((kind==='silence'||kind==='reverse')&&hasVideo)?(kind==='reverse'?'reversed-video.mp4':'silence-removed.mp4'):(kind==='reverse'?'reversed-audio.wav':'processed.wav');
       if(kind==='silence') {
         // Real silence removal: detect quiet gaps, cut them from audio AND video.
-        const detect=await runStderr(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','info','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-af',`silencedetect=noise=-30dB:d=${silenceSeconds}`,'-vn','-sn','-dn','-f','null','-']);
-        signal.throwIfAborted();
-        const gaps=[];let pending=null;
-        for(const line of detect.split('\n')){
-          let m=/silence_start:\s*([0-9.]+)/.exec(line);if(m){pending=Number(m[1]);continue;}
-          m=/silence_end:\s*([0-9.]+)/.exec(line);if(m&&pending!==null){gaps.push([pending,Number(m[1])]);pending=null;}
+        // Phone recordings have noisy pauses, so the threshold escalates until
+        // gaps appear (-30dB studio-quiet up to -20dB noisy background). The
+        // -20dB cap protects soft speech from being cut.
+        const ff=process.env.FFMPEG_PATH||'ffmpeg';
+        let silent=[],thresholdDb=-30;
+        for(const db of [-30,-25,-20]){
+          const out=await runStderr(ff,['-nostdin','-v','info','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-af',`silencedetect=noise=${db}dB:d=${silenceSeconds}`,'-vn','-sn','-dn','-f','null','-']);
+          signal.throwIfAborted();
+          const gaps=[];let pending=null;
+          for(const line of out.split('\n')){
+            let m=/silence_start:\s*([0-9.]+)/.exec(line);if(m){pending=Number(m[1]);continue;}
+            m=/silence_end:\s*([0-9.]+)/.exec(line);if(m&&pending!==null){gaps.push([pending,Number(m[1])]);pending=null;}
+          }
+          if(pending!==null)gaps.push([pending,duration]);
+          // Keep 0.1s of padding at each gap edge so word starts/ends survive.
+          silent=gaps.filter(([a,b])=>Number.isFinite(a)&&Number.isFinite(b)&&b-a>=silenceSeconds-0.05&&a<duration)
+            .map(([a,b])=>[Math.max(0,a+0.1),b-0.1]).filter(([a,b])=>b-a>=0.2);
+          thresholdDb=db;
+          if(silent.length)break;
         }
-        if(pending!==null)gaps.push([pending,duration]);
-        const silent=gaps.filter(([a,b])=>Number.isFinite(a)&&Number.isFinite(b)&&b-a>=silenceSeconds-0.05&&a<duration);
         if(req.query.detect) {
           // Fast preview: report gaps without trimming anything.
           const removedSeconds=silent.reduce((t,[a,b])=>t+Math.max(0,Math.min(duration,b)-Math.max(0,a)),0);
-          res.json({gaps:silent.map(([a,b])=>[Number(Math.max(0,a).toFixed(2)),Number(Math.min(duration,b).toFixed(2))]),gapCount:silent.length,removedSeconds:Number(removedSeconds.toFixed(1)),duration:Number(duration.toFixed(2))});
+          res.json({gaps:silent.map(([a,b])=>[Number(Math.max(0,a).toFixed(2)),Number(Math.min(duration,b).toFixed(2))]),gapCount:silent.length,removedSeconds:Number(removedSeconds.toFixed(1)),duration:Number(duration.toFixed(2)),thresholdDb});
           cleanup();return;
         }
         const kept=[];let cursor=0,removed=0;
@@ -178,6 +189,7 @@ function createApp(options={}) {
         if(!Number.isFinite(trimmed)||Math.abs(trimmed-expected)>Math.max(1.0,expected*0.05))throw new ServiceError(502,'TRIM_MISMATCH','Trimmed media duration changed unexpectedly. Not applied; retain your original.');
         res.set('X-Silence-Removed',String(silent.length));
         res.set('X-Silence-Seconds',removed.toFixed(1));
+        res.set('X-Silence-Threshold',String(thresholdDb));
       } else if(kind==='reverse') {
         // Whole-file reverse. The reverse filter buffers entire streams, so
         // video is reversed in short memory-safe chunks joined back to front.
