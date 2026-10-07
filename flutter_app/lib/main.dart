@@ -123,7 +123,10 @@ class _EditorPageState extends State<EditorPage> {
         },
         onPermissionRequest: (controller, request) async {
           final trusted = request.origin.origin == siteOrigin;
-          const captureResources = {PermissionResourceType.CAMERA, PermissionResourceType.MICROPHONE};
+          final captureResources = <PermissionResourceType>{
+            PermissionResourceType.CAMERA,
+            PermissionResourceType.MICROPHONE,
+          };
           final supportedRequest = request.resources.isNotEmpty && request.resources.every(captureResources.contains);
           if (!trusted || !supportedRequest) {
             return PermissionResponse(resources: request.resources, action: PermissionResponseAction.DENY);

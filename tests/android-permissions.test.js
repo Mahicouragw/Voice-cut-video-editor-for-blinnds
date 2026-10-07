@@ -24,6 +24,7 @@ test('Android source declares only the app permissions it uses and keeps camera 
 test('WebView camera and microphone grants remain restricted to the VoiceCut origin', () => {
   assert.match(wrapper, /const siteOrigin = 'https:\/\/mahicouragw\.github\.io'/);
   assert.match(wrapper, /request\.origin\.origin == siteOrigin/);
+  assert.match(wrapper, /final captureResources = <PermissionResourceType>\{/);
   assert.match(wrapper, /request\.resources\.every\(captureResources\.contains\)/);
   assert.match(wrapper, /Permission\.camera\.request\(\)/);
   assert.match(wrapper, /Permission\.microphone\.request\(\)/);
