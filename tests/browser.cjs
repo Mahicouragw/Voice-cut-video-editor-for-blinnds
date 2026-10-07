@@ -56,6 +56,10 @@ const path = require('node:path');
   await page.locator('#settingsScreen:not(.hidden)').waitFor();
   await page.locator('#settingCaptionLanguage').selectOption('en');
   assert.equal(await page.locator('#captionLanguage').inputValue(),'en');
+  await page.locator('#settingTextSize').selectOption('extra');
+  assert.equal(await page.evaluate(()=>document.documentElement.style.zoom),'1.3');
+  await page.locator('#settingTextSize').selectOption('normal');
+  assert.equal(await page.evaluate(()=>document.documentElement.style.zoom),'1');
   // Completion notifications: permission-gated pref, hidden-tab-only, app bridge contract.
   await page.context().grantPermissions(['notifications']);
   await page.locator('#settingNotifications').check();
@@ -379,8 +383,26 @@ const path = require('node:path');
   await page.locator('#libraryEmpty:not([style*="none"])').waitFor();
   await page.goto('http://127.0.0.1:3099/#/editor');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
+  // Record video with the camera: dialog, countdown, stop, review, use as project.
+  await page.goto('http://127.0.0.1:3099');
+  await page.locator('#homeScreen:not(.hidden)').waitFor();
+  await page.locator('#homeRecordVideo').click();
+  await page.locator('#videoRecordDialog[open]').waitFor();
+  await page.waitForFunction(()=>document.querySelector('#videoRecordCountdown').textContent.includes('Camera ready'),{},{timeout:30000});
+  await page.locator('#btnStartVideoRecording').click();
+  await page.waitForFunction(()=>document.querySelector('#videoRecordCountdown').textContent.includes('Recording your video'),{},{timeout:30000});
+  await page.waitForTimeout(2500);
+  await page.locator('#btnStopVideoRecording').click();
+  await page.locator('#videoRecordReview:not(.hidden)').waitFor({timeout:30000});
+  await page.locator('#btnApplyVideoRecord').click();
+  await page.locator('#editorScreen:not(.hidden)').waitFor({timeout:30000});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration>1,{},{timeout:30000});
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  await page.goto('http://127.0.0.1:3099/#/editor');
+  await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

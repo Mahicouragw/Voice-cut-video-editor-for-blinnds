@@ -783,9 +783,10 @@
       $('#section-video').scrollIntoView({behavior:'smooth'});
       autoSave();
     }, {once:true});
-    video.addEventListener('error', ()=>{
-      announce('Video load failed. Try MP4 at 1080p.', true);
-    }, {once:true});
+    video.addEventListener('error', videoLoadError, {once:true});
+  }
+  function videoLoadError() {
+    announce('Video load failed. Try MP4 at 1080p.', true);
   }
 
   function addAudioFile(file, type='music', position=video.currentTime || 0) {
@@ -1241,6 +1242,131 @@
     recordingRequest++;
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     else { recordingStream?.getTracks().forEach(t=>t.stop()); recordingStream=null; $('#btnStartRecording').disabled=false; }
+  }
+
+  // Video recording with the camera. The finished clip replaces the project video.
+  let videoRecordStream = null, videoRecorder = null, videoRecordChunks = [];
+  let pendingVideoRecording = null, videoRecordUrl = null, videoRecording = false;
+  let videoRecordTimerInt = null, videoRecordStart = 0, videoRecordRequest = 0;
+  function closeVideoRecordStream() {
+    if (videoRecorder && videoRecorder.state !== 'inactive') { try { videoRecorder.stop(); } catch(e){} }
+    videoRecorder = null;
+    if (videoRecordStream) { videoRecordStream.getTracks().forEach(t=>t.stop()); videoRecordStream = null; }
+    const pv = $('#cameraPreview');
+    if (pv) { try { pv.pause(); } catch(e){} pv.srcObject = null; pv.removeAttribute('src'); pv.load(); }
+    if (videoRecordTimerInt) { clearInterval(videoRecordTimerInt); videoRecordTimerInt = null; }
+    videoRecording = false;
+  }
+  function clearVideoRecordPreview() {
+    pendingVideoRecording = null;
+    if (videoRecordUrl) { URL.revokeObjectURL(videoRecordUrl); videoRecordUrl = null; }
+    $('#videoRecordReview').classList.add('hidden');
+  }
+  async function openVideoRecordDialog() {
+    videoRecordRequest++;
+    closeVideoRecordStream(); clearVideoRecordPreview();
+    $('#btnStartVideoRecording').disabled = false; $('#btnStopVideoRecording').disabled = true;
+    $('#videoRecordTimer').textContent = '00:00';
+    $('#videoRecordCountdown').textContent = 'Starting camera\u2026';
+    $('#videoRecordCountdown').classList.remove('hidden');
+    $('#videoRecordDialog').showModal();
+    const requestId = videoRecordRequest;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Video recording needs HTTPS and a browser with camera support.');
+      pauseAllAudio(); video.pause();
+      let stream = null;
+      try { stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:true}); }
+      catch(e) { stream = await navigator.mediaDevices.getUserMedia({video:true,audio:true}); }
+      if (requestId !== videoRecordRequest || !$('#videoRecordDialog').open) { stream.getTracks().forEach(t=>t.stop()); return; }
+      videoRecordStream = stream;
+      const pv = $('#cameraPreview');
+      pv.muted = true; pv.removeAttribute('controls'); pv.srcObject = stream;
+      await pv.play().catch(()=>{});
+      $('#videoRecordCountdown').textContent = 'Camera ready. Press Start Recording.';
+      announce('Camera ready. Point the camera, then Start Recording.');
+    } catch(e) {
+      if (requestId !== videoRecordRequest) return;
+      $('#videoRecordCountdown').textContent = 'Cannot use camera: ' + e.message;
+      $('#btnStartVideoRecording').disabled = true;
+      announce('Cannot use camera: ' + e.message, true);
+    }
+  }
+  async function startVideoRecording() {
+    if (videoRecording || !videoRecordStream) return;
+    const requestId = videoRecordRequest;
+    $('#btnStartVideoRecording').disabled = true;
+    videoRecordChunks = [];
+    try {
+      const mime = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4'].find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch(e){return false;}});
+      if (!mime) throw new Error('No supported video recorder format.');
+      for (const n of [3,2,1]) {
+        if (requestId !== videoRecordRequest || !$('#videoRecordDialog').open) return;
+        $('#videoRecordCountdown').textContent = 'Recording starts in ' + n;
+        $('#videoRecordCountdown').classList.remove('hidden');
+        announce('Recording starts in ' + n);
+        await new Promise(r=>setTimeout(r,700));
+      }
+      if (requestId !== videoRecordRequest || !$('#videoRecordDialog').open) return;
+      const rec = new MediaRecorder(videoRecordStream, {mimeType:mime});
+      videoRecorder = rec;
+      rec.ondataavailable = e => { if (e.data && e.data.size) videoRecordChunks.push(e.data); };
+      rec.onstop = () => { finishVideoRecording(mime); };
+      rec.onerror = () => { stopVideoRecording(); announce('Video recording failed.', true); };
+      rec.start(250);
+      videoRecording = true; videoRecordStart = Date.now();
+      $('#btnStopVideoRecording').disabled = false;
+      $('#videoRecordCountdown').textContent = 'Recording your video\u2026';
+      announce('Video recording started.');
+      videoRecordTimerInt = setInterval(()=>{ $('#videoRecordTimer').textContent = formatTime((Date.now()-videoRecordStart)/1000); }, 500);
+    } catch(e) {
+      $('#btnStartVideoRecording').disabled = false;
+      announce('Cannot record: ' + e.message, true);
+    }
+  }
+  function stopVideoRecording() {
+    videoRecordRequest++;
+    if (videoRecorder && videoRecorder.state !== 'inactive') { try { videoRecorder.stop(); } catch(e){} }
+    $('#btnStopVideoRecording').disabled = true;
+  }
+  function finishVideoRecording(mime) {
+    if (videoRecordTimerInt) { clearInterval(videoRecordTimerInt); videoRecordTimerInt = null; }
+    videoRecording = false; videoRecorder = null;
+    $('#btnStopVideoRecording').disabled = true;
+    if (!$('#videoRecordDialog').open) { videoRecordChunks = []; return; }
+    if (!videoRecordChunks.length) { $('#btnStartVideoRecording').disabled = false; announce('Recording stopped. No video was captured.'); return; }
+    const blob = new Blob(videoRecordChunks, {type:mime});
+    pendingVideoRecording = {blob};
+    if (videoRecordUrl) URL.revokeObjectURL(videoRecordUrl);
+    videoRecordUrl = URL.createObjectURL(blob);
+    const pv = $('#cameraPreview');
+    pv.srcObject = null; pv.src = videoRecordUrl; pv.muted = false; pv.setAttribute('controls',''); pv.load();
+    $('#videoRecordReview').classList.remove('hidden');
+    $('#videoRecordCountdown').textContent = 'Recording finished. Preview it, then Use This Recording or Discard.';
+    announce('Recording stopped. Preview your video, then Use This Recording or Discard.');
+  }
+  function applyVideoRecording() {
+    if (!pendingVideoRecording) { closeVideoRecordDialog(); return; }
+    const blob = pendingVideoRecording.blob;
+    const ext = (blob.type || '').includes('mp4') ? 'mp4' : 'webm';
+    closeVideoRecordDialog();
+    loadVideoFile(new File([blob], 'recorded-video.' + ext, {type:blob.type || 'video/webm'}));
+    announce('Recording loaded as the project video.');
+  }
+  function discardVideoRecording(silent) {
+    clearVideoRecordPreview();
+    if (videoRecordStream) {
+      const pv = $('#cameraPreview');
+      pv.removeAttribute('controls'); pv.muted = true; pv.srcObject = videoRecordStream;
+      pv.play().catch(()=>{});
+      $('#btnStartVideoRecording').disabled = false;
+      $('#videoRecordCountdown').textContent = 'Camera ready. Press Start Recording.';
+    } else { closeVideoRecordDialog(); }
+    if (!silent) announce('Recording discarded.');
+  }
+  function closeVideoRecordDialog() {
+    videoRecordRequest++;
+    closeVideoRecordStream(); clearVideoRecordPreview();
+    if ($('#videoRecordDialog').open) $('#videoRecordDialog').close();
   }
 
   let originalSource = null;
@@ -2086,6 +2212,11 @@
     throw lastError;
   }
   function userPrefs(){try{return JSON.parse(localStorage.getItem('voicecut_prefs')||'{}');}catch{return{};}}
+  function applyTextSize(size){
+    const z = size==='large'?'1.15':size==='extra'?'1.3':'1';
+    document.documentElement.style.zoom = z;
+    const sel=$('#settingTextSize'); if(sel) sel.value=(size==='large'||size==='extra')?size:'normal';
+  }
   function savePrefs(patch){localStorage.setItem('voicecut_prefs',JSON.stringify({...userPrefs(),...patch}));}
   function loadPrefs(){
     const p=userPrefs();
@@ -2100,6 +2231,7 @@
     if(p.speechBoost!==undefined)$('#speechBoostSlider').value=p.speechBoost;
     $('#noiseLeftValue').textContent=$('#noiseLeftSlider').value+'%';
     $('#speechBoostValue').textContent=$('#speechBoostSlider').value+'%';
+    if(p.textSize)applyTextSize(p.textSize);
   }
   function notificationsEnabled(){return userPrefs().notifications===true;}
   function notifyComplete(title,body){
@@ -2270,6 +2402,7 @@
   function initEvents() {
     // Home buttons
     $('#homeUploadVideo').addEventListener('click', ()=>$('#fileVideo').click());
+    $('#homeRecordVideo').addEventListener('click', openVideoRecordDialog);
     $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
     $('#homeLibrary').addEventListener('click', ()=>{ location.hash='#/library'; });
     $('#homeHelp').addEventListener('click', ()=>$('#helpDialog').showModal());
@@ -2306,6 +2439,12 @@
     $('#btnStopRecordingDialog').addEventListener('click', stopRecording);
     $('#btnApplyRecord').addEventListener('click', applyPendingRecording);
     $('#btnDiscardRecord').addEventListener('click', ()=>discardPendingRecording(false));
+    $('#btnStartVideoRecording').addEventListener('click', startVideoRecording);
+    $('#btnStopVideoRecording').addEventListener('click', stopVideoRecording);
+    $('#btnApplyVideoRecord').addEventListener('click', applyVideoRecording);
+    $('#btnDiscardVideoRecord').addEventListener('click', ()=>discardVideoRecording(false));
+    $('#btnCloseVideoRecord').addEventListener('click', ()=>closeVideoRecordDialog());
+    $('#videoRecordDialog').addEventListener('cancel', ()=>closeVideoRecordDialog());
     $('#recordDialog').addEventListener('cancel', ()=>discardPendingRecording(true));
     $('#btnRecordVO').addEventListener('click', openRecordDialog);
     $('#btnStopVO').addEventListener('click', stopRecording);
@@ -2615,6 +2754,7 @@
         await VoiceCutStorage.remove(project.id);
         project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
+        video.removeEventListener('error', videoLoadError);
         video.src='';
         $('#videoPlaceholder').classList.remove('hidden');
         historyStack=[]; historyIndex=-1;
@@ -2628,6 +2768,7 @@
 
     // Settings
     $('#settingLargeControls').addEventListener('change', (e)=>{ document.documentElement.setAttribute('data-large-controls', e.target.checked); announce(`Large controls ${e.target.checked?'enabled':'disabled'}.`); });
+    $('#settingTextSize').addEventListener('change',(e)=>{savePrefs({textSize:e.target.value});applyTextSize(e.target.value);announce(`Text size ${e.target.value}.`);});
     $('#settingHighContrast').addEventListener('change', (e)=>{ document.documentElement.setAttribute('data-theme', e.target.checked?'high-contrast':''); announce(`High contrast ${e.target.checked?'enabled':'disabled'}.`); });
     $('#settingReducedMotion').addEventListener('change', (e)=>{ document.documentElement.setAttribute('data-reduced-motion', e.target.checked); announce(`Reduced motion ${e.target.checked?'enabled':'disabled'}.`); });
     $('#settingDefaultSkip').addEventListener('change', (e)=>{ project.skipAmount=parseInt(e.target.value); $('#skipAmountSelect').value=e.target.value; announce(`Default skip amount set to ${e.target.value} seconds.`); });
