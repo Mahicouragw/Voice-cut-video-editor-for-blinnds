@@ -37,6 +37,9 @@ const path = require('node:path');
   await page.locator('#editorScreen:not(.hidden)').waitFor();
   await page.locator('#navEditor:not(.hidden)').waitFor();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Project saved'));
+  // The noise dialog exposes no backend details to normal users.
+  assert.ok(!(await text('#aiTechDetails')).includes('server AI'));
+  assert.ok(!(await text('#aiTechDetails')).includes('DeepFilterNet'));
   // Back/forward stays inside the app instead of exiting to the device home.
   await page.goBack();
   await page.locator('#homeScreen:not(.hidden)').waitFor();
@@ -317,6 +320,21 @@ const path = require('node:path');
   await page.locator('#selDelete').click();
   await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('gappy')));
+  // Long-audio engine works in parts: dev-chunk-seconds=2 cleans the 3s clip in 2 parts.
+  await page.setInputFiles('#fileAudio',{name:'chunky.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
+  await page.locator('#timelineContainer .clip[aria-label*="chunky"]').click();
+  await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await page.locator('#enhanceMode').selectOption('device');
+  await page.evaluate(()=>history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example')+'&dev-chunk-seconds=2'));
+  await page.locator('#btnAIEnhanceSelected').click();
+  await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('Checked in 2 parts'),{},{timeout:120000});
+  await page.locator('#btnCloseAI').click();
+  await page.evaluate(()=>history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example')));
+  await page.locator('#enhanceMode').selectOption('automatic');
+  await page.locator('#timelineContainer .clip[aria-label*="chunky"]').click();
+  await page.locator('#selDelete').click();
+  await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('chunky')));
   // Clip reverse, audio merge with undo, video reverse download.
   await page.locator('#timelineContainer .clip[aria-label^="Music Track"]').first().click();
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
@@ -354,6 +372,8 @@ const path = require('node:path');
   assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].filter(el=>(el.getAttribute('aria-label')||'').startsWith('Video Segment')).length),3);
   await page.locator('#btnDeleteMarked').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Deleted'));
+  assert.match(await text('#exportSummary'),/Video duration: 00:00:02/);
+  assert.ok(await page.evaluate(()=>document.querySelector('#timelineContainer [aria-label^="Video Track"]').getAttribute('aria-label').includes('Duration 00 minutes 02 seconds')));
   await page.locator('#btnUndo').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Undo successful'));
   await page.locator('#btnKeepMarked').click();
@@ -450,6 +470,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

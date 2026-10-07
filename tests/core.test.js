@@ -80,3 +80,31 @@ test('findGaps validates inputs',()=>{
  assert.throws(()=>findGaps([new Float32Array(80)],8000,0.1));
  assert.throws(()=>findGaps([new Float32Array(80)],8000,60));
 });
+test('retainedDuration sums kept ranges and falls back on invalid projects',()=>{
+ const {retainedDuration}=require('../web/core');
+ assert.equal(retainedDuration({trimStart:0,trimEnd:600,duration:600,segments:[{start:0,end:600}]}),600);
+ assert.equal(retainedDuration({trimStart:0,trimEnd:10,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),8);
+ assert.equal(retainedDuration({trimStart:2,trimEnd:9,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),5);
+ assert.equal(retainedDuration({trimStart:0,trimEnd:null,duration:10,segments:[{start:0,end:10}]}),10);
+ assert.equal(retainedDuration({trimStart:5,trimEnd:2,duration:10,segments:[]}),10);
+ assert.equal(retainedDuration({trimStart:0,trimEnd:10,duration:10,segments:[]}),10);
+});
+test('splitChunks windows long audio',()=>{
+ const {splitChunks}=require('../web/core');
+ assert.deepEqual(splitChunks(740,300),[[0,300],[300,600],[600,740]]);
+ assert.deepEqual(splitChunks(300,300),[[0,300]]);
+ assert.throws(()=>splitChunks(0,300));assert.throws(()=>splitChunks(100,0));
+});
+test('chooseCutPoint moves boundaries to quiet moments',()=>{
+ const {chooseCutPoint}=require('../web/core');
+ const sr=8000,a=new Float32Array(sr*10);
+ for(let i=0;i<a.length;i++){const t=i/sr;a[i]=(t>4.9&&t<5.1)?0:0.5;}
+ const cut=chooseCutPoint(a,sr,6,2);
+ assert.ok(cut>4.8&&cut<5.2,'cut at '+cut);
+});
+test('chooseCutPoint stays at nominal when nothing is quieter',()=>{
+ const {chooseCutPoint}=require('../web/core');
+ const sr=8000,loud=new Float32Array(sr*10).fill(0.5);
+ assert.equal(chooseCutPoint(loud,sr,6,2),6);
+ assert.equal(chooseCutPoint(new Float32Array(0),sr,6,2),6);
+});
