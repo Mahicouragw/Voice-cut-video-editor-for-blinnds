@@ -128,17 +128,14 @@ class _EditorPageState extends State<EditorPage> {
             PermissionResourceType.MICROPHONE,
           };
           final supportedRequest = request.resources.isNotEmpty && request.resources.every(captureResources.contains);
-          if (!trusted || !supportedRequest) {
-            return PermissionResponse(resources: request.resources, action: PermissionResponseAction.DENY);
+          var granted = trusted && supportedRequest;
+          if (granted && request.resources.contains(PermissionResourceType.CAMERA)) {
+            granted = await Permission.camera.request().isGranted;
           }
-          var allowed = true;
-          if (request.resources.contains(PermissionResourceType.CAMERA)) {
-            allowed = await Permission.camera.request().isGranted;
+          if (granted && request.resources.contains(PermissionResourceType.MICROPHONE)) {
+            granted = await Permission.microphone.request().isGranted;
           }
-          if (allowed && request.resources.contains(PermissionResourceType.MICROPHONE)) {
-            allowed = await Permission.microphone.request().isGranted;
-          }
-          return PermissionResponse(resources: request.resources, action: allowed ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
+          return PermissionResponse(resources: request.resources, action: granted ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
         },
         onLoadStop: (controller, url) { if (mounted) setState(() { loading = false; error = null; }); },
         onReceivedError: (controller, request, details) {

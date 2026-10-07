@@ -65,7 +65,87 @@
     }
     return out;
   }
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt };
+  // Find quiet gaps in decoded audio. Pure: channels is an array of
+  // Float32Array-like sample arrays, all the same length. Mirrors the server
+  // silence ladder (-30/-25/-20 dBFS) with 0.1s edge padding so on-device
+  // results match server results. Returns {gaps:[[start,end]...],thresholdDb}.
+  function findGaps(channels, sampleRate, minSeconds) {
+    const sr = Number(sampleRate), minLen = Number(minSeconds);
+    if (!Array.isArray(channels) || !channels.length || !Number.isFinite(sr) || sr <= 0)
+      throw new Error('Audio data is missing.');
+    if (!Number.isFinite(minLen) || minLen < 0.5 || minLen > 30)
+      throw new Error('Silence length must be between 0.5 and 30 seconds.');
+    const len = channels[0].length;
+    if (!len) return {gaps:[], thresholdDb:-30};
+    const frame = Math.max(1, Math.floor(sr * 0.01));
+    const frames = Math.ceil(len / frame);
+    const db = new Array(frames);
+    for (let f = 0; f < frames; f++) {
+      let peak = 0;
+      const s0 = f * frame, s1 = Math.min(len, s0 + frame);
+      for (const ch of channels) for (let i = s0; i < s1; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+      db[f] = 20 * Math.log10(peak + 1e-9);
+    }
+    for (const th of [-30, -25, -20]) {
+      const raw = [];
+      let start = -1;
+      for (let f = 0; f <= frames; f++) {
+        const quiet = f < frames && db[f] < th;
+        if (quiet && start < 0) start = f;
+        if (!quiet && start >= 0) { raw.push([start / 100, f / 100]); start = -1; }
+      }
+      const gaps = raw
+        .filter(([a, b]) => b - a >= minLen - 0.05)
+        .map(([a, b]) => [Math.max(0, a + 0.1), b - 0.1])
+        .filter(([a, b]) => b - a >= 0.2)
+        .map(([a, b]) => [Math.round(a * 100) / 100, Math.round(b * 100) / 100]);
+      if (gaps.length) return {gaps, thresholdDb: th};
+    }
+    return {gaps:[], thresholdDb:-20};
+  }
+  // Total kept video length in seconds (trim window minus deleted segments).
+  // Display code must never crash, so invalid projects fall back to duration.
+  function retainedDuration(p) {
+    try {
+      const rs = ranges(p);
+      const total = rs.reduce((s, r) => s + Math.max(0, r.end - r.start), 0);
+      return total > 0 ? total : (Number(p.duration) || 0);
+    } catch { return Number(p.duration) || 0; }
+  }
+  // Nominal [start,end] chunk windows for long-audio processing.
+  function splitChunks(duration, chunkSeconds) {
+    const total = Number(duration), len = Number(chunkSeconds);
+    if (!Number.isFinite(total) || total <= 0) throw new Error('Audio duration is missing.');
+    if (!Number.isFinite(len) || len < 1) throw new Error('Chunk length must be at least 1 second.');
+    const out = [];
+    for (let s = 0; s < total; s += len) out.push([s, Math.min(total, s + len)]);
+    return out;
+  }
+  // Move a chunk boundary to the quietest moment within +/-searchSeconds so
+  // separately processed parts join without clicks. samples is Float32Array-like
+  // mono audio; returns seconds. Falls back to nominal when nothing is quiet.
+  function chooseCutPoint(samples, sampleRate, nominalSeconds, searchSeconds = 2) {
+    const sr = Number(sampleRate), nom = Number(nominalSeconds), search = Math.max(0.2, Number(searchSeconds) || 0);
+    const len = samples ? samples.length : 0;
+    if (!len || !Number.isFinite(sr) || sr <= 0 || !Number.isFinite(nom)) return nom;
+    const total = len / sr;
+    const win = Math.max(1, Math.floor(sr * 0.05));
+    const energyAt = (t) => {
+      const c = Math.floor(t * sr);
+      const s0 = Math.max(0, c - win), s1 = Math.min(len, c + win);
+      let e = 0;
+      for (let i = s0; i < s1; i++) e += samples[i] * samples[i];
+      return e / Math.max(1, s1 - s0);
+    };
+    let best = Math.min(Math.max(nom, 0.5), Math.max(0.5, total - 0.5));
+    let bestE = energyAt(best);
+    for (let t = Math.max(0.25, nom - search); t <= Math.min(total - 0.25, nom + search); t += 0.05) {
+      const e = energyAt(t);
+      if (e < bestE) { bestE = e; best = t; }
+    }
+    return Math.round(best * 100) / 100;
+  }
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

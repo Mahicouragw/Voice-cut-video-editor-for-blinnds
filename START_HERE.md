@@ -1,4 +1,4 @@
-# Start here — VoiceCut 2.8 Android and web editor
+# Start here — VoiceCut 2.10 Android and web editor
 
 For the requested one-command GitHub device authorization and deployment, run `npm run all` from this repository with GitHub CLI installed, then approve on GitHub. See [docs/GITHUB_DEVICE_DEPLOY.md](docs/GITHUB_DEVICE_DEPLOY.md).
 

@@ -49,9 +49,9 @@
         <span class="icon" aria-hidden="true">🎬</span>
         <span><strong>Upload Video</strong><br><small style="font-weight:400; color:var(--text2)">MP4, MOV, WebM supported</small></span>
       </button>
-      <button id="homeRecordVideo" aria-label="Record Video, button. Capture a new video using your device camera and microphone">
+      <button id="homeRecordVideo" aria-label="Record Video, button. Record a new video with the camera">
         <span class="icon" aria-hidden="true">📹</span>
-        <span><strong>Record Video</strong><br><small style="font-weight:400; color:var(--text2)">Use this device's camera</small></span>
+        <span><strong>Record Video</strong><br><small style="font-weight:400; color:var(--text2)">Use camera</small></span>
       </button>
       <button id="homeOpenProject" aria-label="Open Project, button. Open a saved project">
         <span class="icon" aria-hidden="true">📂</span>
@@ -112,6 +112,7 @@
       <div class="grid grid-2">
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingScreenReader" checked aria-label="Screen reader optimized mode"> Screen Reader Optimized Mode</label>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingLargeControls" aria-label="Large controls"> Large Controls</label>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"><label for="settingTextSize">Text size</label><select id="settingTextSize" aria-label="Text size, select"><option value="normal">Normal</option><option value="large">Large</option><option value="extra">Extra large</option></select></div>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingHighContrast" aria-label="High contrast"> High Contrast</label>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingReducedMotion" aria-label="Reduced motion"> Reduced Motion</label>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingKeyboardNav" checked aria-label="Keyboard navigation"> Keyboard Navigation</label>
@@ -184,7 +185,7 @@
     </div>
     <div class="card" role="region" aria-labelledby="privacyHeading">
       <h2 id="privacyHeading">Privacy</h2>
-      <p>Videos, recordings, and voice-over files are private user content. Editing and camera recordings use this device. Record Video requests camera and microphone access only after you tap Start; the captured file is kept on-device unless you explicitly approve a cloud-processing request. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
+      <p>Videos, recordings, and voice-over files are private user content. Editing and camera recordings use this device. Record Video requests camera and microphone access only after you tap Start; the captured file stays on-device unless you explicitly approve cloud processing. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
       <p><strong>Local processing:</strong> Trimming, splitting, volume, fades, noise reduction, ducking, preview playback.</p>
       <p><strong>Optional cloud AI:</strong> automatic captions and AI noise removal can process audio on the secure VoiceCut service. Nothing is uploaded without your explicit approval for each request. Temporary server copies expire within 15 minutes.</p>
     </div>
@@ -195,7 +196,7 @@
 
     <div class="card" role="region" aria-labelledby="aboutHeading">
       <h2 id="aboutHeading">About VoiceCut Studio</h2>
-      <p>Version <strong>2.8.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
+      <p>Version <strong>2.10.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
     </div>
   </section>
 
@@ -207,7 +208,6 @@
     </div>
     <div class="home-actions" role="group" aria-label="No project actions">
       <button id="noProjectUpload" class="primary">Upload Video</button>
-      <button id="noProjectRecordVideo" aria-label="Record Video, button. Capture a new video using your device camera and microphone">Record Video</button>
       <button id="noProjectOpen">Open Project</button>
     </div>
   </section>
@@ -238,7 +238,6 @@
       </div>
       <div class="mt-16 flex gap-8 wrap">
         <button id="btnUploadVideoEditor" aria-label="Upload Video, button">Upload Video</button>
-        <button id="btnRecordVideoEditor" aria-label="Record Video, button. Capture a new video using your device camera and microphone">Record Video</button>
         <button id="btnAddMusic" aria-label="Add Music, button. Add a new music track at current position">Add Music</button>
         <button id="btnAddVoiceover" aria-label="Record Voice-over, button">Record Voice-over</button>
         <button id="btnImportVoiceover" aria-label="Import Voice-over, button">Import Voice-over</button>
@@ -504,12 +503,12 @@
 
     <section id="section-captions" class="card" aria-labelledby="captionsHeading">
       <h2 id="captionsHeading">Automatic captions</h2>
-      <p>Generate captions automatically, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
+      <p>Automatic captions means the app listens to the speech in your video and writes it out as timed subtitles you can read, edit, and keep. Generate captions automatically, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
       <div class="grid grid-2">
         <div><label for="captionSource">Speech to caption</label><select id="captionSource"><option value="original">Original video audio</option><option value="voiceover">Voice-over track</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
         <div><label for="captionLanguage">Spoken language</label><select id="captionLanguage"><option value="">Detect automatically</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="ml">Malayalam</option><option value="mr">Marathi</option><option value="bn">Bengali</option><option value="ur">Urdu</option></select></div>
       </div>
-      <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes and 100 MB.</p>
+      <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes. Large video files are fine: only a small audio copy is sent.</p>
       <button id="btnGenerateCaptions" class="primary">Generate Captions</button>
       <button id="btnRetryCaptions" class="hidden">Retry</button>
       <button id="btnCancelCaptions" disabled>Cancel caption request</button>
@@ -799,7 +798,7 @@
       <p>Correct accessibility labels, traits, slider values, logical swipe navigation, no duplicate elements, no inaccessible custom canvas.</p>
       <h4>Workflow</h4>
       <ol>
-        <li>Upload a video or record one with the device camera</li>
+        <li>Upload video</li>
         <li>Play, stop at 30s, add Music 1 at 30% volume</li>
         <li>Add Music 2 at 60%, move, trim</li>
         <li>Record Voice-over at 100%, enable medium noise reduction</li>
@@ -841,22 +840,23 @@
     </div>
   </dialog>
 
-  <dialog id="videoRecordDialog" aria-labelledby="videoRecordDialogTitle">
-    <div class="dialog-header"><h2 id="videoRecordDialogTitle">Record Video</h2><button id="btnCloseVideoRecord" aria-label="Close video recording, button">✕</button></div>
+  <dialog id="videoRecordDialog" aria-labelledby="videoRecordTitle">
+    <div class="dialog-header"><h2 id="videoRecordTitle">Record Video</h2><button id="btnCloseVideoRecord" aria-label="Close video record dialog, button">✕</button></div>
     <div class="dialog-body">
-      <p>Your camera and microphone are requested only after you tap Start. Nothing is recorded until then.</p>
-      <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview" class="capture-preview"></video>
-      <video id="cameraReview" controls playsinline aria-label="Recorded video preview" class="capture-preview hidden"></video>
-      <div id="cameraRecordTimer" class="mt-16" role="timer" aria-live="off" style="font-family:monospace; font-size:20px; text-align:center;">00:00</div>
-      <p id="cameraRecordStatus" role="status" aria-live="polite">Ready to record. A brief camera and microphone permission request appears when you start.</p>
-      <div id="cameraReviewActions" class="hidden flex gap-8 wrap" style="justify-content:center;">
-        <button id="btnUseCameraRecording" class="primary" aria-label="Use recorded video, button. Load it into the editor">Use This Video</button>
-        <button id="btnDiscardCameraRecording" aria-label="Discard recorded video, button">Discard</button>
+      <video id="cameraPreview" muted playsinline autoplay style="width:100%; border-radius:12px; background:#000; max-height:40vh;" aria-label="Camera preview"></video>
+      <div id="videoRecordCountdown" class="countdown hidden" role="status" aria-live="assertive">Recording</div>
+      <div id="videoRecordTimer" class="mt-16" role="timer" aria-live="off" style="font-family:monospace; font-size:20px; text-align:center;">00:00</div>
+      <p style="color:var(--text2); text-align:center;">Camera and microphone will capture video. Point the camera, then Start. Pressing Use This Recording replaces the current project video.</p>
+      <div id="videoRecordReview" class="hidden mt-16" style="text-align:center;">
+        <div class="flex gap-8 wrap" style="justify-content:center; margin-top:8px;">
+          <button id="btnApplyVideoRecord" class="primary" aria-label="Use this recording as the project video, button">Use This Recording</button>
+          <button id="btnDiscardVideoRecord" aria-label="Discard recording, button">Discard</button>
+        </div>
       </div>
     </div>
     <div class="dialog-footer">
-      <button id="btnStartCameraRecording" class="primary" aria-label="Start camera and video recording, button">Start Camera and Recording</button>
-      <button id="btnStopCameraRecording" aria-label="Stop video recording, button" disabled>Stop Recording</button>
+      <button id="btnStartVideoRecording" class="primary" aria-label="Start video recording, button">Start Recording</button>
+      <button id="btnStopVideoRecording" aria-label="Stop video recording, button" disabled>Stop</button>
     </div>
   </dialog>
 
@@ -898,7 +898,7 @@
         <p style="color:var(--success); font-weight:600; margin-top:12px;" id="aiResultText">Filters applied. Preview before applying.</p>
       </div>
 
-      <div id="aiTechDetails"><p>Automatic mode tries the VoiceCut server AI first (DeepFilterNet on your own server, no paid key), then strong on-device spectral cleanup when the server is unreachable. Device-only mode never uploads. All modes can change speech quality; listen before applying. Server uploads ask for consent and expire within 15 minutes.</p></div>
+      <div id="aiTechDetails"><p>Cleans background noise from your audio. Listen to the preview before applying.</p></div>
     </div>
     <div class="dialog-footer">
       <button id="btnCancelAI" aria-label="Cancel Audio noise reduction processing, button">Cancel Processing</button>

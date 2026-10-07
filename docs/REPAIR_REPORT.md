@@ -1,10 +1,9 @@
 # VoiceCut 1.2 — AI update verification
 
-## Current APK update: VoiceCut 2.8.0+12
-- Added user-started camera video capture in the editor with a preview, discard/use actions, and a 500 MB recording safety limit.
-- The Android wrapper requests camera and microphone permission only for trusted-site capture, and keeps notification permission opt-in. No unrelated game, broad storage, contacts, or location permissions were added.
-- Added an accessible reload control that saves and restores an open project, and updated the Android version code.
-- Verification for this change: `npm test` passes 38/38 tests and `node --check web/app.js` passes. Browser/physical-device and Flutter/Gradle builds were not run in this workspace because Chromium, FFmpeg, Flutter and the Android SDK are not installed. Use the GitHub Actions APK build and test the artifact on a physical device before wider distribution.
+## Current APK update: VoiceCut 2.10.0+12
+- The current web editor includes user-started camera video capture with preview/discard/use actions and a 500 MB recording safety limit. The accessible Reload control now flushes the open project to IndexedDB and restores both project and view after a real page reload.
+- The Android wrapper grants camera/microphone WebView access only to the trusted VoiceCut origin and only for those two resources. Notifications remain opt-in. No unrelated game, broad storage, contacts, or location permissions were added.
+- Root verification for this refresh: `npm test` passes 48/48 tests; JavaScript syntax checks, Android manifest parsing and `git diff --check` pass. Chromium/FFmpeg and Flutter/Android SDK are not installed in this workspace; use the updated GitHub Actions checks for the browser suite and APK build. Physical Android/TalkBack testing remains outstanding.
 
 
 ## Added and repaired in this update

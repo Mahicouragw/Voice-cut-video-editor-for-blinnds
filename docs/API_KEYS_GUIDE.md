@@ -1,6 +1,6 @@
 # Real AI captions and noise removal: create keys and paste them safely
 
-This guide applies to the VoiceCut 2.8 app and its optional processing backend (the backend health endpoint still reports service version 2.0.0). Cloud AI is automatic: free caption providers (Groq, Deepgram, AssemblyAI) are preferred before paid OpenAI, and Reduce Noise prefers free built-in DeepFilterNet before ElevenLabs cloud isolation. The normal user interface has **no server URL, API key, or provider/method menus** — provider keys live only in backend environment variables. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
+This guide applies to the VoiceCut 2.10 app and its optional processing backend (the backend health endpoint still reports service version 2.0.0). Cloud AI is automatic: free caption providers (Groq, Deepgram, AssemblyAI) are preferred before paid OpenAI, and Reduce Noise prefers free built-in DeepFilterNet before ElevenLabs cloud isolation. The normal user interface has **no server URL, API key, or provider/method menus** — provider keys live only in backend environment variables. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
 
 **Do not send keys to this chat. Do not paste them into JavaScript, HTML, Android assets, public GitHub files, screenshots, or GitHub issues.**
 
