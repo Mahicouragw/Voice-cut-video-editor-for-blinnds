@@ -123,9 +123,12 @@ class _EditorPageState extends State<EditorPage> {
         },
         onPermissionRequest: (controller, request) async {
           final trusted = request.origin.origin == siteOrigin;
-          final audioOnly = request.resources.isNotEmpty && request.resources.every((r) => r == PermissionResourceType.MICROPHONE);
-          final allowed = trusted && audioOnly && await Permission.microphone.request().isGranted;
-          return PermissionResponse(resources: request.resources, action: allowed ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
+          final needsMic = request.resources.any((r) => r == PermissionResourceType.MICROPHONE);
+          final needsCam = request.resources.any((r) => r != PermissionResourceType.MICROPHONE);
+          var granted = trusted && request.resources.isNotEmpty;
+          if (granted && needsCam) granted = await Permission.camera.request().isGranted;
+          if (granted && needsMic) granted = await Permission.microphone.request().isGranted;
+          return PermissionResponse(resources: request.resources, action: granted ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
         },
         onLoadStop: (controller, url) { if (mounted) setState(() { loading = false; error = null; }); },
         onReceivedError: (controller, request, details) {

@@ -48,6 +48,10 @@
         <span class="icon" aria-hidden="true">🎬</span>
         <span><strong>Upload Video</strong><br><small style="font-weight:400; color:var(--text2)">MP4, MOV, WebM supported</small></span>
       </button>
+      <button id="homeRecordVideo" aria-label="Record Video, button. Record a new video with the camera">
+        <span class="icon" aria-hidden="true">📹</span>
+        <span><strong>Record Video</strong><br><small style="font-weight:400; color:var(--text2)">Use camera</small></span>
+      </button>
       <button id="homeOpenProject" aria-label="Open Project, button. Open a saved project">
         <span class="icon" aria-hidden="true">📂</span>
         <span><strong>Open Project</strong><br><small style="font-weight:400; color:var(--text2)">Continue editing</small></span>
@@ -107,6 +111,7 @@
       <div class="grid grid-2">
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingScreenReader" checked aria-label="Screen reader optimized mode"> Screen Reader Optimized Mode</label>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingLargeControls" aria-label="Large controls"> Large Controls</label>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"><label for="settingTextSize">Text size</label><select id="settingTextSize" aria-label="Text size, select"><option value="normal">Normal</option><option value="large">Large</option><option value="extra">Extra large</option></select></div>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingHighContrast" aria-label="High contrast"> High Contrast</label>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingReducedMotion" aria-label="Reduced motion"> Reduced Motion</label>
         <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="settingKeyboardNav" checked aria-label="Keyboard navigation"> Keyboard Navigation</label>
@@ -831,6 +836,26 @@
     <div class="dialog-footer">
       <button id="btnStartRecording" class="primary" aria-label="Start recording, button">Start Recording</button>
       <button id="btnStopRecordingDialog" aria-label="Stop recording, button" disabled>Stop</button>
+    </div>
+  </dialog>
+
+  <dialog id="videoRecordDialog" aria-labelledby="videoRecordTitle">
+    <div class="dialog-header"><h2 id="videoRecordTitle">Record Video</h2><button id="btnCloseVideoRecord" aria-label="Close video record dialog, button">✕</button></div>
+    <div class="dialog-body">
+      <video id="cameraPreview" muted playsinline autoplay style="width:100%; border-radius:12px; background:#000; max-height:40vh;" aria-label="Camera preview"></video>
+      <div id="videoRecordCountdown" class="countdown hidden" role="status" aria-live="assertive">Recording</div>
+      <div id="videoRecordTimer" class="mt-16" role="timer" aria-live="off" style="font-family:monospace; font-size:20px; text-align:center;">00:00</div>
+      <p style="color:var(--text2); text-align:center;">Camera and microphone will capture video. Point the camera, then Start. Pressing Use This Recording replaces the current project video.</p>
+      <div id="videoRecordReview" class="hidden mt-16" style="text-align:center;">
+        <div class="flex gap-8 wrap" style="justify-content:center; margin-top:8px;">
+          <button id="btnApplyVideoRecord" class="primary" aria-label="Use this recording as the project video, button">Use This Recording</button>
+          <button id="btnDiscardVideoRecord" aria-label="Discard recording, button">Discard</button>
+        </div>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btnStartVideoRecording" class="primary" aria-label="Start video recording, button">Start Recording</button>
+      <button id="btnStopVideoRecording" aria-label="Stop video recording, button" disabled>Stop</button>
     </div>
   </dialog>
 
