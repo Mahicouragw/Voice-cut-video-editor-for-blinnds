@@ -502,12 +502,12 @@
 
     <section id="section-captions" class="card" aria-labelledby="captionsHeading">
       <h2 id="captionsHeading">Automatic captions</h2>
-      <p>Generate captions automatically, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
+      <p>Automatic captions means the app listens to the speech in your video and writes it out as timed subtitles you can read, edit, and keep. Generate captions automatically, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
       <div class="grid grid-2">
         <div><label for="captionSource">Speech to caption</label><select id="captionSource"><option value="original">Original video audio</option><option value="voiceover">Voice-over track</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
         <div><label for="captionLanguage">Spoken language</label><select id="captionLanguage"><option value="">Detect automatically</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="ml">Malayalam</option><option value="mr">Marathi</option><option value="bn">Bengali</option><option value="ur">Urdu</option></select></div>
       </div>
-      <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes and 100 MB.</p>
+      <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes. Large video files are fine: only a small audio copy is sent.</p>
       <button id="btnGenerateCaptions" class="primary">Generate Captions</button>
       <button id="btnRetryCaptions" class="hidden">Retry</button>
       <button id="btnCancelCaptions" disabled>Cancel caption request</button>

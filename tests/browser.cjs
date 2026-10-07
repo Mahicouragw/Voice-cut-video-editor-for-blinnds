@@ -5,9 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 (async()=>{
  const dir = path.resolve('artifacts');fs.mkdirSync(dir,{recursive:true});
- const videoPath=path.join(dir,'sample.mp4'), audioPath=path.join(dir,'sample.wav');
+ const videoPath=path.join(dir,'sample.mp4'), audioPath=path.join(dir,'sample.wav'), bigPath=path.join(dir,'bigcaption.wav'), gappyPath=path.join(dir,'gappy.wav');
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=320x180:r=24:d=3','-f','lavfi','-i','sine=frequency=440:duration=3','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest','-y',videoPath]);
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=660:duration=3','-y',audioPath]);
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=560','-ac','2','-ar','48000','-y',bigPath]);
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=3','-f','lavfi','-i','anullsrc=r=44100:cl=stereo:d=5','-f','lavfi','-i','sine=frequency=880:duration=4','-filter_complex','[0:a][1:a][2:a]concat=n=3:v=0:a=1','-y',gappyPath]);
  const server=spawn(process.execPath,['scripts/serve.js'],{env:{...process.env,PORT:'3099'},stdio:['ignore','pipe','inherit']});
  await new Promise((resolve,reject)=>{server.stdout.on('data',data=>{if(data.toString().includes('preview on port'))resolve();});server.on('error',reject);server.on('exit',code=>{if(code)reject(new Error('Server failed'));});});
  const browser=await chromium.launch({args:['--autoplay-policy=no-user-gesture-required','--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream']}).catch(error=>{server.kill();throw error;});
@@ -237,6 +239,21 @@ const path = require('node:path');
   assert.match(await text('#captionStatus'),/First caption: "Hello from VoiceCut\."/);
   assert.match(await text('#captionStatus'),/covering .* of .* video/);
   await page.locator('#captionLanguage').selectOption('en');
+  // Captions accept a genuinely large source (101MB audio clip): only the small prepared copy uploads.
+  assert.ok(fs.statSync(bigPath).size>100*1024*1024);
+  await page.setInputFiles('#fileAudio',bigPath);
+  await page.locator('#timelineContainer .clip[aria-label*="bigcaption"]').click();
+  await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await page.locator('#captionSource').selectOption('selected');
+  await page.locator('#btnGenerateCaptions').click();
+  await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:180000});
+  await page.locator('#captionSource').selectOption('original');
+  await page.locator('#timelineContainer .clip[aria-label*="bigcaption"]').click();
+  await page.locator('#selDelete').click();
+  await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('bigcaption')));
+  await page.locator('#btnGenerateCaptions').click();
+  await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:60000});
   // Cloud isolation is auto-selected when on-device neural denoise is unavailable.
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
@@ -258,6 +275,13 @@ const path = require('node:path');
   assert.equal(denoiseCalls,1);assert.equal(denoiseConsent,undefined);
   await page.locator('#btnApplyEnhanced').click();
   assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
+  // Large files skip the server and use on-device cleanup (Blob.size shadowed to 800MB; real bytes stay small).
+  await page.evaluate(()=>{window.__origBlobSize=window.__origBlobSize||Object.getOwnPropertyDescriptor(Blob.prototype,'size');Object.defineProperty(Blob.prototype,'size',{configurable:true,get:()=>800*1024*1024});});
+  await page.locator('#btnAIEnhanceOriginal').click();
+  await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('On-device'),{},{timeout:120000});
+  assert.equal(denoiseCalls,1);
+  await page.evaluate(()=>{Object.defineProperty(Blob.prototype,'size',window.__origBlobSize);});
+  await page.locator('#btnCloseAI').click();
   // Silence: fast gap preview, then full removal with progress bar.
   await page.locator('#btnDetectSilenceOriginal').click();
   await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Found 1 quiet gap'),{},{timeout:60000});
@@ -270,6 +294,29 @@ const path = require('node:path');
     assert.ok(fs.statSync(file).size>1000);
   }
   await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap'));
+  await page.evaluate(()=>{window.__origBlobSize=window.__origBlobSize||Object.getOwnPropertyDescriptor(Blob.prototype,'size');Object.defineProperty(Blob.prototype,'size',{configurable:true,get:()=>800*1024*1024});});
+  await page.locator('#btnSilenceOriginal').click();
+  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('No quiet gaps longer than'),{},{timeout:60000});
+  await page.evaluate(()=>{Object.defineProperty(Blob.prototype,'size',window.__origBlobSize);});
+  await page.locator('#enhanceMode').selectOption('device');
+  await page.locator('#btnSilenceOriginal').click();
+  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('No quiet gaps longer than'),{},{timeout:60000});
+  await page.locator('#enhanceMode').selectOption('automatic');
+  // On-device silence removal really cuts: the gappy clip is shortened and previews before applying.
+  await page.setInputFiles('#fileAudio',gappyPath);
+  await page.locator('#timelineContainer .clip[aria-label*="gappy"]').click();
+  await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await page.locator('#enhanceMode').selectOption('device');
+  await page.locator('#btnSilenceSelected').click();
+  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap on this device'),{},{timeout:60000});
+  assert.match(await text('#aiResultText'),/On-device silence removal/);
+  await page.locator('#btnApplyEnhanced').click();
+  await page.waitForFunction(()=>document.querySelector('#timelineContainer .clip[aria-label*="gappy"]').getAttribute('aria-label').includes('Duration 00 minutes 07 seconds'));
+  await page.locator('#enhanceMode').selectOption('automatic');
+  await page.locator('#timelineContainer .clip[aria-label*="gappy"]').click();
+  await page.locator('#selDelete').click();
+  await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('gappy')));
   // Clip reverse, audio merge with undo, video reverse download.
   await page.locator('#timelineContainer .clip[aria-label^="Music Track"]').first().click();
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
@@ -403,6 +450,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
