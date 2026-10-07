@@ -65,7 +65,45 @@
     }
     return out;
   }
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt };
+  // Find quiet gaps in decoded audio. Pure: channels is an array of
+  // Float32Array-like sample arrays, all the same length. Mirrors the server
+  // silence ladder (-30/-25/-20 dBFS) with 0.1s edge padding so on-device
+  // results match server results. Returns {gaps:[[start,end]...],thresholdDb}.
+  function findGaps(channels, sampleRate, minSeconds) {
+    const sr = Number(sampleRate), minLen = Number(minSeconds);
+    if (!Array.isArray(channels) || !channels.length || !Number.isFinite(sr) || sr <= 0)
+      throw new Error('Audio data is missing.');
+    if (!Number.isFinite(minLen) || minLen < 0.5 || minLen > 30)
+      throw new Error('Silence length must be between 0.5 and 30 seconds.');
+    const len = channels[0].length;
+    if (!len) return {gaps:[], thresholdDb:-30};
+    const frame = Math.max(1, Math.floor(sr * 0.01));
+    const frames = Math.ceil(len / frame);
+    const db = new Array(frames);
+    for (let f = 0; f < frames; f++) {
+      let peak = 0;
+      const s0 = f * frame, s1 = Math.min(len, s0 + frame);
+      for (const ch of channels) for (let i = s0; i < s1; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+      db[f] = 20 * Math.log10(peak + 1e-9);
+    }
+    for (const th of [-30, -25, -20]) {
+      const raw = [];
+      let start = -1;
+      for (let f = 0; f <= frames; f++) {
+        const quiet = f < frames && db[f] < th;
+        if (quiet && start < 0) start = f;
+        if (!quiet && start >= 0) { raw.push([start / 100, f / 100]); start = -1; }
+      }
+      const gaps = raw
+        .filter(([a, b]) => b - a >= minLen - 0.05)
+        .map(([a, b]) => [Math.max(0, a + 0.1), b - 0.1])
+        .filter(([a, b]) => b - a >= 0.2)
+        .map(([a, b]) => [Math.round(a * 100) / 100, Math.round(b * 100) / 100]);
+      if (gaps.length) return {gaps, thresholdDb: th};
+    }
+    return {gaps:[], thresholdDb:-20};
+  }
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

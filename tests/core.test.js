@@ -44,3 +44,39 @@ test('splitAt works when segments are empty by using the trimmed range',()=>{
  const p={trimStart:2,trimEnd:8,duration:10,segments:[]};
  assert.deepEqual(VoiceCutCore.splitAt(p,6),[{start:2,end:6},{start:6,end:8}]);
 });
+test('findGaps detects a quiet middle gap with edge padding',()=>{
+ const {findGaps}=require('../web/core');
+ const sr=8000,a=new Float32Array(sr*5);
+ for(let i=0;i<a.length;i++){const t=i/sr;a[i]=(t<1||t>=4)?0.5*Math.sin(2*Math.PI*440*t):0;}
+ const r=findGaps([a],sr,2);
+ assert.equal(r.thresholdDb,-30);assert.deepEqual(r.gaps,[[1.1,3.9]]);
+});
+test('findGaps climbs the sensitivity ladder on noisy pauses',()=>{
+ const {findGaps}=require('../web/core');
+ const sr=8000,a=new Float32Array(sr*5);
+ for(let i=0;i<a.length;i++){const t=i/sr;a[i]=(t<1||t>=4)?0.5:0.04;}
+ const r=findGaps([a],sr,2);
+ assert.equal(r.thresholdDb,-25);assert.deepEqual(r.gaps,[[1.1,3.9]]);
+});
+test('findGaps uses high sensitivity for loud background hum',()=>{
+ const {findGaps}=require('../web/core');
+ const sr=8000,a=new Float32Array(sr*5);
+ for(let i=0;i<a.length;i++){const t=i/sr;a[i]=(t<1||t>=4)?0.5:0.08;}
+ const r=findGaps([a],sr,2);
+ assert.equal(r.thresholdDb,-20);assert.deepEqual(r.gaps,[[1.1,3.9]]);
+});
+test('findGaps ignores short pauses and clean audio',()=>{
+ const {findGaps}=require('../web/core');
+ const sr=8000,short=new Float32Array(sr*5),clean=new Float32Array(sr*3);
+ for(let i=0;i<short.length;i++){const t=i/sr;short[i]=(t<1||t>=2)?0.5:0;}
+ for(let i=0;i<clean.length;i++)clean[i]=0.5;
+ assert.deepEqual(findGaps([short],sr,2).gaps,[]);
+ assert.deepEqual(findGaps([clean],sr,2).gaps,[]);
+});
+test('findGaps validates inputs',()=>{
+ const {findGaps}=require('../web/core');
+ assert.throws(()=>findGaps([],8000,2));
+ assert.throws(()=>findGaps([new Float32Array(80)],0,2));
+ assert.throws(()=>findGaps([new Float32Array(80)],8000,0.1));
+ assert.throws(()=>findGaps([new Float32Array(80)],8000,60));
+});
