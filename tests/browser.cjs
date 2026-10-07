@@ -392,6 +392,10 @@ const path = require('node:path');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   await page.locator('#libraryScreen:not(.hidden)').waitFor();
+  // Loading a replacement source creates a fresh project while preserving the earlier saved project.
+  await page.waitForFunction(()=>document.querySelectorAll('#libraryList .library-card').length===1);
+  await page.locator('#libraryList [data-delete-project]').click();
+  await page.locator('#btnConfirmApply').click();
   await page.locator('#libraryEmpty:not([style*="none"])').waitFor();
   await page.goto('http://127.0.0.1:3099/#/editor');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
