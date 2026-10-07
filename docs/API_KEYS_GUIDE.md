@@ -1,6 +1,6 @@
 # Real AI captions and noise removal: create keys and paste them safely
 
-This guide applies to **VoiceCut 2.0**. Cloud AI is automatic: free caption providers (Groq, Deepgram, AssemblyAI) are preferred before paid OpenAI, and Reduce Noise prefers free built-in DeepFilterNet before ElevenLabs cloud isolation. The normal user interface has **no server URL, API key, or provider/method menus** — provider keys live only in backend environment variables. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
+This guide applies to the VoiceCut 2.8 app and its optional processing backend (the backend health endpoint still reports service version 2.0.0). Cloud AI is automatic: free caption providers (Groq, Deepgram, AssemblyAI) are preferred before paid OpenAI, and Reduce Noise prefers free built-in DeepFilterNet before ElevenLabs cloud isolation. The normal user interface has **no server URL, API key, or provider/method menus** — provider keys live only in backend environment variables. Install/deploy the new code first using [AI_UPDATE_START_HERE.md](../AI_UPDATE_START_HERE.md).
 
 **Do not send keys to this chat. Do not paste them into JavaScript, HTML, Android assets, public GitHub files, screenshots, or GitHub issues.**
 
@@ -99,7 +99,7 @@ GitHub Pages can host the editor, **but cannot run this Node/FFmpeg backend or k
 | `ELEVENLABS_API_KEY` | Your real key from Step 2, or blank |
 | `SERVER_ACCESS_KEY` | Render-generated random value, or your self-generated value from Step 4 |
 | `ALLOWED_ORIGIN` | `https://mahicouragw.github.io` — **no repository path and no trailing slash** |
-| `ALLOW_ANDROID_APP` | Legacy flag for the old packaged app's `http://localhost:8080` origin. The current app loads the website directly and uses the website origin, so new backends can leave this unset |
+| `ALLOW_ANDROID_APP` | Optional legacy localhost-origin flag for a locally bundled APK. The current APK loads the website directly and uses its HTTPS origin, so new backends can leave this unset |
 | `MAX_AI_REQUESTS_PER_HOUR` | `20` by default; you can use `3` while testing |
 
 Optional features work independently: configure only the providers you want. Captions automatically use the first configured provider in the order Groq → Deepgram → AssemblyAI → OpenAI, so free tiers are preferred and a paid key is only used when no free key is configured. DeepFilterNet is included in the server image automatically — no key or extra step needed. Its first run downloads its neural model (about 30 MB); allow extra time on the very first denoise.

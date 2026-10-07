@@ -44,6 +44,16 @@
   let recordedChunks = [];
   let recordStartTime = 0;
   let recordTimerInterval = null;
+  let cameraStream = null;
+  let cameraRecorder = null;
+  let cameraChunks = [];
+  let cameraRequestId = 0;
+  let cameraCaptureCancelled = false;
+  let cameraCaptureTooLarge = false;
+  let cameraRecordStartTime = 0;
+  let cameraRecordTimer = null;
+  let pendingCameraFile = null;
+  let cameraReviewUrl = null;
   let exportRecorder = null;
   let exportedBlob = null;
   let isExporting = false;
@@ -1243,6 +1253,174 @@
     else { recordingStream?.getTracks().forEach(t=>t.stop()); recordingStream=null; $('#btnStartRecording').disabled=false; }
   }
 
+  function clearCameraReview() {
+    pendingCameraFile = null;
+    const review = $('#cameraReview');
+    review.pause(); review.removeAttribute('src'); review.load();
+    if (cameraReviewUrl) URL.revokeObjectURL(cameraReviewUrl);
+    cameraReviewUrl = null;
+    $('#cameraReviewActions').classList.add('hidden');
+    review.classList.add('hidden');
+    $('#cameraPreview').classList.remove('hidden');
+  }
+  function openVideoRecordDialog() {
+    if (isExporting || captionRequestBusy || cleanupBusy || isRecording || cameraRecorder?.state === 'recording') {
+      announce('Wait for the current recording, edit, or export to finish.', true); return;
+    }
+    cameraCaptureCancelled = false;
+    clearCameraReview();
+    $('#cameraRecordTimer').textContent = '00:00';
+    $('#cameraRecordStatus').textContent = 'Ready to record. A brief camera and microphone permission request appears when you start.';
+    $('#btnStartCameraRecording').disabled = false;
+    $('#btnStopCameraRecording').disabled = true;
+    $('#videoRecordDialog').showModal();
+  }
+  function releaseCameraStream() {
+    clearInterval(cameraRecordTimer); cameraRecordTimer = null;
+    if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+    $('#cameraPreview').srcObject = null;
+  }
+  function stopCameraRecording() {
+    if (cameraRecorder && cameraRecorder.state !== 'inactive') {
+      cameraRecorder.stop();
+      return;
+    }
+    releaseCameraStream();
+    $('#btnStartCameraRecording').disabled = false;
+    $('#btnStopCameraRecording').disabled = true;
+  }
+  function cancelCameraRecording() {
+    cameraCaptureCancelled = true;
+    cameraRequestId++;
+    if (cameraRecorder && cameraRecorder.state !== 'inactive') cameraRecorder.stop();
+    else releaseCameraStream();
+    clearCameraReview();
+  }
+  async function startCameraRecording() {
+    if (cameraRecorder?.state === 'recording' || cameraStream) return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      announce('Camera recording needs HTTPS and a browser with camera, microphone, and video recording support.', true);
+      $('#cameraRecordStatus').textContent = 'This browser does not support camera recording.';
+      return;
+    }
+    const requestId = ++cameraRequestId;
+    cameraCaptureCancelled = false;
+    cameraCaptureTooLarge = false;
+    video.pause();
+    for (const node of audioNodes.values()) node.element.pause();
+    $('#btnStartCameraRecording').disabled = true;
+    $('#cameraRecordStatus').textContent = 'Requesting camera and microphone permission.';
+    let stream;
+    try {
+      const constraints = {video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:true};
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (error) {
+        if (!['OverconstrainedError','ConstraintNotSatisfiedError'].includes(error.name)) throw error;
+        stream = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+      }
+      if (requestId !== cameraRequestId || cameraCaptureCancelled || !$('#videoRecordDialog').open) {
+        stream.getTracks().forEach(track=>track.stop()); return;
+      }
+      cameraStream = stream;
+      const preview = $('#cameraPreview');
+      preview.srcObject = stream;
+      await preview.play().catch(()=>{});
+      const mime = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4']
+        .find(type=>MediaRecorder.isTypeSupported(type));
+      const recorder = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
+      cameraRecorder = recorder; cameraChunks = [];
+      let recordedBytes = 0;
+      recorder.ondataavailable = event => {
+        if (!event.data?.size) return;
+        recordedBytes += event.data.size;
+        cameraChunks.push(event.data);
+        if (recordedBytes > 500*1024*1024 && recorder.state !== 'inactive') {
+          cameraCaptureTooLarge = true;
+          recorder.stop();
+        }
+      };
+      recorder.onstop = () => {
+        clearInterval(cameraRecordTimer); cameraRecordTimer = null;
+        const tooLarge = cameraCaptureTooLarge;
+        cameraCaptureTooLarge = false;
+        const cancelled = cameraCaptureCancelled || !$('#videoRecordDialog').open;
+        const blob = tooLarge || cancelled ? null : new Blob(cameraChunks,{type:recorder.mimeType||'video/webm'});
+        cameraChunks = []; cameraRecorder = null; releaseCameraStream();
+        $('#btnStopCameraRecording').disabled = true;
+        if (tooLarge) {
+          $('#btnStartCameraRecording').disabled = false;
+          $('#cameraRecordStatus').textContent = 'Recording stopped because it exceeded 500 MB. Discard it and record a shorter video.';
+          announce('Recording stopped because it exceeded 500 megabytes. Record a shorter video.',true); return;
+        }
+        if (cancelled) {
+          if ($('#videoRecordDialog').open) {
+            $('#btnStartCameraRecording').disabled = false;
+            $('#cameraRecordStatus').textContent = 'Recording cancelled. Tap Start to try again.';
+          }
+          return;
+        }
+        $('#btnStartCameraRecording').disabled = true;
+        if (!blob?.size) {
+          $('#cameraRecordStatus').textContent = 'No video was captured. Check the camera and try again.';
+          $('#btnStartCameraRecording').disabled = false;
+          announce('No video was captured. Check the camera and try again.',true); return;
+        }
+        const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        pendingCameraFile = new File([blob],`VoiceCut_Camera_${Date.now()}.${extension}`,{type:blob.type||`video/${extension}`});
+        cameraReviewUrl = URL.createObjectURL(blob);
+        const review = $('#cameraReview');
+        review.src = cameraReviewUrl;
+        preview.classList.add('hidden'); review.classList.remove('hidden');
+        $('#cameraReviewActions').classList.remove('hidden');
+        $('#cameraRecordStatus').textContent = `Recording ready. File size ${(blob.size/1024/1024).toFixed(1)} MB. Preview it, then use or discard the video.`;
+        announce('Video recording complete. Preview it, then choose Use This Video or Discard.');
+      };
+      recorder.onerror = () => {
+        cameraCaptureCancelled = true;
+        $('#cameraRecordStatus').textContent = 'Camera recording failed. Tap Start to try again.';
+        if (recorder.state !== 'inactive') recorder.stop();
+      };
+      recorder.start(250);
+      cameraRecordStartTime = Date.now();
+      $('#cameraRecordTimer').textContent = '00:00';
+      $('#btnStopCameraRecording').disabled = false;
+      $('#cameraRecordStatus').textContent = 'Recording video with the device camera and microphone. Tap Stop Recording when finished.';
+      cameraRecordTimer = setInterval(()=>{
+        $('#cameraRecordTimer').textContent = formatTime((Date.now()-cameraRecordStartTime)/1000);
+      },1000);
+      announce('Video recording started. Tap Stop Recording when finished.');
+    } catch(error) {
+      stream?.getTracks().forEach(track=>track.stop());
+      if (cameraStream === stream) cameraStream = null;
+      $('#cameraPreview').srcObject = null;
+      if (requestId !== cameraRequestId || !$('#videoRecordDialog').open) return;
+      $('#btnStartCameraRecording').disabled = false;
+      const message = error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError'
+        ? 'Camera or microphone permission was denied. Allow both in Android Settings to record video.'
+        : `Cannot record video: ${error.message||'camera unavailable'}`;
+      $('#cameraRecordStatus').textContent = message;
+      announce(message,true);
+    }
+  }
+  function discardCameraRecording() {
+    cameraCaptureCancelled = false;
+    clearCameraReview();
+    $('#cameraRecordTimer').textContent = '00:00';
+    $('#cameraRecordStatus').textContent = 'Recording discarded. Tap Start to record another video.';
+    $('#btnStartCameraRecording').disabled = false;
+    $('#btnStopCameraRecording').disabled = true;
+    announce('Camera recording discarded.');
+  }
+  function useCameraRecording() {
+    const file = pendingCameraFile;
+    if (!file) { announce('No camera recording is ready.',true); return; }
+    pendingCameraFile = null;
+    $('#videoRecordDialog').close();
+    loadVideoFile(file);
+  }
+
   let originalSource = null;
   let originalGain = null;
   let exportCleanup = null;
@@ -2256,6 +2434,32 @@
     try { await silentSave(); }
     catch (e) { announce('Save failed. Storage may be full. ' + e.message, true); }
   }
+  async function reloadApplication() {
+    if (isExporting || captionRequestBusy || cleanupBusy || isRecording || cameraRecorder?.state === 'recording' || $('#recordDialog').open || $('#videoRecordDialog').open) {
+      announce('Finish or close the current recording, caption request, or export before reloading.',true); return;
+    }
+    const button = $('#btnReloadApp');
+    button.disabled = true;
+    try {
+      clearTimeout(autoSaveTimeout);
+      await saveQueue.catch(()=>{});
+      if (project.videoFile) {
+        dirty = true;
+        await silentSave();
+        await saveQueue;
+        sessionStorage.setItem('voicecut_reload_project',project.id);
+        sessionStorage.setItem('voicecut_reload_view',currentView);
+      } else {
+        sessionStorage.removeItem('voicecut_reload_project');
+        sessionStorage.removeItem('voicecut_reload_view');
+      }
+      announce('Reloading VoiceCut Studio. Your open project has been saved.');
+      location.reload();
+    } catch (error) {
+      button.disabled = false;
+      announce('Cannot reload safely because the project could not be saved. ' + error.message,true);
+    }
+  }
   async function loadProjectFromStorage() { return openProjectById(null); }
 
   // Confirm dialog
@@ -2269,11 +2473,14 @@
   // Event Listeners
   function initEvents() {
     // Home buttons
+    $('#btnReloadApp').addEventListener('click', reloadApplication);
     $('#homeUploadVideo').addEventListener('click', ()=>$('#fileVideo').click());
+    $('#homeRecordVideo').addEventListener('click', openVideoRecordDialog);
     $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
     $('#homeLibrary').addEventListener('click', ()=>{ location.hash='#/library'; });
     $('#homeHelp').addEventListener('click', ()=>$('#helpDialog').showModal());
     $('#noProjectUpload').addEventListener('click', ()=>$('#fileVideo').click());
+    $('#noProjectRecordVideo').addEventListener('click', openVideoRecordDialog);
     $('#noProjectOpen').addEventListener('click', ()=>openProjectById(null));
     $$('#mainNav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); location.hash = a.getAttribute('href'); }));
     $$('a[href^="#section-"]').forEach(a => a.addEventListener('click', e => {
@@ -2310,6 +2517,13 @@
     $('#btnRecordVO').addEventListener('click', openRecordDialog);
     $('#btnStopVO').addEventListener('click', stopRecording);
 
+    $('#btnCloseVideoRecord').addEventListener('click', ()=>$('#videoRecordDialog').close());
+    $('#videoRecordDialog').addEventListener('close', cancelCameraRecording);
+    $('#btnStartCameraRecording').addEventListener('click', startCameraRecording);
+    $('#btnStopCameraRecording').addEventListener('click', stopCameraRecording);
+    $('#btnUseCameraRecording').addEventListener('click', useCameraRecording);
+    $('#btnDiscardCameraRecording').addEventListener('click', discardCameraRecording);
+
     document.addEventListener('change', e => {
       if (e.target.matches('input,select')) autoSave();
     });
@@ -2319,6 +2533,7 @@
     $('#fileVoiceover').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) addAudioFile(f,'voiceover'); e.target.value=''; });
 
     $('#btnUploadVideoEditor').addEventListener('click', ()=>$('#fileVideo').click());
+    $('#btnRecordVideoEditor').addEventListener('click', openVideoRecordDialog);
     $('#btnAddMusic').addEventListener('click', ()=>$('#fileAudio').click());
     $('#btnAddMusic2').addEventListener('click', ()=>$('#fileAudio').click());
     $('#btnImportAudioEditor').addEventListener('click', ()=>$('#fileAudio').click());
@@ -2716,8 +2931,25 @@
   document.addEventListener('DOMContentLoaded', ()=>{
     initEvents(); initCaptions(); loadPrefs(); applyPrefsToProject(true);
     for (const key of ['voicecut_ai_server','voicecut_dolby_key','voicecut_hf_key','voicecut_replicate_key']) localStorage.removeItem(key);
-    renderAll(); route();
-    if (history.length <= 1 && currentView !== 'home') {
+    renderAll();
+    let reloadProjectId = null, reloadView = 'editor';
+    try {
+      reloadProjectId = sessionStorage.getItem('voicecut_reload_project');
+      reloadView = sessionStorage.getItem('voicecut_reload_view') || 'editor';
+      sessionStorage.removeItem('voicecut_reload_project');
+      sessionStorage.removeItem('voicecut_reload_view');
+    } catch {}
+    if (reloadProjectId) {
+      openProjectById(reloadProjectId).then(()=>{
+        if (['home','library','settings'].includes(reloadView)) {
+          history.replaceState(null,'','#/'+reloadView);
+          showView(reloadView);
+        }
+      });
+    } else {
+      route();
+    }
+    if (!reloadProjectId && history.length <= 1 && currentView !== 'home') {
       const here = '#/' + currentView + hashQuery();
       history.replaceState(null, '', '#/home');
       history.pushState(null, '', here);

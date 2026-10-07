@@ -123,8 +123,18 @@ class _EditorPageState extends State<EditorPage> {
         },
         onPermissionRequest: (controller, request) async {
           final trusted = request.origin.origin == siteOrigin;
-          final audioOnly = request.resources.isNotEmpty && request.resources.every((r) => r == PermissionResourceType.MICROPHONE);
-          final allowed = trusted && audioOnly && await Permission.microphone.request().isGranted;
+          const captureResources = {PermissionResourceType.CAMERA, PermissionResourceType.MICROPHONE};
+          final supportedRequest = request.resources.isNotEmpty && request.resources.every(captureResources.contains);
+          if (!trusted || !supportedRequest) {
+            return PermissionResponse(resources: request.resources, action: PermissionResponseAction.DENY);
+          }
+          var allowed = true;
+          if (request.resources.contains(PermissionResourceType.CAMERA)) {
+            allowed = await Permission.camera.request().isGranted;
+          }
+          if (allowed && request.resources.contains(PermissionResourceType.MICROPHONE)) {
+            allowed = await Permission.microphone.request().isGranted;
+          }
           return PermissionResponse(resources: request.resources, action: allowed ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
         },
         onLoadStop: (controller, url) { if (mounted) setState(() { loading = false; error = null; }); },

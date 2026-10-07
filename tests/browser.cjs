@@ -51,6 +51,9 @@ const path = require('node:path');
   await page.locator('#libraryList [data-open-project]').click();
   await page.locator('#editorScreen:not(.hidden)').waitFor();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Project opened: E2E Renamed'));
+  // The accessible reload action flushes the project and restores the editor after a real page reload.
+  await page.locator('#btnReloadApp').click();
+  await page.waitForFunction(()=>!document.querySelector('#editorScreen').classList.contains('hidden') && document.querySelector('#projectNameInput').value==='E2E Renamed' && document.querySelector('#mainVideo').duration>2,{}, {timeout:30000});
   // Settings holds only normal preferences; caption language pref applies to the editor.
   await page.locator('a[data-route="settings"]').click();
   await page.locator('#settingsScreen:not(.hidden)').waitFor();
@@ -96,6 +99,19 @@ const path = require('node:path');
   assert.match(await page.locator('#recordPreview').getAttribute('src'),/^blob:/);
   await page.locator('#btnApplyRecord').click();
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('Voiceover_'));
+  // Camera + microphone capture yields a playable file that can be loaded as the project's source video.
+  await page.locator('#btnRecordVideoEditor').click();
+  await page.locator('#btnStartCameraRecording').click();
+  await page.waitForFunction(()=>!document.querySelector('#btnStopCameraRecording').disabled,{},{timeout:15000});
+  await page.waitForTimeout(1300);
+  await page.locator('#btnStopCameraRecording').click();
+  await page.locator('#cameraReviewActions:not(.hidden)').waitFor({timeout:15000});
+  assert.match(await page.locator('#cameraReview').getAttribute('src'),/^blob:/);
+  await page.locator('#btnUseCameraRecording').click();
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration>0 && document.querySelector('#editorScreen').classList.contains('hidden')===false,{},{timeout:15000});
+  // Restore the deterministic fixture for the remaining audio/video integration assertions.
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration>2,{},{timeout:15000});
   // Voice Focus noise-reduction level applies live without errors.
   await page.locator('#globalNoiseReduction').selectOption('voicefocus');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Noise reduction set to voicefocus'));
@@ -381,6 +397,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload with project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone and camera recording with preview/apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

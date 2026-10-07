@@ -19,6 +19,7 @@
     <span>VoiceCut Studio</span>
     <span class="badge" id="modeBadge" aria-label="Editing mode">Simple Mode</span>
   </div>
+  <button id="btnReloadApp" class="header-reload" aria-label="Reload VoiceCut Studio, button. Save the open project and reload the app">↻ Reload</button>
   <div class="header-actions" role="toolbar" aria-label="Project actions">
     <button id="btnSaveProject" aria-label="Save project, button">Save</button>
     <button id="btnUndo" aria-label="Undo last action, Control plus Z" disabled>Undo</button>
@@ -47,6 +48,10 @@
       <button id="homeUploadVideo" class="primary" aria-label="Upload Video, button. Select a video file to start editing">
         <span class="icon" aria-hidden="true">🎬</span>
         <span><strong>Upload Video</strong><br><small style="font-weight:400; color:var(--text2)">MP4, MOV, WebM supported</small></span>
+      </button>
+      <button id="homeRecordVideo" aria-label="Record Video, button. Capture a new video using your device camera and microphone">
+        <span class="icon" aria-hidden="true">📹</span>
+        <span><strong>Record Video</strong><br><small style="font-weight:400; color:var(--text2)">Use this device's camera</small></span>
       </button>
       <button id="homeOpenProject" aria-label="Open Project, button. Open a saved project">
         <span class="icon" aria-hidden="true">📂</span>
@@ -179,7 +184,7 @@
     </div>
     <div class="card" role="region" aria-labelledby="privacyHeading">
       <h2 id="privacyHeading">Privacy</h2>
-      <p>Videos, recordings, and voice-over files are private user content. Processing happens locally using Web Audio API, HTML5 Video, and Canvas capture. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
+      <p>Videos, recordings, and voice-over files are private user content. Editing and camera recordings use this device. Record Video requests camera and microphone access only after you tap Start; the captured file is kept on-device unless you explicitly approve a cloud-processing request. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
       <p><strong>Local processing:</strong> Trimming, splitting, volume, fades, noise reduction, ducking, preview playback.</p>
       <p><strong>Optional cloud AI:</strong> automatic captions and AI noise removal can process audio on the secure VoiceCut service. Nothing is uploaded without your explicit approval for each request. Temporary server copies expire within 15 minutes.</p>
     </div>
@@ -190,7 +195,7 @@
 
     <div class="card" role="region" aria-labelledby="aboutHeading">
       <h2 id="aboutHeading">About VoiceCut Studio</h2>
-      <p>Version <strong>2.0.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
+      <p>Version <strong>2.8.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
     </div>
   </section>
 
@@ -202,6 +207,7 @@
     </div>
     <div class="home-actions" role="group" aria-label="No project actions">
       <button id="noProjectUpload" class="primary">Upload Video</button>
+      <button id="noProjectRecordVideo" aria-label="Record Video, button. Capture a new video using your device camera and microphone">Record Video</button>
       <button id="noProjectOpen">Open Project</button>
     </div>
   </section>
@@ -232,6 +238,7 @@
       </div>
       <div class="mt-16 flex gap-8 wrap">
         <button id="btnUploadVideoEditor" aria-label="Upload Video, button">Upload Video</button>
+        <button id="btnRecordVideoEditor" aria-label="Record Video, button. Capture a new video using your device camera and microphone">Record Video</button>
         <button id="btnAddMusic" aria-label="Add Music, button. Add a new music track at current position">Add Music</button>
         <button id="btnAddVoiceover" aria-label="Record Voice-over, button">Record Voice-over</button>
         <button id="btnImportVoiceover" aria-label="Import Voice-over, button">Import Voice-over</button>
@@ -792,7 +799,7 @@
       <p>Correct accessibility labels, traits, slider values, logical swipe navigation, no duplicate elements, no inaccessible custom canvas.</p>
       <h4>Workflow</h4>
       <ol>
-        <li>Upload video</li>
+        <li>Upload a video or record one with the device camera</li>
         <li>Play, stop at 30s, add Music 1 at 30% volume</li>
         <li>Add Music 2 at 60%, move, trim</li>
         <li>Record Voice-over at 100%, enable medium noise reduction</li>
@@ -831,6 +838,25 @@
     <div class="dialog-footer">
       <button id="btnStartRecording" class="primary" aria-label="Start recording, button">Start Recording</button>
       <button id="btnStopRecordingDialog" aria-label="Stop recording, button" disabled>Stop</button>
+    </div>
+  </dialog>
+
+  <dialog id="videoRecordDialog" aria-labelledby="videoRecordDialogTitle">
+    <div class="dialog-header"><h2 id="videoRecordDialogTitle">Record Video</h2><button id="btnCloseVideoRecord" aria-label="Close video recording, button">✕</button></div>
+    <div class="dialog-body">
+      <p>Your camera and microphone are requested only after you tap Start. Nothing is recorded until then.</p>
+      <video id="cameraPreview" autoplay muted playsinline aria-label="Live camera preview" class="capture-preview"></video>
+      <video id="cameraReview" controls playsinline aria-label="Recorded video preview" class="capture-preview hidden"></video>
+      <div id="cameraRecordTimer" class="mt-16" role="timer" aria-live="off" style="font-family:monospace; font-size:20px; text-align:center;">00:00</div>
+      <p id="cameraRecordStatus" role="status" aria-live="polite">Ready to record. A brief camera and microphone permission request appears when you start.</p>
+      <div id="cameraReviewActions" class="hidden flex gap-8 wrap" style="justify-content:center;">
+        <button id="btnUseCameraRecording" class="primary" aria-label="Use recorded video, button. Load it into the editor">Use This Video</button>
+        <button id="btnDiscardCameraRecording" aria-label="Discard recorded video, button">Discard</button>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btnStartCameraRecording" class="primary" aria-label="Start camera and video recording, button">Start Camera and Recording</button>
+      <button id="btnStopCameraRecording" aria-label="Stop video recording, button" disabled>Stop Recording</button>
     </div>
   </dialog>
 
