@@ -87,10 +87,18 @@
   }
   function hashQuery() { const h=location.hash||''; return h.includes('?') ? '?'+h.split('?').slice(1).join('?') : ''; }
   function openEditor() { showView('editor'); const target='#/editor'+hashQuery(); if ((location.hash||'') !== target) history.pushState(null,'',target); }
+  function retainedAndTotal(p) {
+    const total = Number(p.duration) || 0;
+    const kept = VoiceCutCore.retainedDuration(p);
+    return {kept, total, cut: total - kept > 1};
+  }
   function projectCardHTML(p) {
-    return `<div class="card library-card" role="group" aria-label="Project: ${escapeHTML(p.name)}. Duration ${formatTimeVerbose(p.duration)}. Last modified ${new Date(p.modified).toLocaleString()}.">
+    const rt = retainedAndTotal(p);
+    const extra = rt.cut ? ` Originally ${formatTimeVerbose(rt.total)}.` : '';
+    const extraMeta = rt.cut ? ` • Originally ${formatTimeVerbose(rt.total)}` : '';
+    return `<div class="card library-card" role="group" aria-label="Project: ${escapeHTML(p.name)}. Duration ${formatTimeVerbose(rt.kept)}.${extra} Last modified ${new Date(p.modified).toLocaleString()}.">
       <div><strong>${escapeHTML(p.name)}</strong></div>
-      <div class="clip-meta">Duration ${formatTimeVerbose(p.duration)} • Modified ${new Date(p.modified).toLocaleString()}</div>
+      <div class="clip-meta">Duration ${formatTimeVerbose(rt.kept)}${extraMeta} • Modified ${new Date(p.modified).toLocaleString()}</div>
       <div class="flex gap-8 wrap mt-8">
         <button data-open-project="${p.id}">Open</button>
         <button data-rename-project="${p.id}">Rename</button>
@@ -158,7 +166,7 @@
       $('#videoPlaceholder').classList.toggle('hidden', !!project.videoUrl);
       openEditor();
       $('#section-video').scrollIntoView();
-      announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(project.duration)}.`);
+      announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}.`);
     } catch(e) { announce('Cannot open project: ' + e.message, true); }
   }
   function resetProjectState() {
@@ -510,7 +518,7 @@
     const videoTrack = document.createElement('div');
     videoTrack.className='track';
     videoTrack.setAttribute('role','listitem');
-    videoTrack.setAttribute('aria-label', `Video Track. Duration ${formatTimeVerbose(project.duration)}. Trim start ${formatTimeVerbose(project.trimStart)} end ${formatTimeVerbose(project.trimEnd || project.duration)}`);
+    videoTrack.setAttribute('aria-label', `Video Track. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}. Trim start ${formatTimeVerbose(project.trimStart)} end ${formatTimeVerbose(project.trimEnd || project.duration)}`);
     videoTrack.innerHTML = `
       <div class="track-header"><span class="track-title">Video Track</span><span class="badge">${project.segments.length>0?project.segments.length+' segments':'1 clip'}</span></div>
       <div class="track-clips">
@@ -520,9 +528,9 @@
             <div class="clip-meta">Start ${formatTime(seg.start)} End ${formatTime(seg.end)} Duration ${formatTime(seg.end-seg.start)}</div>
           </div>
         `).join('') : `
-          <div class="clip" tabindex="0" role="button" aria-label="Video Track. Starts at ${formatTimeVerbose(project.trimStart)}. Ends at ${formatTimeVerbose(project.trimEnd||project.duration)}. Duration ${formatTimeVerbose((project.trimEnd||project.duration)-project.trimStart)}. Volume ${project.originalAudio.volume} percent. ${project.originalAudio.muted?'Muted':'Unmuted'}. Noise reduction ${project.originalAudio.noiseReduction}">
+          <div class="clip" tabindex="0" role="button" aria-label="Video Track. Starts at ${formatTimeVerbose(project.trimStart)}. Ends at ${formatTimeVerbose(project.trimEnd||project.duration)}. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}. Volume ${project.originalAudio.volume} percent. ${project.originalAudio.muted?'Muted':'Unmuted'}. Noise reduction ${project.originalAudio.noiseReduction}">
             <div class="clip-label">Main Video ${escapeHTML(project.name)}</div>
-            <div class="clip-meta">Start ${formatTime(project.trimStart)} End ${formatTime(project.trimEnd||project.duration)} Duration ${formatTime((project.trimEnd||project.duration)-project.trimStart)} | Vol ${project.originalAudio.volume}% | NR ${project.originalAudio.noiseReduction}</div>
+            <div class="clip-meta">Start ${formatTime(project.trimStart)} End ${formatTime(project.trimEnd||project.duration)} Duration ${formatTime(retainedAndTotal(project).kept)} | Vol ${project.originalAudio.volume}% | NR ${project.originalAudio.noiseReduction}</div>
           </div>
         `}
       </div>
@@ -749,7 +757,7 @@
     const summary = $('#exportSummary');
     const musicCount = project.clips.filter(c=>c.type==='music').length;
     const voiceCount = project.clips.filter(c=>c.type==='voiceover').length;
-    const totalDuration = (project.trimEnd||project.duration) - project.trimStart;
+    const totalDuration = VoiceCutCore.retainedDuration(project);
     summary.innerHTML = `
       Video duration: ${formatTime(totalDuration)}<br>
       Resolution: ${project.resolution}p<br>
@@ -765,7 +773,7 @@
   // Video handling
   function loadVideoFile(file) {
     if (!file) return;
-    if (file.size > 500 * 1024 * 1024) { announce('Use a video under 500 MB; large files can exhaust device memory.',true); return; }
+    if (file.size > 2 * 1024 * 1024 * 1024) { announce('Use a video under 2 GB. Larger files can exhaust device memory.',true); return; }
     currentRequest?.abort(); mediaEpoch++;
     pauseAllAudio();
     project.captions = [];
@@ -1738,6 +1746,43 @@
     return out;
   }
   // On-device cleanup: neural first (NR-2), classic spectral (NR-1) fallback.
+  async function processLongAudioWithAI(buffer, level, onProgress) {
+    const devChunk = Number(new URLSearchParams((hashQuery() || '?').slice(1)).get('dev-chunk-seconds'));
+    const useChunks = buffer.duration > 600 || (Number.isFinite(devChunk) && devChunk >= 2);
+    if (buffer.duration > 1800) throw new Error('Cleanup supports up to 30 minutes. Trim a shorter section first.');
+    if (!useChunks) return processAudioBufferWithAI(buffer, level, onProgress);
+    const chunkLen = (Number.isFinite(devChunk) && devChunk >= 2) ? devChunk : 300;
+    const total = buffer.duration, sr = buffer.sampleRate;
+    const nominal = VoiceCutCore.splitChunks(total, chunkLen);
+    const ch0 = buffer.getChannelData(0);
+    const bounds = [0];
+    for (let i = 1; i < nominal.length; i++) bounds.push(VoiceCutCore.chooseCutPoint(ch0, sr, nominal[i][0], 2));
+    bounds.push(total);
+    const n = bounds.length - 1;
+    const reports = [];
+    let rescued = false, sawNeural = false;
+    for (let i = 0; i < n; i++) {
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      const a = bounds[i], b = bounds[i + 1];
+      const tail = (i < n - 1) ? Math.min(0.25, Math.max(0, total - b)) : 0;
+      const s0 = Math.floor(a * sr), s1 = Math.min(buffer.length, Math.floor((b + tail) * sr));
+      const slice = new AudioBuffer({numberOfChannels: buffer.numberOfChannels, length: Math.max(1, s1 - s0), sampleRate: sr});
+      for (let c = 0; c < buffer.numberOfChannels; c++) slice.getChannelData(c).set(buffer.getChannelData(c).subarray(s0, s1));
+      const base = (i / n) * 100, span = 100 / n;
+      const cleaned = await processAudioBufferWithAI(slice, level, (pct, text) =>
+        onProgress(Math.min(99, Math.round(base + (pct / 100) * span)), `Cleaning part ${i + 1} of ${n}. ${text}`));
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      const keepLen = Math.min(Math.floor((b - a) * sr), cleaned.length);
+      for (let c = 0; c < buffer.numberOfChannels; c++)
+        buffer.getChannelData(c).set(cleaned.getChannelData(c).subarray(0, keepLen), s0);
+      reports.push(lastScanReport); if (lastBuriedRescue) rescued = true; if (lastCleanupEngine === 'neural') sawNeural = true;
+    }
+    lastScanReport = (reports.find(r => r) || '') + ` Checked in ${n} parts.`;
+    lastCleanupEngine = sawNeural ? 'neural' : 'classic';
+    lastBuriedRescue = rescued;
+    onProgress(100, 'Long-audio cleanup complete. Preview before applying.');
+    return buffer;
+  }
   async function processAudioBufferWithAI(buffer, level, onProgress) {
     if (buffer.duration > 600) throw new Error('Local cleanup is limited to 10 minutes to protect device memory.');
     onProgress(3, 'Scanning the whole audio for noise. No upload.');
@@ -1805,6 +1850,34 @@
   function silenceTickStop(){if(silenceTicker){clearInterval(silenceTicker);silenceTicker=null;}}
   async function detectSilenceClips(){return detectSilenceGaps(true);}
   async function detectSilenceOriginal(){return detectSilenceGaps(false);}
+  async function detectGapsOnDevice(file, seconds, statusEl) {
+    cleanupBusy = true; aiProcessingCancelled = false;
+    showSilenceProgress(10); silenceTickStart('Detecting quiet gaps on this device');
+    statusEl.textContent = 'Analyzing audio on this device. No upload.';
+    announce('Detecting quiet gaps on this device. No upload.');
+    try {
+      const decoded = await decodeAudioFile(file);
+      if (aiProcessingCancelled) throw new Error('Cancelled');
+      if (decoded.duration > 1800) throw new Error('Gap detection supports up to 30 minutes. Trim a shorter section first.');
+      showSilenceProgress(70);
+      const channels = [];
+      for (let c = 0; c < decoded.numberOfChannels; c++) channels.push(decoded.getChannelData(c));
+      const found = VoiceCutCore.findGaps(channels, decoded.sampleRate, Number(seconds));
+      const gaps = found.gaps;
+      const removedSecs = gaps.reduce((s, g) => s + (g[1] - g[0]), 0);
+      const sensNote = gaps.length && found.thresholdDb > -30 ? ' High sensitivity was used because of background noise.' : '';
+      const fmtT = (t) => { const m = Math.floor(t / 60), s2 = Math.floor(t % 60); return m + ':' + String(s2).padStart(2, '0'); };
+      const message = gaps.length
+        ? `Found ${gaps.length} quiet ${gaps.length === 1 ? 'gap' : 'gaps'} (${removedSecs.toFixed(1)} seconds total): ` + gaps.slice(0, 8).map(g => fmtT(g[0]) + ' to ' + fmtT(g[1])).join(', ') + (gaps.length > 8 ? ', and more' : '') + '. Tap Remove Silence to cut them out.' + sensNote
+        : `No quiet gaps longer than ${seconds} seconds found.`;
+      silenceTickStop(); showSilenceProgress(100);
+      statusEl.textContent = message; announce(message);
+    } catch(e) {
+      const msg = /cancelled|timed out/i.test(e.message) ? 'Detection stopped: ' + e.message : 'Detection stopped: ' + e.message;
+      statusEl.textContent = msg; announce(msg, true);
+      if(!/cancelled/i.test(e.message))notifyComplete('Gap detection stopped','Quiet-gap detection stopped before finishing. Open the app to try again.');
+    } finally { cleanupBusy = false; hideSilenceProgress(); silenceTickStop(); }
+  }
   async function detectSilenceGaps(fromClip) {
     if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.', true); return; }
     let input,name;
@@ -1819,13 +1892,17 @@
     const seconds = $('#silenceSeconds').value;
     const statusEl = $('#silenceStatus');
     const detectDur = fromClip?audibleDurationOf(selectedClipId):(project.duration||0);
-    if(detectDur>600){const m='Gap detection supports up to 10 minutes. Trim a shorter section first.';statusEl.textContent=m;announce(m,true);return;}
+    if(detectDur>1800){const m='Gap detection supports up to 30 minutes. Trim a shorter section first.';statusEl.textContent=m;announce(m,true);return;}
+    let detectFile;
+    try { detectFile = input instanceof Blob ? input : await (await fetch(input)).blob(); }
+    catch(e) { const m='Could not read this file. Try uploading it again.';statusEl.textContent=m;announce(m,true);return; }
+    if (detectDur > 600 || $('#enhanceMode').value==='device') return detectGapsOnDevice(detectFile, seconds, statusEl);
     cleanupBusy = true; aiProcessingCancelled = false;
     showSilenceProgress(0);
     statusEl.textContent='Preparing a small audio copy for fast gap detection.';
     announce('Detecting quiet gaps. Uploading a small audio copy.');
     try {
-      const file = input instanceof Blob ? input : await (await fetch(input)).blob();
+      const file = detectFile;
       let uploadFile=file;
       try{uploadFile=await shrinkAudioFile(file,0,Infinity,16000);}catch(e){uploadFile=file;}
       const result = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds) + '&detect=1', uploadFile, {cloud:false, consent:'Upload a small audio copy to your VoiceCut server to preview quiet gaps? Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
@@ -1978,11 +2055,11 @@
     const seconds = $('#silenceSeconds').value;
     const statusEl = $('#silenceStatus');
     const metaDur = audibleDurationOf(clipId);
-    if (metaDur > 600) { const m='Silence removal supports up to 10 minutes. Trim a shorter section first.'; statusEl.textContent=m; announce(m,true); return; }
+    if (metaDur > 1800) { const m='Silence removal supports up to 30 minutes. Trim a shorter section first.'; statusEl.textContent=m; announce(m,true); return; }
     let file;
     try { file = input instanceof Blob ? input : await (await fetch(input)).blob(); }
     catch(e) { const m='Could not read this file. Try uploading it again.'; statusEl.textContent=m; announce(m,true); return; }
-    if (file.size > 100 * 1024 * 1024 || $('#enhanceMode').value==='device')
+    if (file.size > 100 * 1024 * 1024 || $('#enhanceMode').value==='device' || metaDur > 600)
       return processSilenceOnDevice(file, name, clipId);
     cleanupBusy = true; aiProcessingCancelled = false;
     video.pause(); for (const node of audioNodes.values()) node.element.pause();
@@ -2060,7 +2137,7 @@
     try {
       const decoded = await decodeAudioFile(file);
       if (aiProcessingCancelled) throw new Error('Cancelled');
-      if (decoded.duration > 600) throw new Error('Silence removal supports up to 10 minutes. Trim a shorter section first.');
+      if (decoded.duration > 1800) throw new Error('Silence removal supports up to 30 minutes. Trim a shorter section first.');
       showSilenceProgress(60);
       const channels = [];
       for (let c=0;c<decoded.numberOfChannels;c++) channels.push(decoded.getChannelData(c));
@@ -2164,10 +2241,10 @@
       progress(0,'Preparing audio');
       const file = input instanceof Blob ? input : await (await fetch(input)).blob();
       const metaDur = audibleDurationOf(clipId);
-      if (metaDur > 600) throw new Error('Cleanup supports up to 10 minutes. Trim a shorter section first.');
+      if (metaDur > 1800) throw new Error('Cleanup supports up to 30 minutes. Trim a shorter section first.');
       if (file.size > 100 * 1024 * 1024) progress(8,'Large file: skipping server upload. Using strong on-device cleanup.');
       let enhancedBlob, enhancedBuffer, originalBuffer = null;
-      const serverResult = await enhanceWithRealAI(file,level,progress);
+      const serverResult = await enhanceWithRealAI(file,level,progress,metaDur);
       if (aiProcessingCancelled) throw new Error('Cancelled');
       if (serverResult) {
         enhancedBlob = serverResult.blob; enhancedBuffer = await decodeAudioFile(enhancedBlob);
@@ -2175,7 +2252,7 @@
         progress(5,'Decoding audio. Some video codecs cannot be decoded by Web Audio.');
         originalBuffer = await decodeAudioFile(file);
         if (aiProcessingCancelled) throw new Error('Cancelled');
-        enhancedBuffer = await processAudioBufferWithAI(originalBuffer,level,progress);
+        enhancedBuffer = await processLongAudioWithAI(originalBuffer,level,progress);
         enhancedBlob = audioBufferToWavBlob(enhancedBuffer);
       }
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -2442,8 +2519,9 @@
       throw e;
     }finally{clearTimeout(timer);currentRequest=null;}
   }
-  async function enhanceWithRealAI(file,level,onProgress) {
+  async function enhanceWithRealAI(file,level,onProgress,mediaSeconds=0) {
     if($('#enhanceMode').value==='device')return null;
+    if(mediaSeconds>600){announce('Long video: cleaning the whole video on this device. No upload.');return null;}
     onProgress(5,'Contacting the VoiceCut service.');
     let capabilities=null;
     try{capabilities=await getCapabilities();}catch(e){capabilities=null;}

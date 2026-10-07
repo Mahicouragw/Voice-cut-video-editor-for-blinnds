@@ -58,7 +58,7 @@ window.VoiceCutStorage = (() => {
     },
     async list() {
       const records = await transaction('readonly', store => store.getAll());
-      return records.map(r => ({id: r.id, name: r.project?.name || 'Untitled Project', duration: Number(r.project?.duration) || 0, modified: r.modified || 0}))
+      return records.map(r => ({id: r.id, name: r.project?.name || 'Untitled Project', duration: Number(r.project?.duration) || 0, trimStart: Number(r.project?.trimStart) || 0, trimEnd: r.project?.trimEnd ?? null, segments: Array.isArray(r.project?.segments) ? r.project.segments : [], modified: r.modified || 0}))
         .sort((a, b) => b.modified - a.modified);
     },
     async get(id) {
