@@ -1,6 +1,6 @@
-# Real AI features — version 2.0
+# Real AI features — VoiceCut 2.10
 
-Version 2.0 keeps the real provider integrations automatic, with no provider or method menus in the normal user interface:
+VoiceCut 2.10 keeps the real provider integrations automatic, with no provider or method menus in the normal user interface:
 
 - Timed automatic captions, free tiers first: Groq Whisper, Deepgram Nova, AssemblyAI Universal, then paid OpenAI Whisper.
 - AI background-noise removal, best available first: free on-server DeepFilterNet neural denoising, then ElevenLabs Voice Isolator cloud AI, then on-device filters when the service is unreachable.

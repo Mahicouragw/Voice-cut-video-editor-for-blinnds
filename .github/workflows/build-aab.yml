@@ -29,8 +29,23 @@ jobs:
           channel: stable
           cache: true
       - run: bash scripts/prepare-android.sh
-      - working-directory: flutter_app
-        run: flutter pub get && flutter analyze --no-fatal-infos
+      - name: Resolve packages and analyze Flutter app
+        working-directory: flutter_app
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee /tmp/voicecut-flutter-pub.log
+          flutter analyze --no-fatal-infos 2>&1 | tee /tmp/voicecut-flutter-analyze.log
+      - name: Summarize Flutter validation failures
+        if: failure()
+        shell: bash
+        run: |
+          for log in /tmp/voicecut-flutter-pub.log /tmp/voicecut-flutter-analyze.log; do
+            if [ -f "$log" ]; then
+              log_output="$(tail -n 80 "$log" | tr -d '\000' | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+              echo "::error title=$(basename "$log")::${log_output}"
+            fi
+          done
       - working-directory: flutter_app
         run: flutter build apk --debug
       - uses: actions/upload-artifact@v4

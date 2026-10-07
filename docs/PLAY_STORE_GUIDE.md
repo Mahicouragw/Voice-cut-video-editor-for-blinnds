@@ -1,6 +1,6 @@
 # Android: test APK first, signed AAB second
 
-The Android source was analyzed with Flutter 3.41.2 with **no issues found**. This workspace did not build an APK/AAB or run Android/TalkBack on a physical phone. The workflow builds it in GitHub, where Android SDK tooling is available. A successful compile is not the same as a tested app or guaranteed Play Store approval.
+The Android wrapper version is **2.10.0+12**. The camera capture and permission changes require a fresh build. A GitHub Actions build is required here because this workspace does not include the Android SDK/Flutter toolchain. A successful compile is not the same as a tested app or guaranteed Play Store approval.
 
 ## 1. Build a debug APK without secrets
 1. Merge the repair after pull-request checks pass. The PR also requests an Android debug build.
@@ -10,17 +10,17 @@ The Android source was analyzed with Flutter 3.41.2 with **no issues found**. Th
 5. Wait for green. A pending job is not a completed build. Android is allowed up to 30 minutes for dependency downloads/build; this is separate from the 15-minute sign-in/file-retention policies.
 6. Open the run → **Artifacts** → download `voicecut-debug-apk-NOT-FOR-PLAY-STORE`. Unzip it.
 7. On your Android test device, install `app-debug.apk` if you are comfortable granting install permission to your file manager. Never disable Play Protect globally.
-8. Test picking media, TalkBack traversal, permission denial, recording, persistence after reopening, editing, cancelling export and saving/sharing an actual video. WebView codecs vary by Android version.
+8. Test picking and recording video, voice-over recording, camera/microphone/notification denial and grant paths, TalkBack traversal, project reload/persistence, automatic captions (with the configured backend), video/audio trimming, editing, cancelling export and saving/sharing an actual video. WebView camera support, codecs and export performance vary by Android version and device.
 
-The app loads the live VoiceCut website, so website updates apply automatically without reinstalling the app. An internet connection is required. Microphone permission is requested only when recording, and only for the trusted website origin. Notification permission is requested only if you enable completion notifications in Settings. It does not request broad media-library/storage permissions; file selection uses the WebView/system picker. The editor fills the whole screen with no separate native header, so TalkBack swipe navigation starts inside the page content instead of stopping on an app bar. App 2.5 pins a permanent debug signing key in the repo, so updates install over each other.
+The app loads the live VoiceCut website, so website updates apply to installed apps after the Pages deployment without reinstalling. An internet connection is required. Camera and microphone permissions are requested only after the user taps **Record Video**; microphone permission for voice-over is requested only when recording. Permission requests are restricted to the trusted website origin. Notification permission is requested only if you enable completion notifications in Settings. Camera hardware is optional. It does not request broad media-library/storage permissions or unrelated game permissions; file selection uses the WebView/system picker. The webpage has an accessible **Reload** button that saves and restores the current project after reload. The editor fills the whole screen with no separate native header, so TalkBack swipe navigation starts inside the page content instead of stopping on an app bar. App 2.10 pins a permanent debug signing key in the repo, so debug updates install over each other.
 
 ## 2. Important limitations
-- Since app version 2.1 the website is loaded from its address, not packaged inside. Updating the website updates every installed app automatically; rebuild the APK only when the wrapper itself (permissions, sharing, version) changes.
+- Since app version 2.1 the website is loaded from its address, not packaged inside. Updating the website updates every installed app after Pages deployment; rebuild the APK only when the wrapper itself (permissions, sharing, version) changes.
 - Export capability depends on Android WebView and device performance. Update Android System WebView/Chrome where available.
 - Native sharing is limited to 40 MB to bound the binary bridge's memory usage. Open the deployed website in Chrome for bigger exports.
 - Native temporary sharing files are deleted after the system share sheet completes. Process termination can interrupt this; Android may retain cache until cleared. The 15-minute server-file rule is about the optional processing server, not files saved by the user to their device.
 - The shared media must be tested with the receiving app. Make sure a copied file opens after VoiceCut closes.
-- The app uses the same website origin as the browser version, so the backend needs no separate Android origin flag. Provider keys stay on that backend; the owner connects it through the same private page address as on desktop.
+- The app uses the same HTTPS website origin as the browser version, so the backend needs no separate Android origin flag. Provider keys stay on that backend; the owner connects it through the same private page-address override as on desktop.
 - Retain the correct application ID and signing key if updating an app that already exists in Play Console. The new scaffold defaults to `com.mahicouragw.voicecut_studio`. **Do not replace a previously published app's ID blindly.**
 
 ## 3. Create an upload keystore, privately

@@ -1,5 +1,11 @@
 # VoiceCut 1.2 — AI update verification
 
+## Current APK update: VoiceCut 2.10.0+12
+- The current web editor includes user-started camera video capture with preview/discard/use actions and a 500 MB recording safety limit. The accessible Reload control now flushes the open project to IndexedDB and restores both project and view after a real page reload.
+- The Android wrapper grants camera/microphone WebView access only to the trusted VoiceCut origin and only for those two resources. Notifications remain opt-in. No unrelated game, broad storage, contacts, or location permissions were added.
+- Root verification for this refresh: `npm test` passes 48/48 tests; JavaScript syntax checks, Android manifest parsing and `git diff --check` pass. Chromium/FFmpeg and Flutter/Android SDK are not installed in this workspace; use the updated GitHub Actions checks for the browser suite and APK build. Physical Android/TalkBack testing remains outstanding.
+
+
 ## Added and repaired in this update
 - Documented OpenAI `/v1/audio/transcriptions` integration, using `whisper-1`, `verbose_json` and word/segment timestamps; optional language hint, grouped editable cues, retained-source timing and explicit human review.
 - Documented ElevenLabs `/v1/audio-isolation` integration. Server-only provider secrets; no fake neural-model fallback.

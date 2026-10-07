@@ -19,6 +19,7 @@
     <span>VoiceCut Studio</span>
     <span class="badge" id="modeBadge" aria-label="Editing mode">Simple Mode</span>
   </div>
+  <button id="btnReloadApp" class="header-reload" aria-label="Reload VoiceCut Studio, button. Save the open project and reload the app">↻ Reload</button>
   <div class="header-actions" role="toolbar" aria-label="Project actions">
     <button id="btnSaveProject" aria-label="Save project, button">Save</button>
     <button id="btnUndo" aria-label="Undo last action, Control plus Z" disabled>Undo</button>
@@ -184,7 +185,7 @@
     </div>
     <div class="card" role="region" aria-labelledby="privacyHeading">
       <h2 id="privacyHeading">Privacy</h2>
-      <p>Videos, recordings, and voice-over files are private user content. Processing happens locally using Web Audio API, HTML5 Video, and Canvas capture. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
+      <p>Videos, recordings, and voice-over files are private user content. Editing and camera recordings use this device. Record Video requests camera and microphone access only after you tap Start; the captured file stays on-device unless you explicitly approve cloud processing. No video is uploaded to a server without your consent. We do not sell or share user media. Export uses local MediaRecorder.</p>
       <p><strong>Local processing:</strong> Trimming, splitting, volume, fades, noise reduction, ducking, preview playback.</p>
       <p><strong>Optional cloud AI:</strong> automatic captions and AI noise removal can process audio on the secure VoiceCut service. Nothing is uploaded without your explicit approval for each request. Temporary server copies expire within 15 minutes.</p>
     </div>
@@ -195,7 +196,7 @@
 
     <div class="card" role="region" aria-labelledby="aboutHeading">
       <h2 id="aboutHeading">About VoiceCut Studio</h2>
-      <p>Version <strong>2.0.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
+      <p>Version <strong>2.10.0</strong>. Accessible video editor for blind, low-vision, screen-reader, keyboard and general users. Home, Library, Settings and an Editor that opens only with a project.</p>
     </div>
   </section>
 

@@ -1352,6 +1352,12 @@
     if (!$('#videoRecordDialog').open) { videoRecordChunks = []; return; }
     if (!videoRecordChunks.length) { $('#btnStartVideoRecording').disabled = false; announce('Recording stopped. No video was captured.'); return; }
     const blob = new Blob(videoRecordChunks, {type:mime});
+    videoRecordChunks = [];
+    if (blob.size > 500 * 1024 * 1024) {
+      $('#btnStartVideoRecording').disabled = false;
+      announce('Recording exceeds 500 MB. Record a shorter video or lower the camera quality, then try again.', true);
+      return;
+    }
     pendingVideoRecording = {blob};
     if (videoRecordUrl) URL.revokeObjectURL(videoRecordUrl);
     videoRecordUrl = URL.createObjectURL(blob);
@@ -2579,6 +2585,33 @@
     try { await silentSave(); }
     catch (e) { announce('Save failed. Storage may be full. ' + e.message, true); }
   }
+  async function reloadApplication() {
+    if (isExporting || captionRequestBusy || cleanupBusy || isRecording || videoRecording || videoRecorder?.state === 'recording' || $('#recordDialog').open || $('#videoRecordDialog').open) {
+      announce('Finish or close the current recording, caption request, cleanup, or export before reloading.', true);
+      return;
+    }
+    const button = $('#btnReloadApp');
+    button.disabled = true;
+    try {
+      clearTimeout(autoSaveTimeout);
+      await saveQueue.catch(() => {});
+      if (project.videoFile) {
+        dirty = true;
+        await silentSave();
+        await saveQueue;
+        sessionStorage.setItem('voicecut_reload_project', project.id);
+        sessionStorage.setItem('voicecut_reload_view', currentView);
+      } else {
+        sessionStorage.removeItem('voicecut_reload_project');
+        sessionStorage.removeItem('voicecut_reload_view');
+      }
+      announce('Reloading VoiceCut Studio. Your open project has been saved.');
+      location.reload();
+    } catch (error) {
+      button.disabled = false;
+      announce('Cannot reload safely because the project could not be saved. ' + error.message, true);
+    }
+  }
   async function loadProjectFromStorage() { return openProjectById(null); }
 
   // Confirm dialog
@@ -2592,6 +2625,7 @@
   // Event Listeners
   function initEvents() {
     // Home buttons
+    $('#btnReloadApp').addEventListener('click', reloadApplication);
     $('#homeUploadVideo').addEventListener('click', ()=>$('#fileVideo').click());
     $('#homeRecordVideo').addEventListener('click', openVideoRecordDialog);
     $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
@@ -3048,8 +3082,26 @@
   document.addEventListener('DOMContentLoaded', ()=>{
     initEvents(); initCaptions(); loadPrefs(); applyPrefsToProject(true);
     for (const key of ['voicecut_ai_server','voicecut_dolby_key','voicecut_hf_key','voicecut_replicate_key']) localStorage.removeItem(key);
-    renderAll(); route();
-    if (history.length <= 1 && currentView !== 'home') {
+    renderAll();
+    let reloadProjectId = null, reloadView = 'editor';
+    try {
+      reloadProjectId = sessionStorage.getItem('voicecut_reload_project');
+      reloadView = sessionStorage.getItem('voicecut_reload_view') || 'editor';
+      sessionStorage.removeItem('voicecut_reload_project');
+      sessionStorage.removeItem('voicecut_reload_view');
+    } catch {}
+    if (reloadProjectId) {
+      openProjectById(reloadProjectId).then(() => {
+        if (!hasProject()) { route(); return; }
+        if (['home', 'library', 'settings'].includes(reloadView)) {
+          history.replaceState(null, '', '#/' + reloadView);
+          showView(reloadView);
+        }
+      });
+    } else {
+      route();
+    }
+    if (!reloadProjectId && history.length <= 1 && currentView !== 'home') {
       const here = '#/' + currentView + hashQuery();
       history.replaceState(null, '', '#/home');
       history.pushState(null, '', here);
