@@ -1736,7 +1736,8 @@
     let peak = 0;
     for (let c = 0; c < ch; c++) { const d = buffer.getChannelData(c); for (let i = 0; i < d.length; i += 7) { const a = Math.abs(d[i]); if (a > peak) peak = a; } }
     const moduleUrl = String(new URL('web/vendor/rnnoise.js', document.baseURI));
-    const out = new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr});
+    let out = new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr});
+    let buriedAny = false;
     for (let c = 0; c < ch; c++) {
       if (aiProcessingCancelled) throw new Error('Cancelled');
       onProgress(5 + Math.round(c / ch * 90), 'Neural cleanup: preparing channel ' + (c + 1) + ' of ' + ch + '.');
@@ -1745,9 +1746,20 @@
       const r = await NR2.process48k(up, {moduleUrl, peak, mixAt, buriedVoice,
         onProgress: (p) => onProgress(5 + Math.round((c + p) / ch * 90), 'Neural cleanup: removing noise (channel ' + (c + 1) + ' of ' + ch + ').'),
         shouldCancel: () => aiProcessingCancelled});
-      if (r.buriedBlend > 0) lastBuriedRescue = true;
-      const back = await resampleChannel(r.out, 48000, sr, len);
+      let buriedHere = false;
+      if (r.buriedBlend > 0) { lastBuriedRescue = true; buriedHere = true; buriedAny = true; }
+      const clarityAmt = level === 'light' ? 0.5 : level === 'medium' ? 0.75 : 1;
+      const lifted = (NR2.clarityLift && !buriedHere) ? NR2.clarityLift(r.out, r.vad, clarityAmt) : r.out;
+      const back = await resampleChannel(lifted, 48000, sr, len);
       out.copyToChannel(back, c);
+    }
+    if (!buriedAny && level === 'ultra' && window.VoiceCutNR?.spectralDenoise) {
+      onProgress(93, 'Deep finish: shaving residual background.');
+      out = await window.VoiceCutNR.spectralDenoise(out, 'light',
+        (pct, text) => onProgress(93 + Math.round(pct * 0.07), text),
+        (ch2, len2, sr2) => new AudioBuffer({numberOfChannels: ch2, length: len2, sampleRate: sr2}),
+        () => aiProcessingCancelled);
+      if (aiProcessingCancelled) throw new Error('Cancelled');
     }
     return out;
   }
@@ -2002,6 +2014,56 @@
       announce(`Merged ${parts.length} clips into one Merged audio clip. Original video sound is not included. Clip noise reduction was not applied in the merge.` + (keptMuted ? ` ${keptMuted} muted clips kept.` : ''));
     } catch(e) { announce('Could not merge audio clips: ' + e.message, true); }
   }
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1]);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+  // Send a finished file to the Android app shell. Small files use one fast
+  // message (works on all app versions); large files travel in 1 MB parts
+  // (needs the updated app). action is 'save' (into the device gallery) or
+  // 'share' (Android share sheet). Returns 'saved' or 'shared'. Progress
+  // milestones go to statusEl so screen readers are not spammed per part.
+  async function sendFileToApp(blob, ext, action, statusEl) {
+    const bridge = window.flutter_inappwebview;
+    if (!bridge) throw new Error('App bridge missing.');
+    const devKb = Number(new URLSearchParams((hashQuery() || '?').slice(1)).get('dev-bridge-chunk-kb'));
+    const chunkSize = (Number.isFinite(devKb) && devKb >= 16) ? devKb * 1024 : 1024 * 1024;
+    const fastPath = !(Number.isFinite(devKb) && devKb >= 16) && blob.size <= 24 * 1024 * 1024;
+    const label = action === 'save' ? 'Saving to device' : 'Sharing';
+    if (fastPath) {
+      const base64 = await blobToBase64(blob);
+      if (action === 'save') {
+        try { await bridge.callHandler('saveExport', base64, ext); return 'saved'; }
+        catch (e) { /* older app: fall through to the share sheet */ }
+      }
+      await bridge.callHandler('shareExport', base64, ext);
+      return 'shared';
+    }
+    let id = null, lastShown = -1;
+    try {
+      try { id = await bridge.callHandler('shareExportStart', ext, action, blob.size); }
+      catch (e) { throw new Error('OLD_APP'); }
+      const total = Math.ceil(blob.size / chunkSize);
+      for (let i = 0; i < total; i++) {
+        const b64 = await blobToBase64(blob.slice(i * chunkSize, (i + 1) * chunkSize));
+        await bridge.callHandler('shareExportChunk', id, i, b64);
+        const pct = Math.round((i + 1) / total * 100);
+        const milestone = Math.floor(pct / 25) * 25;
+        if (statusEl && milestone > lastShown) { lastShown = milestone; statusEl.textContent = `${label}: ${pct}%. Keep the app open.`; }
+      }
+      await bridge.callHandler('shareExportFinish', id);
+      id = null;
+      return action === 'save' ? 'saved' : 'shared';
+    } catch (e) {
+      if (id !== null) { try { await bridge.callHandler('shareExportAbort', id); } catch (_) {} }
+      if (e && e.message === 'OLD_APP') throw new Error('This file is too large for the installed VoiceCut app. Update the app to save it, or use Chrome.');
+      throw e;
+    }
+  }
   async function reverseVideoViaServer() {
     if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.', true); return; }
     if (!project.videoFile) { announce('Upload a video first.', true); return; }
@@ -2021,16 +2083,16 @@
       if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
       if (aiProcessingCancelled) throw new Error('Cancelled');
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
-      if (window.flutter_inappwebview && blob.size <= 40 * 1024 * 1024) {
-        const base64 = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result.split(',')[1]); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
-        await window.flutter_inappwebview.callHandler('shareExport', base64, 'mp4');
+      if (window.flutter_inappwebview) {
+        const how = await sendFileToApp(blob, 'mp4', 'save', statusEl);
+        statusEl.textContent = how === 'saved' ? 'Video reversed. Reversed file saved to your device gallery.' : 'Video reversed. Choose where to save the reversed file in the share sheet.';
       } else {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'reversed-video.mp4';
         a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        statusEl.textContent = 'Video reversed. Reversed file downloaded.';
       }
-      statusEl.textContent = 'Video reversed. Reversed file downloaded.';
       announce('Video reversed. Reversed file downloaded. Upload it as a new project to edit it.');
       notifyComplete('Video reversed','Your reversed video downloaded.');
     } catch(e) {
@@ -2090,11 +2152,12 @@
         ? `Removed ${removed} silent ${removed === 1 ? 'gap' : 'gaps'}. Media is shorter by ${secs.toFixed(1)} seconds.` + sensNote2
         : `No quiet gaps longer than ${seconds} seconds found. Background noise may be filling the pauses; try noise reduction first.`;
       if (!clipId) {
+        let appDelivery = '';
         if (removed > 0) {
           const ext = (blob.type || '').includes('mp4') ? 'mp4' : 'wav';
-          if (window.flutter_inappwebview && blob.size <= 40 * 1024 * 1024) {
-            const base64 = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result.split(',')[1]); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
-            await window.flutter_inappwebview.callHandler('shareExport', base64, ext);
+          if (window.flutter_inappwebview) {
+            const how = await sendFileToApp(blob, ext, 'save', statusEl);
+            appDelivery = how === 'saved' ? ' Trimmed file saved to your device gallery.' : ' Choose where to save the trimmed file in the share sheet.';
           } else {
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -2103,8 +2166,9 @@
           }
         }
         silenceTickStop();showSilenceProgress(100);
-        statusEl.textContent = message + (removed > 0 ? ' Trimmed file downloaded.' : '');
-        announce(message + (removed > 0 ? ' Trimmed file downloaded.' : ''), removed === 0);
+        const deliveryNote = appDelivery || ' Trimmed file downloaded.';
+        statusEl.textContent = message + (removed > 0 ? deliveryNote : '');
+        announce(message + (removed > 0 ? deliveryNote : ''), removed === 0);
         notifyComplete('Silence removal complete',removed>0?`Removed ${removed} silent gaps. Trimmed file downloaded.`:`No gaps longer than ${seconds} seconds found.`);
         return;
       }
@@ -2938,11 +3002,14 @@
     $('#btnDownloadExported').addEventListener('click', async ()=>{
       if(!exportedBlob) return;
       if (window.flutter_inappwebview) {
-        if (exportedBlob.size > 40 * 1024 * 1024) { announce('Android in-app sharing is limited to 40 MB. Use the website in Chrome for larger exports.', true); return; }
+        const statusEl = $('#exportStatus');
+        statusEl.textContent = 'Saving to device. Keep the app open.';
+        announce('Saving video to your device. Keep the app open.');
         try {
-          const base64 = await new Promise((resolve,reject) => { const r = new FileReader(); r.onload=()=>resolve(r.result.split(',')[1]); r.onerror=()=>reject(r.error); r.readAsDataURL(exportedBlob); });
-          await window.flutter_inappwebview.callHandler('shareExport', base64, VoiceCutCore.extension(exportedBlob.type));
-        } catch(e) { announce('Sharing failed: '+e.message, true); }
+          const how = await sendFileToApp(exportedBlob, VoiceCutCore.extension(exportedBlob.type), 'save', statusEl);
+          const done = how === 'saved' ? 'Video saved to your device gallery.' : 'Video ready. Choose where to save it in the share sheet.';
+          statusEl.textContent = done; announce(done);
+        } catch(e) { statusEl.textContent = 'Saving failed: ' + e.message; announce('Saving failed: ' + e.message, true); }
         return;
       }
       const a=document.createElement('a');
@@ -2953,6 +3020,15 @@
     });
     $('#btnShareExported').addEventListener('click', async ()=>{
       if(!exportedBlob) return;
+      if (window.flutter_inappwebview) {
+        const statusEl = $('#exportStatus');
+        statusEl.textContent = 'Sharing. Keep the app open.';
+        try {
+          await sendFileToApp(exportedBlob, VoiceCutCore.extension(exportedBlob.type), 'share', statusEl);
+          statusEl.textContent = 'Video shared.'; announce('Video shared.');
+        } catch(e) { statusEl.textContent = 'Sharing failed: ' + e.message; announce('Sharing failed: ' + e.message, true); }
+        return;
+      }
       if(navigator.share && navigator.canShare && navigator.canShare({files:[new File([exportedBlob], 'video.' + VoiceCutCore.extension(exportedBlob.type), {type:exportedBlob.type})]})) {
         try {
           await navigator.share({files:[new File([exportedBlob], `${escapeHTML(project.name)}.${VoiceCutCore.extension(exportedBlob.type)}`, {type:exportedBlob.type})], title:project.name});

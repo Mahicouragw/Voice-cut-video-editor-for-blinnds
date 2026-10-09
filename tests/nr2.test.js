@@ -163,3 +163,50 @@ test('NR-2 buried-voice rescue keeps voice audible under dominating bike noise',
   assert.ok(supp >= 4, `extreme noise must still reduce (>= 4 dB), got ${supp.toFixed(1)} dB`);
   assert.equal(r.buriedBlend, 0.55);
 });
+function goertzel(d, sr, freq) {
+  const k = 0.5 + freq * d.length / sr, w = 2 * Math.PI * k / d.length, cw = Math.cos(w);
+  let s0 = 0, s1 = 0, s2 = 0;
+  for (let i = 0; i < d.length; i++) { s0 = d[i] + 2 * cw * s1 - s2; s2 = s1; s1 = s0; }
+  return Math.sqrt(s1 * s1 + s2 * s2 - 2 * cw * s1 * s2) / d.length;
+}
+function musicBed(len) {
+  const o = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const t = i / SR;
+    const vib = 1 + 0.003 * Math.sin(2 * Math.PI * 5 * t);
+    const trem = 0.6 + 0.4 * Math.sin(2 * Math.PI * 2 * t);
+    o[i] = trem * 0.3 * (Math.sin(2 * Math.PI * 220 * vib * t) + 0.8 * Math.sin(2 * Math.PI * 277.18 * t + 1) + 0.6 * Math.sin(2 * Math.PI * 329.63 * vib * t + 2));
+  }
+  return o;
+}
+test('NR-2 clarityLift lifts presence on voiced frames, lows untouched', () => {
+  const len = SR * 4, v = voiceProxy(len, 33);
+  const frames = Math.ceil(len / 480) + 1;
+  const out = NR2.clarityLift(v, new Float32Array(frames).fill(1), 1);
+  const g = (d, f) => 20 * Math.log10(goertzel(d, SR, f) + 1e-12);
+  assert.ok(g(out, 3200) - g(v, 3200) >= 2, 'presence must lift >=2 dB');
+  assert.ok(Math.abs(g(out, 150) - g(v, 150)) < 1, 'lows must stay within 1 dB');
+  let peak = 0; for (const x of out) peak = Math.max(peak, Math.abs(x));
+  assert.ok(peak <= 0.99, 'output must be peak-limited');
+});
+test('NR-2 clarityLift respects VAD gating and silence', () => {
+  const len = SR * 4, v = voiceProxy(len, 33);
+  const frames = Math.ceil(len / 480) + 1;
+  const gated = NR2.clarityLift(v, new Float32Array(frames), 1);
+  assert.ok(Math.abs(10 * Math.log10(energy(gated) / energy(v))) < 0.5, 'VAD=0 must leave audio alone');
+  const sil = NR2.clarityLift(new Float32Array(SR), new Float32Array(101), 1);
+  let peak = 0; for (const x of sil) peak = Math.max(peak, Math.abs(x));
+  assert.equal(peak, 0);
+});
+test('NR-2 ultra cascade shaves residual music past neural-only', async () => {
+  const len = SR * 6;
+  const {norm, mix} = mixAtLevels(voiceProxy(len, 21), musicBed(len), 0.15, 0.15);
+  const r = await NR2.process48k(mix, {moduleUrl: MOD, mixAt: () => 1});
+  const lifted = NR2.clarityLift(r.out, r.vad, 1);
+  const factory = (c, l) => new MemBuffer(new Float32Array(l));
+  const shaved = await NR1.spectralDenoise(new MemBuffer(Float32Array.from(lifted)), 'light', () => {}, factory);
+  const sh = shaved.getChannelData(0);
+  const g = (d, f) => 20 * Math.log10(goertzel(d, SR, f) + 1e-12);
+  assert.ok(g(r.out, 220) - g(sh, 220) >= 1.5, 'cascade must suppress the music tone further');
+  assert.ok(snr(norm, sh) >= snr(norm, r.out) - 1, 'cascade must not damage overall quality');
+});

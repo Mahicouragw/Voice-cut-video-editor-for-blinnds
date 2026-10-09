@@ -136,7 +136,65 @@
       try { if (st) Module._rnnoise_destroy(st); } catch (e) {}
     }
   }
-  var api = {process48k: process48k, MIX: MIX, FRAME: FRAME, version: '2.1.0'};
+  /* Speech-clarity lift: gentle presence peaking (+4 dB at 3.2 kHz) plus a
+   * soft high shelf (+2 dB from 7.5 kHz), applied only where the neural VAD
+   * hears voice, with smoothed attack/release so gaps and breaths stay
+   * quiet. Pure Float32Array function: the caller (app) applies it after
+   * process48k, so the neural network's own tests stay untouched. Output is
+   * peak-limited to 0.99 to prevent clipping from the lift. */
+  function clarityLift(mono48, vadFrames, amount) {
+    var amt = Math.min(1, Math.max(0, Number(amount) || 0));
+    var n = mono48.length | 0;
+    var out = new Float32Array(n);
+    if (!(n > 0)) return out;
+    if (!(amt > 0)) { out.set(mono48); return out; }
+    var sr = 48000;
+    function peaking(f0, Q, dBg) {
+      var A = Math.pow(10, dBg / 40), w = 2 * Math.PI * f0 / sr;
+      var alpha = Math.sin(w) / (2 * Q), cw = Math.cos(w);
+      var b0 = 1 + alpha * A, b1 = -2 * cw, b2 = 1 - alpha * A;
+      var a0 = 1 + alpha / A, a1 = -2 * cw, a2 = 1 - alpha / A;
+      return {b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0};
+    }
+    function highShelf(f0, S, dBg) {
+      var A = Math.pow(10, dBg / 40), w = 2 * Math.PI * f0 / sr;
+      var alpha = Math.sin(w) / 2 * Math.sqrt((A + 1 / A) * (1 / S - 1) + 2);
+      var cw = Math.cos(w);
+      var b0 = A * (A + 1 + (A - 1) * cw + 2 * Math.sqrt(A) * alpha);
+      var b1 = -2 * A * (A - 1 + (A + 1) * cw);
+      var b2 = A * (A + 1 + (A - 1) * cw - 2 * Math.sqrt(A) * alpha);
+      var a0 = A + 1 - (A - 1) * cw + 2 * Math.sqrt(A) * alpha;
+      var a1 = 2 * (A - 1 - (A + 1) * cw);
+      var a2 = A + 1 - (A - 1) * cw - 2 * Math.sqrt(A) * alpha;
+      return {b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0};
+    }
+    var pb = peaking(3200, 0.9, 4), hs = highShelf(7500, 0.7, 2);
+    var frames = (vadFrames && vadFrames.length) ? vadFrames : null;
+    var x1 = 0, x2 = 0, y1 = 0, y2 = 0, u1 = 0, u2 = 0, v1 = 0, v2 = 0, gSm = 0;
+    var i, fi, peak = 0;
+    for (i = 0; i < n; i++) {
+      var x = mono48[i];
+      var y = pb.b0 * x + pb.b1 * x1 + pb.b2 * x2 - pb.a1 * y1 - pb.a2 * y2;
+      x2 = x1; x1 = x; y2 = y1; y1 = y;
+      var z = hs.b0 * y + hs.b1 * u1 + hs.b2 * u2 - hs.a1 * v1 - hs.a2 * v2;
+      u2 = u1; u1 = y; v2 = v1; v1 = z;
+      fi = (i / FRAME) | 0;
+      if (frames && fi >= frames.length) fi = frames.length - 1;
+      var voiced = frames ? frames[fi] >= 0.6 : true;
+      var target = voiced ? amt : 0;
+      gSm += (target - gSm) * (target > gSm ? 0.005 : 0.001);
+      var o = x + (z - x) * gSm;
+      out[i] = o;
+      var ao = Math.abs(o);
+      if (ao > peak) peak = ao;
+    }
+    if (peak > 0.99) {
+      var g2 = 0.99 / peak;
+      for (i = 0; i < n; i++) out[i] *= g2;
+    }
+    return out;
+  }
+  var api = {process48k: process48k, clarityLift: clarityLift, MIX: MIX, FRAME: FRAME, version: '2.2.0'};
   root.VoiceCutNR2 = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

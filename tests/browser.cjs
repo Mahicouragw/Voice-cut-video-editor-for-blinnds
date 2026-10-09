@@ -414,6 +414,37 @@ const path = require('node:path');
     let white=0;for(let j=0;j<pixels.length;j+=3)if(pixels[j]>200&&pixels[j+1]>200&&pixels[j+2]>200)white++;
     assert.ok(white>100,'Export must contain visible burned-in caption glyphs');
   }
+  // Chunked app bridge: a mocked app shell receives the export in small parts and reassembles it.
+  await page.evaluate(()=>{
+    window.__bridgeLog=[];
+    const store={ext:null,action:null,total:0,got:0,parts:0};
+    window.flutter_inappwebview={callHandler:async(name,...a)=>{
+      window.__bridgeLog.push(name);
+      if(name==='shareExportStart'){store.ext=a[0];store.action=a[1];store.total=a[2];return 't1';}
+      if(name==='shareExportChunk'){
+        if(a[0]!=='t1'||a[1]!==store.parts)throw new Error('bad chunk');
+        const bin=Uint8Array.from(atob(a[2]),c=>c.charCodeAt(0));
+        store.got+=bin.length;store.parts++;
+        return store.got;
+      }
+      if(name==='shareExportFinish'){window.__bridgeStore={ext:store.ext,action:store.action,total:store.total,got:store.got,parts:store.parts};return true;}
+      throw new Error('unexpected '+name);
+    }};
+  });
+  await page.evaluate(()=>history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example')+'&dev-bridge-chunk-kb=64'));
+  await page.locator('#btnDownloadExported').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.includes('Video saved to your device gallery.'),{},{timeout:60000});
+  {
+    const summary=await page.evaluate(()=>({log:window.__bridgeLog,s:window.__bridgeStore}));
+    assert.equal(summary.log[0],'shareExportStart');
+    assert.equal(summary.log[summary.log.length-1],'shareExportFinish');
+    assert.ok(summary.s.total>0);
+    assert.equal(summary.s.got,summary.s.total);
+    assert.equal(summary.s.parts,Math.ceil(summary.s.total/(64*1024)));
+    assert.equal(summary.s.action,'save');
+    assert.equal(summary.s.ext,'webm');
+  }
+  await page.evaluate(()=>{delete window.flutter_inappwebview;history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example'));});
   // Export 1: plain export still carries audio, video, and burn-in.
   await page.locator('#cropPreset').selectOption('original');
   await page.locator('#rotateAngle').selectOption('0');
@@ -473,6 +504,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
