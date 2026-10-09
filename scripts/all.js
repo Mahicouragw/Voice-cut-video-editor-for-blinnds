@@ -88,12 +88,12 @@ async function publish(){
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
   const blockedStaged=names.filter(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)&&name!=='flutter_app/android/app/voicecut-debug.keystore');if(blockedStaged.length)throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.10: 30-minute part-based cleanup, retained duration displays, dialog privacy text']);
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.11: large export save/share in the app, speech clarity, ultra deep finish']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');
-  fs.writeFileSync(body,'User-authorized VoiceCut app 2.10 update. Noise reduction and silence tools now handle videos up to 30 minutes: long audio is cleaned on the device in 5-minute parts joined at quiet points, with per-part progress; the server is skipped for sources over 10 minutes. Library, timeline, and export screens now show the kept duration after cuts, and the estimated export size shrinks accordingly. Video import raised to 2 GB. The noise dialog no longer exposes backend details. Captions stay at 10 minutes because transcription runs on the small free server. No API keys are included. Merges only after the website and Android workflows succeed.');
-  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.10: 30-minute cleanup + kept-duration displays + dialog privacy','--body-file',body]);
+  fs.writeFileSync(body,'User-authorized VoiceCut app 2.11 update. Finished videos of any size now save into the device gallery and share from inside the app: files travel over a chunked app bridge with progress, replacing the 40 MB cap. Speech clarity lift on all cleanup levels plus an ultra deep finish that shaves residual background. No API keys are included. Merges only after the website and Android workflows succeed.');
+  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.11: big export save/share + clarity + ultra finish','--body-file',body]);
   const pr=await api(['pr','view',branch,'--repo',REPO,'--json','number,url']);console.log('Pull request: '+pr.url);
   await waitForRuns(branch,'pull_request',sha,['Test and deploy website','Android test APK and optional signed AAB'],40);
 
