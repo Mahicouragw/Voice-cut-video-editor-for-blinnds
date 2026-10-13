@@ -44,7 +44,7 @@ test('silence removal cuts quiet gaps and reports honest stats',async()=>{
   assert.ok(Math.abs(Number(response.headers.get('x-silence-seconds'))-3)<0.3);
   assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0,4).toString(),'RIFF');
   const bad=new FormData();bad.append('file',new Blob([fs.readFileSync(fixture)]),'gaps.wav');
-  assert.equal((await fetch(url+'/api/silence?seconds=99',{method:'POST',headers:{Authorization:'Bearer '+key},body:bad})).status,400);
+  assert.equal((await fetch(url+'/api/silence?seconds=999',{method:'POST',headers:{Authorization:'Bearer '+key},body:bad})).status,400);
   const vfix=path.join(os.tmpdir(),'voicecut-silence-v-'+process.pid+'.mp4');
   execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc=duration=5:size=320x240:rate=15','-i',fixture,'-shortest','-c:v','libx264','-preset','ultrafast','-c:a','aac','-y',vfix]);
   const vid=new FormData();vid.append('file',new Blob([fs.readFileSync(vfix)]),'gaps.mp4');
@@ -52,6 +52,13 @@ test('silence removal cuts quiet gaps and reports honest stats',async()=>{
   assert.equal(vres.status,200);
   assert.equal(vres.headers.get('x-silence-removed'),'1');
   assert.equal(Buffer.from(await vres.arrayBuffer()).subarray(4,8).toString(),'ftyp');
+  const gapList=JSON.parse(vres.headers.get('x-silence-gaps'));
+  assert.equal(gapList.length,1);
+  assert.ok(gapList[0][1]-gapList[0][0]>2);
+  const long=new FormData();long.append('file',new Blob([fs.readFileSync(fixture)]),'gaps.wav');
+  const lres=await fetch(url+'/api/silence?seconds=120&detect=1',{method:'POST',headers:{Authorization:'Bearer '+key},body:long});
+  assert.equal(lres.status,200);
+  assert.equal((await lres.json()).gapCount,0);
   fs.unlinkSync(vfix);
   await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(fs.readdirSync(root),[]);
   fs.unlinkSync(fixture);

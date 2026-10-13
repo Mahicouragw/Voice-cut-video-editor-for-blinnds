@@ -314,7 +314,7 @@ const path = require('node:path');
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
   await page.locator('#enhanceMode').selectOption('device');
   await page.locator('#btnSilenceSelected').click();
-  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap on this device'),{},{timeout:60000});
+  await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap'),{},{timeout:60000});
   assert.match(await text('#aiResultText'),/On-device silence removal/);
   await page.locator('#btnApplyEnhanced').click();
   await page.waitForFunction(()=>document.querySelector('#timelineContainer .clip[aria-label*="gappy"]').getAttribute('aria-label').includes('Duration 00 minutes 07 seconds'));
