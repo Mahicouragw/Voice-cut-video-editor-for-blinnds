@@ -841,7 +841,9 @@
         trimStart: 0,
         trimEnd: 0,
         duration: audio.duration || 60,
-        volume: type==='music' ? 60 : 100,
+        // Uploaded audio must sound exactly like the original file: full
+        // volume, no effects. Users lower it themselves with the slider.
+        volume: 100,
         muted: false,
         fadeIn: 0,
         fadeOut: 0,
@@ -1763,7 +1765,7 @@
     }
     return out;
   }
-  // On-device cleanup: neural first (NR-2), classic spectral (NR-1) fallback.
+  // Cleanup: neural first (NR-2), classic spectral (NR-1) fallback.
   async function processLongAudioWithAI(buffer, level, onProgress) {
     const devChunk = Number(new URLSearchParams((hashQuery() || '?').slice(1)).get('dev-chunk-seconds'));
     const useChunks = buffer.duration > 600 || (Number.isFinite(devChunk) && devChunk >= 2);
@@ -1825,7 +1827,7 @@
         const result = await neuralCleanup(neuralInput, level, scan, neuralProgress, droneFirst);
         if (aiProcessingCancelled) throw new Error('Cancelled');
         lastCleanupEngine = 'neural';
-        onProgress(100, 'On-device neural cleanup complete. Preview before applying.');
+        onProgress(100, 'Noise reduction complete. Preview before applying.');
         return result;
       }catch(e){
         if (/cancelled/i.test(e.message)) throw e;
@@ -1836,11 +1838,11 @@
     } else {
       announce('Neural engine unavailable. Used classic cleanup instead.');
     }
-    if (!window.VoiceCutNR?.spectralDenoise) throw new Error('On-device cleanup engine missing. Reload the app.');
+    if (!window.VoiceCutNR?.spectralDenoise) throw new Error('Cleanup engine missing. Reload the app.');
     onProgress(5, 'Reducing noise…');
     const result = await window.VoiceCutNR.spectralDenoise(buffer, level, (pct, text) => onProgress(pct, text), (ch, len, sr) => new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr}), () => aiProcessingCancelled);
     if (aiProcessingCancelled) throw new Error('Cancelled');
-    onProgress(100, 'On-device cleanup complete. Preview before applying.');
+    onProgress(100, 'Noise reduction complete. Preview before applying.');
     return result;
   }
 
@@ -2196,7 +2198,7 @@
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#btnCloseAI').classList.remove('hidden');
-      $('#aiResultText').textContent = 'VoiceCut silence removal: complete. Listen before applying.';
+      $('#aiResultText').textContent = 'Silence removal: complete. Listen before applying.';
       const dialog = $('#aiProcessingDialog');
       if (!dialog.open) dialog.showModal();
       silenceTickStop();showSilenceProgress(100);
@@ -2280,7 +2282,7 @@
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#btnCloseAI').classList.remove('hidden');
-      $('#aiResultText').textContent = 'On-device silence removal: complete. Listen before applying.';
+      $('#aiResultText').textContent = 'Silence removal: complete. Listen before applying.';
       const dialog = $('#aiProcessingDialog');
       if (!dialog.open) dialog.showModal();
       const message = `Removed ${gaps.length} silent ${gaps.length===1?'gap':'gaps'}. Media is shorter by ${removedSecs.toFixed(1)} seconds.` + sensNote;

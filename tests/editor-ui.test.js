@@ -24,6 +24,8 @@ test('editor hides upload and processing mechanics from users', () => {
   assert.doesNotMatch(page, /Temporary server copies/);
   assert.doesNotMatch(page, /Uploading to your/);
   assert.doesNotMatch(page, /Detecting quiet gaps/);
+  assert.doesNotMatch(page, /On-device/);
+  assert.doesNotMatch(page, /VoiceCut (AI|silence)/);
   // The only allowed "this device" line is the share fallback (the phone itself).
   const stripped = page.replace("announce('Share not supported on this device. Use download instead.');", '');
   assert.doesNotMatch(stripped, /on this device/);
@@ -32,6 +34,12 @@ test('editor hides upload and processing mechanics from users', () => {
   assert.match(page, /Generating captions/);
   assert.match(page, /Reducing noise/);
   assert.match(page, /Removing silence/);
+});
+
+test('uploaded music keeps its original sound (full volume, no effects)', () => {
+  assert.doesNotMatch(page, /type==='music' \? 60/);
+  assert.match(page, /volume: 100,/);
+  assert.match(page, /noiseReduction: type==='music' \? 'off'/);
 });
 
 test('server silence results cut the open project timeline', () => {
