@@ -88,12 +88,12 @@ async function publish(){
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
   const blockedStaged=names.filter(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)&&name!=='flutter_app/android/app/voicecut-debug.keystore');if(blockedStaged.length)throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.13: simple editor panels, voice changer, video looks, smart ducking']);
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.14: TalkBack reaches the editor, app reload button']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');
-  fs.writeFileSync(body,'User-authorized VoiceCut app 2.13 update. The editor is now one simple home screen (Play, Back, Forward, Trim, Split) with one panel per tool. Audio splits into voice-over (record at the playhead, trim, high/low/chipmunk/alien/robot voices with preview) and music (new songs stop the old one, one volume for all songs, voice-aware auto-ducking that lifts music in silence and dips it under speech). Video looks (bright, warm, cool, black-and-white, vintage, vivid, overflow) preview live and bake into exports. Every audio and video file has its own page with volume, trim and silence removal. No API keys are included. Merges only after the website and Android workflows succeed.');
-  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.13: simple editor + voice changer + video looks','--body-file',body]);
+  fs.writeFileSync(body,'User-authorized VoiceCut app 2.14 update. TalkBack focus now reaches the editor inside the Android app: the page renders as native views, the app announces when the editor loads, and opening a project puts the cursor on the Play button. The app bar adds a Reload page button that reloads the live site when the internet drops, alongside the existing Retry on the error screen. No API keys are included. Merges only after the website and Android workflows succeed.');
+  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.14: TalkBack focus + app reload button','--body-file',body]);
   const pr=await api(['pr','view',branch,'--repo',REPO,'--json','number,url']);console.log('Pull request: '+pr.url);
   await waitForRuns(branch,'pull_request',sha,['Test and deploy website','Android test APK and optional signed AAB'],40);
 
