@@ -72,7 +72,7 @@ function createApp(options={}) {
     const level=String(req.query.level||'medium');
     if((kind==='filter'||kind==='deepfilter')&&!FILTER_LEVELS[level]) return res.status(400).json({code:'UNKNOWN_LEVEL',error:'Unknown noise reduction level.'});
     const silenceSeconds=Number(req.query.seconds||3);
-    if(kind==='silence'&&(!Number.isFinite(silenceSeconds)||silenceSeconds<1||silenceSeconds>10)) return res.status(400).json({code:'BAD_SECONDS',error:'Silence length must be between 1 and 10 seconds.'});
+    if(kind==='silence'&&(!Number.isFinite(silenceSeconds)||silenceSeconds<1||silenceSeconds>180)) return res.status(400).json({code:'BAD_SECONDS',error:'Silence length must be between 1 second and 3 minutes.'});
     const captionKeys=providers.configured.captionProviders||{openai:providers.configured.captions};
     let provider=String(req.query.provider||'auto');
     if(provider==='auto') provider=CAPTION_ORDER.find(id=>captionKeys[id])||'openai';
@@ -190,6 +190,9 @@ function createApp(options={}) {
         res.set('X-Silence-Removed',String(silent.length));
         res.set('X-Silence-Seconds',removed.toFixed(1));
         res.set('X-Silence-Threshold',String(thresholdDb));
+        // Gap list (capped for header size) so the editor can cut the same
+        // ranges from the open project, shortening the timeline in place.
+        res.set('X-Silence-Gaps',JSON.stringify(silent.slice(0,300).map(([a,b])=>[Number(Math.max(0,a).toFixed(2)),Number(Math.min(duration,b).toFixed(2))])));
       } else if(kind==='reverse') {
         // Whole-file reverse. The reverse filter buffers entire streams, so
         // video is reversed in short memory-safe chunks joined back to front.

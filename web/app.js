@@ -227,9 +227,9 @@
     const epoch=mediaEpoch, id=project.id;
     const clipSnapshot=clip?structuredClone(clip):null;
     captionRequestBusy=true;$('#btnGenerateCaptions').disabled=true;$('#btnCancelCaptions').disabled=false;
-    $('#captionStatus').textContent='Waiting for upload confirmation. Your existing captions are unchanged.';
+    $('#captionStatus').textContent='Preparing… Your existing captions are unchanged.';
     try{
-      $('#captionStatus').textContent='Preparing small audio for upload. Your existing captions are unchanged.';
+      $('#captionStatus').textContent='Preparing… Your existing captions are unchanged.';
       let uploadFile=file, uploadTrimmed=false;
       try{
         if(clipSnapshot){uploadFile=await shrinkAudioFile(file,clipSnapshot.trimStart||0,clipSnapshot.duration-(clipSnapshot.trimEnd||0));uploadTrimmed=true;}
@@ -237,7 +237,7 @@
       }catch(prepErr){
         console.warn('Caption audio prep fell back to original file:',prepErr);
         if(file.size>100*1024*1024){
-          const bigMsg='This file is too large to prepare on this device. Trim a shorter section first.';
+          const bigMsg='This file is too large to prepare. Trim a shorter section first.';
           $('#captionStatus').textContent=bigMsg;announce(bigMsg,true);return;
         }
         uploadFile=file;
@@ -246,7 +246,7 @@
       for(let captionAttempt=1;captionAttempt<=2;captionAttempt++){
         try{
           result=await requestServerUpload('/api/captions?language='+encodeURIComponent($('#captionLanguage').value),uploadFile,{cloud:true,onProgress:(pct)=>{
-            $('#captionStatus').textContent=pct>=100?'Upload complete. Transcribing. This can take a minute on a slow connection.':'Uploading caption audio: '+pct+'%. You can cancel; do not submit twice.';
+            $('#captionStatus').textContent=pct>=100?'Upload complete. Generating captions… This can take a minute on a slow connection.':'Uploading: '+pct+'%. Generating captions. You can cancel.';
           }});
           break;
         }
@@ -841,7 +841,9 @@
         trimStart: 0,
         trimEnd: 0,
         duration: audio.duration || 60,
-        volume: type==='music' ? 60 : 100,
+        // Uploaded audio must sound exactly like the original file: full
+        // volume, no effects. Users lower it themselves with the slider.
+        volume: 100,
         muted: false,
         fadeIn: 0,
         fadeOut: 0,
@@ -1763,7 +1765,7 @@
     }
     return out;
   }
-  // On-device cleanup: neural first (NR-2), classic spectral (NR-1) fallback.
+  // Cleanup: neural first (NR-2), classic spectral (NR-1) fallback.
   async function processLongAudioWithAI(buffer, level, onProgress) {
     const devChunk = Number(new URLSearchParams((hashQuery() || '?').slice(1)).get('dev-chunk-seconds'));
     const useChunks = buffer.duration > 600 || (Number.isFinite(devChunk) && devChunk >= 2);
@@ -1803,7 +1805,7 @@
   }
   async function processAudioBufferWithAI(buffer, level, onProgress) {
     if (buffer.duration > 600) throw new Error('Local cleanup is limited to 10 minutes to protect device memory.');
-    onProgress(3, 'Scanning the whole audio for noise. No upload.');
+    onProgress(3, 'Reducing noise…');
     await new Promise(r => setTimeout(r, 0));
     const scan = scanWholeAudio(buffer);
     lastScanReport = scan.report ? scan.report.summary.text : '';
@@ -1816,7 +1818,7 @@
         let neuralInput = buffer;
         let neuralProgress = onProgress;
         if (droneFirst) {
-          onProgress(4, 'Very noisy audio: first removing steady drone. No upload.');
+          onProgress(4, 'Reducing noise…');
           const st1 = await window.VoiceCutNR.notchStationaryTones(buffer, (pct) => onProgress(4 + Math.round(pct * 0.2)), (ch2, len2, sr2) => new AudioBuffer({numberOfChannels: ch2, length: len2, sampleRate: sr2}), () => aiProcessingCancelled);
           if (aiProcessingCancelled) throw new Error('Cancelled');
           neuralInput = st1.buffer;
@@ -1825,7 +1827,7 @@
         const result = await neuralCleanup(neuralInput, level, scan, neuralProgress, droneFirst);
         if (aiProcessingCancelled) throw new Error('Cancelled');
         lastCleanupEngine = 'neural';
-        onProgress(100, 'On-device neural cleanup complete. Preview before applying.');
+        onProgress(100, 'Noise reduction complete. Preview before applying.');
         return result;
       }catch(e){
         if (/cancelled/i.test(e.message)) throw e;
@@ -1836,11 +1838,11 @@
     } else {
       announce('Neural engine unavailable. Used classic cleanup instead.');
     }
-    if (!window.VoiceCutNR?.spectralDenoise) throw new Error('On-device cleanup engine missing. Reload the app.');
-    onProgress(5, 'Reducing noise on this device. No upload.');
+    if (!window.VoiceCutNR?.spectralDenoise) throw new Error('Cleanup engine missing. Reload the app.');
+    onProgress(5, 'Reducing noise…');
     const result = await window.VoiceCutNR.spectralDenoise(buffer, level, (pct, text) => onProgress(pct, text), (ch, len, sr) => new AudioBuffer({numberOfChannels: ch, length: len, sampleRate: sr}), () => aiProcessingCancelled);
     if (aiProcessingCancelled) throw new Error('Cancelled');
-    onProgress(100, 'On-device cleanup complete. Preview before applying.');
+    onProgress(100, 'Noise reduction complete. Preview before applying.');
     return result;
   }
 
@@ -1870,9 +1872,9 @@
   async function detectSilenceOriginal(){return detectSilenceGaps(false);}
   async function detectGapsOnDevice(file, seconds, statusEl) {
     cleanupBusy = true; aiProcessingCancelled = false;
-    showSilenceProgress(10); silenceTickStart('Detecting quiet gaps on this device');
-    statusEl.textContent = 'Analyzing audio on this device. No upload.';
-    announce('Detecting quiet gaps on this device. No upload.');
+    showSilenceProgress(10); silenceTickStart('Finding quiet gaps');
+    statusEl.textContent = 'Finding quiet gaps…';
+    announce('Finding quiet gaps…');
     try {
       const decoded = await decodeAudioFile(file);
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -1918,12 +1920,12 @@
     cleanupBusy = true; aiProcessingCancelled = false;
     showSilenceProgress(0);
     statusEl.textContent='Preparing a small audio copy for fast gap detection.';
-    announce('Detecting quiet gaps. Uploading a small audio copy.');
+    announce('Finding quiet gaps…');
     try {
       const file = detectFile;
       let uploadFile=file;
       try{uploadFile=await shrinkAudioFile(file,0,Infinity,16000);}catch(e){uploadFile=file;}
-      const result = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds) + '&detect=1', uploadFile, {cloud:false, consent:'Upload a small audio copy to your VoiceCut server to preview quiet gaps? Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
+      const result = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds) + '&detect=1', uploadFile, {cloud:false, consent:'Upload a small audio copy to preview quiet gaps? Temporary copies expire within 15 minutes.', onProgress:(pct)=>{
         showSilenceProgress(pct);
         if(pct<100)statusEl.textContent='Uploading small audio for gap detection: '+pct+'%.';
       }});
@@ -1938,7 +1940,7 @@
       statusEl.textContent=message;announce(message);
     } catch(e) {
       const msg = /cancelled|timed out/i.test(e.message) ? 'Detection stopped: ' + e.message
-        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again.'
+        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not connect. Check your internet and try again.'
         : 'Detection stopped: ' + e.message;
       statusEl.textContent = msg; announce(msg, true);
       if(!/cancelled/i.test(e.message))notifyComplete('Gap detection stopped','Quiet-gap detection stopped before finishing. Open the app to try again.');
@@ -2072,13 +2074,13 @@
     cleanupBusy = true; aiProcessingCancelled = false;
     video.pause(); for (const node of audioNodes.values()) node.element.pause();
     const epoch = mediaEpoch;
-    statusEl.textContent = 'Uploading to your VoiceCut server…';
-    announce('Reversing video. Uploading to your VoiceCut server.');
+    statusEl.textContent = 'Uploading…';
+    announce('Reversing video. Uploading.');
     try {
       const file = project.videoFile;
       if (file.size > 100 * 1024 * 1024) throw new Error('Video reverse supports media files up to 100 MB.');
-      const blob = await requestServerUpload('/api/reverse', file, {cloud:false, consent:'Upload this video to your VoiceCut server to reverse it? Maximum 2 minutes and 100 MB. Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
-        statusEl.textContent = pct>=100 ? 'Upload complete. Reversing on the server.' : 'Uploading to your VoiceCut server: '+pct+'%.';
+      const blob = await requestServerUpload('/api/reverse', file, {cloud:false, consent:'Upload this video to reverse it? Maximum 2 minutes and 100 MB. Temporary copies expire within 15 minutes.', onProgress:(pct)=>{
+        statusEl.textContent = pct>=100 ? 'Upload complete. Reversing video…' : 'Uploading: '+pct+'%.';
       }});
       if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -2097,7 +2099,7 @@
       notifyComplete('Video reversed','Your reversed video downloaded.');
     } catch(e) {
       const msg = /cancelled|timed out/i.test(e.message) ? 'Reversing stopped: ' + e.message
-        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again. Your media is unchanged.'
+        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not connect. Check your internet and try again. Your media is unchanged.'
         : 'Reversing stopped: ' + e.message;
       statusEl.textContent = msg; announce(msg, true);
       if(!/cancelled/i.test(e.message))notifyComplete('Video reverse stopped','Video reverse stopped before finishing. Open the app to try again.');
@@ -2133,14 +2135,14 @@
     video.pause(); for (const node of audioNodes.values()) node.element.pause();
     const epoch = mediaEpoch;
     showSilenceProgress(0);
-    statusEl.textContent = 'Uploading to your VoiceCut server…';
-    announce('Removing silence. Uploading to your VoiceCut server.');
+    statusEl.textContent = 'Uploading…';
+    announce('Removing silence. Uploading.');
     try {
-      statusEl.textContent = 'Detecting quiet gaps longer than ' + seconds + ' seconds…';
-      const blob = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds), file, {cloud:false, consent:'Upload this file to your VoiceCut server to remove silence? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.', onProgress:(pct)=>{
+      statusEl.textContent = 'Removing silence…';
+      const blob = await requestServerUpload('/api/silence?seconds=' + encodeURIComponent(seconds), file, {cloud:false, consent:'Upload this file to remove silence? Maximum 10 minutes and 100 MB. Temporary copies expire within 15 minutes.', onProgress:(pct)=>{
         showSilenceProgress(pct);
-        if(pct>=100){showSilenceProgress(null);silenceTickStart('Trimming on the server');statusEl.textContent='Upload complete. Detecting quiet gaps longer than '+seconds+' seconds.';}
-        else statusEl.textContent='Uploading to your VoiceCut server: '+pct+'%.';
+        if(pct>=100){showSilenceProgress(null);silenceTickStart('Removing silence');statusEl.textContent='Upload complete. Removing silence…';}
+        else statusEl.textContent='Uploading: '+pct+'%.';
       }});
       if (!(blob instanceof Blob)) throw new Error('SERVICE_UNAVAILABLE');
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -2153,6 +2155,7 @@
         : `No quiet gaps longer than ${seconds} seconds found. Background noise may be filling the pauses; try noise reduction first.`;
       if (!clipId) {
         let appDelivery = '';
+        let applied = 0, cutSecs = 0;
         if (removed > 0) {
           const ext = (blob.type || '').includes('mp4') ? 'mp4' : 'wav';
           if (window.flutter_inappwebview) {
@@ -2164,23 +2167,38 @@
             a.download = 'silence-removed.' + ext;
             a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
           }
+          // Cut the same quiet gaps from the open project so the video
+          // itself gets shorter, matching the trimmed file that was saved.
+          try {
+            const headerGaps = JSON.parse(lastResponseHeaders?.get('X-Silence-Gaps') || '[]');
+            for (const [a,b] of headerGaps) {
+              if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) continue;
+              const before = project.segments.reduce((s,g)=>s+(g.end-g.start),0);
+              let next;
+              try { next = VoiceCutCore.deleteRange(project, a, b); } catch(e) { break; }
+              const after = next.reduce((s,g)=>s+(g.end-g.start),0);
+              if (after < before - 0.005) { project.segments = next.map(s=>({...s, id:uid(), label:'Segment'})); applied++; cutSecs += before-after; }
+            }
+          } catch(e) { /* gap list missing: the saved file is still correct */ }
+          if (applied) { selectedClipId = null; pushHistory(); renderAll(); }
         }
         silenceTickStop();showSilenceProgress(100);
         const deliveryNote = appDelivery || ' Trimmed file downloaded.';
-        statusEl.textContent = message + (removed > 0 ? deliveryNote : '');
-        announce(message + (removed > 0 ? deliveryNote : ''), removed === 0);
-        notifyComplete('Silence removal complete',removed>0?`Removed ${removed} silent gaps. Trimmed file downloaded.`:`No gaps longer than ${seconds} seconds found.`);
+        const timelineNote = applied ? ` The video is shorter by ${cutSecs.toFixed(1)} seconds. Undo is available.` : '';
+        statusEl.textContent = message + (removed > 0 ? deliveryNote + timelineNote : '');
+        announce(message + (removed > 0 ? deliveryNote + timelineNote : ''), removed === 0);
+        notifyComplete('Silence removal complete',removed>0?`Removed ${removed} silent gaps. Trimmed file downloaded.${timelineNote}`:`No gaps longer than ${seconds} seconds found.`);
         return;
       }
       const enhancedBuffer = await decodeAudioFile(blob);
       if (aiProcessingCancelled) throw new Error('Cancelled');
       const enhancedUrl = URL.createObjectURL(blob);
       const originalUrl = URL.createObjectURL(file);
-      currentAIJob = {type:'clip', clipId, enhancedBlob:blob, enhancedBuffer, enhancedUrl, originalUrl, level:'silence-' + seconds + 's', provider:'VoiceCut silence removal', epoch};
+      currentAIJob = {type:'clip', clipId, enhancedBlob:blob, enhancedBuffer, enhancedUrl, originalUrl, level:'silence-' + seconds + 's', provider:'Silence removal', epoch};
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#btnCloseAI').classList.remove('hidden');
-      $('#aiResultText').textContent = 'VoiceCut silence removal: complete. Listen before applying.';
+      $('#aiResultText').textContent = 'Silence removal: complete. Listen before applying.';
       const dialog = $('#aiProcessingDialog');
       if (!dialog.open) dialog.showModal();
       silenceTickStop();showSilenceProgress(100);
@@ -2189,7 +2207,7 @@
       notifyComplete('Silence removal complete',message);
     } catch(e) {
       const msg = /cancelled|timed out/i.test(e.message) ? 'Processing stopped: ' + e.message
-        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not reach the VoiceCut server. Check your internet and try again. Your media is unchanged.'
+        : e.message === 'SERVICE_UNAVAILABLE' ? 'Could not connect. Check your internet and try again. Your media is unchanged.'
         : 'Processing stopped: ' + e.message;
       statusEl.textContent = msg; announce(msg, true);
       if(!/cancelled/i.test(e.message))notifyComplete('Silence removal stopped','Silence removal stopped before finishing. Open the app to try again.');
@@ -2201,9 +2219,9 @@
     cleanupBusy = true; aiProcessingCancelled = false;
     video.pause(); for (const node of audioNodes.values()) node.element.pause();
     const epoch = mediaEpoch;
-    showSilenceProgress(5); silenceTickStart('Removing silence on this device');
-    statusEl.textContent = 'Analyzing audio on this device. No upload.';
-    announce('Removing silence on this device. Large files never upload. No upload.');
+    showSilenceProgress(5); silenceTickStart('Removing silence');
+    statusEl.textContent = 'Removing silence…';
+    announce('Removing silence…');
     try {
       const decoded = await decodeAudioFile(file);
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -2235,7 +2253,7 @@
         }
         if (!applied) throw new Error('Quiet gaps cover almost the whole video. Nothing was removed.');
         selectedClipId = null; pushHistory(); renderAll();
-        const message = `Removed ${applied} silent ${applied===1?'gap':'gaps'} on this device. Timeline is shorter by ${cutSecs.toFixed(1)} seconds. Export will skip them. Undo is available.` + sensNote;
+        const message = `Removed ${applied} silent ${applied===1?'gap':'gaps'}. Timeline is shorter by ${cutSecs.toFixed(1)} seconds. Export will skip them. Undo is available.` + sensNote;
         silenceTickStop(); showSilenceProgress(100);
         statusEl.textContent = message;
         announce(message);
@@ -2260,14 +2278,14 @@
       const blob = audioBufferToWavBlob(trimmed);
       const enhancedUrl = URL.createObjectURL(blob);
       const originalUrl = URL.createObjectURL(file);
-      currentAIJob = {type:'clip', clipId, enhancedBlob:blob, enhancedBuffer:trimmed, enhancedUrl, originalUrl, level:'silence-' + seconds + 's', provider:'On-device silence removal', epoch};
+      currentAIJob = {type:'clip', clipId, enhancedBlob:blob, enhancedBuffer:trimmed, enhancedUrl, originalUrl, level:'silence-' + seconds + 's', provider:'Silence removal', epoch};
       $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#btnCloseAI').classList.remove('hidden');
-      $('#aiResultText').textContent = 'On-device silence removal: complete. Listen before applying.';
+      $('#aiResultText').textContent = 'Silence removal: complete. Listen before applying.';
       const dialog = $('#aiProcessingDialog');
       if (!dialog.open) dialog.showModal();
-      const message = `Removed ${gaps.length} silent ${gaps.length===1?'gap':'gaps'} on this device. Media is shorter by ${removedSecs.toFixed(1)} seconds.` + sensNote;
+      const message = `Removed ${gaps.length} silent ${gaps.length===1?'gap':'gaps'}. Media is shorter by ${removedSecs.toFixed(1)} seconds.` + sensNote;
       silenceTickStop(); showSilenceProgress(100);
       statusEl.textContent = message;
       announce(message + ' Preview before applying.');
@@ -2343,7 +2361,7 @@
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
       const originalUrl = URL.createObjectURL(file);
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
-      const engineName = serverResult?.provider || (lastCleanupEngine==='classic'?'On-device classic cleanup':(lastBuriedRescue?'On-device neural cleanup with buried-voice rescue':'On-device neural cleanup'));
+      const engineName = 'Noise reduction';
       const rescueText = (!serverResult && lastBuriedRescue) ? 'Buried voice rescue kept your voice audible. ' : '';
       const reportText = (!serverResult && lastScanReport) ? lastScanReport+' '+rescueText : rescueText;
       currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:engineName,epoch};
@@ -2536,7 +2554,7 @@
   async function requestServerUpload(endpoint, file, options={}) {
     const backend=backendConfig();
     if(!backend)throw new Error('SERVICE_UNAVAILABLE');
-    const {cloud=false,consent='Upload this file to the secure VoiceCut service for AI processing? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.',onProgress=null}=options;
+    const {cloud=false,consent='Upload this file for AI processing? Maximum 10 minutes and 100 MB. Temporary copies expire within 15 minutes.',onProgress=null}=options;
     if(currentRequest)throw new Error('Another server request is running. Wait or cancel it first.');
     if(file?.size>100*1024*1024)throw new Error('Use a file smaller than 100 MB.');
     if(file&&!confirm(consent))throw new Error('Upload cancelled.');
@@ -2569,13 +2587,13 @@
   async function requestServer(endpoint,file=null,options={}) {
     const backend=backendConfig();
     if(!backend)throw new Error('SERVICE_UNAVAILABLE');
-    const {cloud=false,consent='Upload this file to the secure VoiceCut service for AI processing? Maximum 10 minutes and 100 MB. Temporary server copies expire within 15 minutes.'}=options;
+    const {cloud=false,consent='Upload this file for AI processing? Maximum 10 minutes and 100 MB. Temporary copies expire within 15 minutes.'}=options;
     if(currentRequest)throw new Error('Another server request is running. Wait or cancel it first.');
     if(file?.size>100*1024*1024)throw new Error('Use a file smaller than 100 MB.');
     if(file&&!confirm(consent))throw new Error('Upload cancelled.');
     const controller=new AbortController();currentRequest=controller;
     const timer=setTimeout(()=>controller.abort(),file?14*60*1000:60000);
-    if(captionRequestBusy)$('#captionStatus').textContent='Uploading and processing. You can cancel; do not submit twice.';
+    if(captionRequestBusy)$('#captionStatus').textContent='Generating captions… You can cancel.';
     try{
       const body=file?new FormData():undefined;if(file)body.append('file',file);
       const headers={...(backend.key?{Authorization:'Bearer '+backend.key}:{}),...(cloud?{'X-Upload-Consent':'yes'}:{})};
@@ -2591,24 +2609,24 @@
   }
   async function enhanceWithRealAI(file,level,onProgress,mediaSeconds=0) {
     if($('#enhanceMode').value==='device')return null;
-    if(mediaSeconds>600){announce('Long video: cleaning the whole video on this device. No upload.');return null;}
+    if(mediaSeconds>600){announce('Long video: reducing noise across the whole video…');return null;}
     onProgress(5,'Contacting the VoiceCut service.');
     let capabilities=null;
     try{capabilities=await getCapabilities();}catch(e){capabilities=null;}
     const nrLevel=['light','medium','strong','voicefocus','ultra'].includes(level)?level:'medium';
     let uploadFile=file;
     try{
-      onProgress(8,'Preparing small audio for upload. The full video stays on this device.');
+      onProgress(8,'Preparing…');
       uploadFile=await shrinkAudioFile(file,0,Infinity,48000);
     }catch(prepErr){console.warn('Enhancement upload prep fell back to original file:',prepErr);uploadFile=file;}
     if(uploadFile.size>100*1024*1024){announce('Large file: server upload skipped. Using strong on-device cleanup instead.');return null;}
     const useService=async(endpoint,cloud)=>{
       const blob=await requestServerUpload(endpoint,uploadFile,{cloud,onProgress:(pct)=>{
-        onProgress(Math.min(90,8+Math.round(pct*0.5)),pct>=100?'Upload complete. Enhancing on the server. This can take a minute.':'Uploading small audio: '+pct+'%. You can cancel.');
+        onProgress(Math.min(90,8+Math.round(pct*0.5)),pct>=100?'Upload complete. Reducing noise… This can take a minute.':'Uploading: '+pct+'%. You can cancel.');
       }});
       if(!(blob instanceof Blob))throw new Error('SERVICE_UNAVAILABLE');
       onProgress(100,'Processing complete. Compare with the original before applying.');
-      return {blob,provider:'VoiceCut AI enhancement'};
+      return {blob,provider:'Noise reduction'};
     };
     try{
       if(capabilities?.deepFilterNet)return await useService('/api/denoise-local?level='+nrLevel,false);
@@ -2616,9 +2634,9 @@
     }catch(e){
       if(/cancelled|timed out/i.test(e.message))throw e;
       console.warn('Server enhancement failed; using on-device cleanup:',e);
-      announce('VoiceCut server unreachable after retries. Using strong on-device cleanup instead.');
+      announce('Connection stumbled. Reducing noise a different way…');
     }
-    announce('VoiceCut server unreachable. Using strong on-device cleanup instead.');
+    announce('Connection stumbled. Reducing noise a different way…');
     return null;
   }
   let currentRequest = null;
