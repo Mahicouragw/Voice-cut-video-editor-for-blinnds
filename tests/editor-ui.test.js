@@ -42,6 +42,44 @@ test('uploaded music keeps its original sound (full volume, no effects)', () => 
   assert.match(page, /noiseReduction: type==='music' \? 'off'/);
 });
 
+test('simple editor has one home screen with panel tabs', () => {
+  for (const id of ['tab-home', 'tab-edit', 'tab-audio', 'tab-captions', 'tab-cleanup', 'tab-clips', 'tab-export']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /id="btnHomeTrim"/);
+  assert.match(html, /id="btnHomeSplit"/);
+  assert.match(html, /id="audioSubTabs"/);
+  assert.match(html, /id="subVoiceover"/);
+  assert.match(html, /id="subMusic"/);
+  assert.match(page, /function showEditorPanel/);
+  assert.match(page, /function showAudioSub/);
+});
+
+test('voice changer, video looks and per-file tools exist', () => {
+  for (const v of ['high', 'low', 'chipmunk', 'alien', 'robot']) {
+    assert.match(html, new RegExp(`<option value="${v}">`));
+  }
+  assert.match(html, /id="btnPreviewVoiceFilter"/);
+  for (const v of ['bright', 'warm', 'cool', 'bw', 'vintage', 'vivid', 'overflow']) {
+    assert.match(html, new RegExp(`<option value="${v}">`));
+  }
+  assert.match(html, /id="btnApplyVolumeAll"/);
+  assert.match(html, /id="btnSelSilence"/);
+  assert.match(html, /id="btnVideoSilence"/);
+  assert.match(html, /Get captions from/);
+  assert.match(page, /function renderVoiceFilter/);
+  assert.match(page, /function previewVoiceFilter/);
+  assert.match(page, /function applyVideoFilter/);
+  assert.match(page, /function applyVolumeToAllMusic/);
+  assert.match(page, /ctx\.filter/);
+});
+
+test('smart ducking reads a voice map of the video', () => {
+  assert.match(page, /function ensureVoiceCurve/);
+  assert.match(page, /duckedGain\(clip\.volume/);
+  assert.match(page, /computeVoiceCurve\(decoded\.getChannelData/);
+});
+
 test('server silence results cut the open project timeline', () => {
   assert.match(page, /X-Silence-Gaps/);
   assert.match(page, /The video is shorter by/);

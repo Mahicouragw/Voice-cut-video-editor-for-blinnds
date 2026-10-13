@@ -145,7 +145,52 @@
     }
     return Math.round(best * 100) / 100;
   }
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint };
+  // Voice-activity curve at 10 frames/second: 1 where someone speaks, 0 in
+  // silence. The threshold adapts to each recording (loudest frame sets the
+  // scale), with a hangover so short pauses inside speech stay "voice".
+  function computeVoiceCurve(samples, sampleRate) {
+    const sr = Number(sampleRate);
+    if (!samples || !samples.length || !Number.isFinite(sr) || sr <= 0) throw new Error('Audio is unavailable.');
+    const step = Math.max(1, Math.floor(sr / 10));
+    const n = Math.max(1, Math.ceil(samples.length / step));
+    const energy = new Array(n);
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+      const s0 = i * step, s1 = Math.min(samples.length, s0 + step);
+      let e = 0, c = 0;
+      for (let j = s0; j < s1; j += 7) { e += samples[j] * samples[j]; c++; }
+      e = e / Math.max(1, c);
+      energy[i] = e;
+      if (e > peak) peak = e;
+    }
+    const floor = peak * 0.02 + 1e-6;
+    const active = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) if (energy[i] > floor) active[i] = 1;
+    for (let pass = 0; pass < 3; pass++) for (let i = 1; i < n; i++) if (active[i - 1] && !active[i] && energy[i] > floor * 0.25) active[i] = 1;
+    for (let i = 0; i < n; i++) if (!active[i]) {
+      let j = i;
+      while (j < n && !active[j]) j++;
+      if (j - i <= 2 && i > 0 && j < n) for (let k = i; k < j; k++) active[k] = 1;
+      i = j;
+    }
+    return { frames: active, fps: 10, duration: samples.length / sr };
+  }
+  function voiceActiveAt(curve, t) {
+    if (!curve || !curve.frames || !curve.frames.length) return false;
+    const i = Math.floor(Number(t) * (curve.fps || 10));
+    if (!Number.isFinite(i) || i < 0) return false;
+    return !!curve.frames[Math.min(i, curve.frames.length - 1)];
+  }
+  // Smart music gain: lifted 50% where nobody speaks, dipped under voice.
+  function duckedGain(volumePercent, duckLevel, voiceActive, duckingEnabled) {
+    const vol = Math.max(0, Number(volumePercent) || 0) / 100;
+    if (!duckingEnabled) return vol;
+    if (voiceActive) return vol * (1 - Math.min(90, Math.max(0, Number(duckLevel) || 0)) / 100);
+    return Math.min(1.5, vol * 1.5);
+  }
+  const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
+  const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

@@ -17,6 +17,8 @@ const path = require('node:path');
  page.on('dialog',dialog=>dialog.accept());
  try {
   const text = sel => page.locator(sel).textContent();
+  const showPanel = (name) => page.locator('#tab-'+name).click();
+  const showSub = (which) => page.locator(which==='music'?'#subMusic':'#subVoiceover').click();
   // HOME shell: nav only, editor hidden, no server/credential fields anywhere.
   await page.goto('http://127.0.0.1:3099');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Welcome to VoiceCut'));
@@ -91,6 +93,7 @@ const path = require('node:path');
   await page.locator('#homeOpenProject').click();
   await page.locator('#editorScreen:not(.hidden)').waitFor();
   // Audio clip add, delete with in-app confirm, undo.
+  await showPanel('clips');
   await page.setInputFiles('#fileAudio',audioPath);
   await page.locator('#timelineContainer [data-action="delete"]').first().waitFor();
   await page.locator('#timelineContainer [data-action="delete"]').first().click();
@@ -99,6 +102,7 @@ const path = require('node:path');
   await page.locator('#btnUndo').click();
   await page.locator('#timelineContainer [data-action="delete"]').first().waitFor();
   // Capture actual MediaRecorder data from a fake microphone device.
+  await showPanel('audio');await showSub('voiceover');
   await page.locator('#btnRecordVO').click();
   await page.locator('#btnStartRecording').click();
   await page.waitForFunction(()=>!document.querySelector('#btnStopRecordingDialog').disabled);
@@ -109,21 +113,24 @@ const path = require('node:path');
   await page.locator('#btnApplyRecord').click();
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('Voiceover_'));
   // Voice Focus noise-reduction level applies live without errors.
+  await showPanel('cleanup');
   await page.locator('#globalNoiseReduction').selectOption('voicefocus');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Noise reduction set to voicefocus'));
   await page.locator('#globalNoiseReduction').selectOption('ultra');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Noise reduction set to ultra'));
   await page.locator('#globalNoiseReduction').selectOption('medium');
-  // Section links scroll inside the editor and never route home.
+  // Panel tabs switch tool panels and never route home.
   {
     const hashBefore = await page.evaluate(()=>location.hash);
-    await page.locator('a[href="#section-captions"]').click();
-    await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='section-captions');
+    await page.locator('#tab-captions').click();
+    await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='captionsHeading');
     assert.equal(await page.evaluate(()=>location.hash),hashBefore);
     assert.equal(await page.locator('#editorScreen:not(.hidden)').count(),1);
     assert.equal(await page.locator('#homeScreen:not(.hidden)').count(),0);
-    await page.locator('a[href="#section-aitools"]').click();
-    await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='section-aitools');
+    assert.equal(await page.locator('#section-captions:not(.hidden)').count(),1);
+    await page.locator('#tab-cleanup').click();
+    await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='aiToolsHeading');
+    assert.equal(await page.locator('#section-aitools:not(.hidden)').count(),1);
     assert.equal(await page.locator('#editorScreen:not(.hidden)').count(),1);
   }
   // Real on-device neural cleanup (no backend configured), replacing original track.
@@ -150,6 +157,7 @@ const path = require('node:path');
   });
   // Neutral balance: the engine itself must preserve a clean tone.
   await setBalance(0, 0);
+  await showPanel('cleanup');
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
   await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('Noise reduction'),{},{timeout:60000});
@@ -165,7 +173,8 @@ const path = require('node:path');
   await setBalance(31, 70);
   {
     const srcBefore = await page.locator('#aiEnhancedAudio').getAttribute('src');
-    await page.locator('#btnAIEnhanceOriginal').click();
+    await showPanel('cleanup');
+  await page.locator('#btnAIEnhanceOriginal').click();
     await page.waitForFunction((s)=>document.querySelector('#aiEnhancedAudio').src!==s, srcBefore, {timeout:60000});
     await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('Noise reduction'),{},{timeout:60000});
     const boosted = await measureCleanup();
@@ -199,6 +208,7 @@ const path = require('node:path');
   await page.locator('#editorScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>Object.values(localStorage).some(value=>value.includes('voicecut-test'))),false);
   // Cloud captions: consent header sent, provider invisible (no provider= param).
+  await showPanel('captions');
   await page.locator('#btnGenerateCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:60000});
   assert.equal(captionCalls.length,1);
@@ -230,16 +240,17 @@ const path = require('node:path');
     window.flutter_inappwebview={callHandler:async(name,title,body)=>{window.__notifCalls.push([name,title,body]);return true;}};
     Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
   });
-  providerFailure=true;await page.locator('#btnGenerateCaptions').click();
+  providerFailure=true;await showPanel('captions');await page.locator('#btnGenerateCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('Caption generation is temporarily unavailable'));
   assert.deepEqual(await page.evaluate(()=>window.__notifCalls),[['showNotification','Captions failed','Caption generation failed. Open the app and tap Retry.']]);
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});delete window.flutter_inappwebview;});
   await page.locator('#btnRetryCaptions:not(.hidden)').waitFor();
   assert.equal(await page.locator('#captionText').inputValue(),'Reviewed caption');
-  providerFailure=false;await page.locator('#btnRetryCaptions').click();
+  providerFailure=false;await showPanel('captions');await page.locator('#btnRetryCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:60000});
   assert.equal(await page.locator('#captionText').inputValue(),'Hello from VoiceCut.');
   await page.locator('#captionLanguage').selectOption('hi');
+  await showPanel('captions');
   await page.locator('#btnGenerateCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('Warning: you chose Hindi'),{},{timeout:60000});
   assert.match(await text('#captionStatus'),/First caption: "Hello from VoiceCut\."/);
@@ -247,20 +258,26 @@ const path = require('node:path');
   await page.locator('#captionLanguage').selectOption('en');
   // Captions accept a genuinely large source (101MB audio clip): only the small prepared copy uploads.
   assert.ok(fs.statSync(bigPath).size>100*1024*1024);
+  await showPanel('clips');
   await page.setInputFiles('#fileAudio',bigPath);
   await page.locator('#timelineContainer .clip[aria-label*="bigcaption"]').click();
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await showPanel('captions');
   await page.locator('#captionSource').selectOption('selected');
+  await showPanel('captions');
   await page.locator('#btnGenerateCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:180000});
   await page.locator('#captionSource').selectOption('original');
+  await showPanel('clips');
   await page.locator('#timelineContainer .clip[aria-label*="bigcaption"]').click();
   await page.locator('#selDelete').click();
   await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('bigcaption')));
+  await showPanel('captions');
   await page.locator('#btnGenerateCaptions').click();
   await page.waitForFunction(()=>document.querySelector('#captionStatus').textContent.includes('1 captions generated'),{},{timeout:60000});
   // Cloud isolation is auto-selected when on-device neural denoise is unavailable.
+  await showPanel('cleanup');
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
   assert.equal(isolateCalls,1);assert.equal(denoiseCalls,0);
@@ -276,6 +293,7 @@ const path = require('node:path');
   await page.locator('#noProjectOpen').click();
   await page.locator('#editorScreen:not(.hidden)').waitFor();
   await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2);
+  await showPanel('cleanup');
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.locator('#btnApplyEnhanced:not(.hidden)').waitFor({timeout:60000});
   assert.equal(denoiseCalls,1);assert.equal(denoiseConsent,undefined);
@@ -283,6 +301,7 @@ const path = require('node:path');
   assert.equal(await page.locator('#mainVideo').evaluate(v=>v.muted),true);
   // Large files skip the server and use on-device cleanup (Blob.size shadowed to 800MB; real bytes stay small).
   await page.evaluate(()=>{window.__origBlobSize=window.__origBlobSize||Object.getOwnPropertyDescriptor(Blob.prototype,'size');Object.defineProperty(Blob.prototype,'size',{configurable:true,get:()=>800*1024*1024});});
+  await showPanel('cleanup');
   await page.locator('#btnAIEnhanceOriginal').click();
   await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('Noise reduction'),{},{timeout:120000});
   assert.equal(denoiseCalls,1);
@@ -309,9 +328,11 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('No quiet gaps longer than'),{},{timeout:60000});
   await page.locator('#enhanceMode').selectOption('automatic');
   // On-device silence removal really cuts: the gappy clip is shortened and previews before applying.
+  await showPanel('clips');
   await page.setInputFiles('#fileAudio',gappyPath);
   await page.locator('#timelineContainer .clip[aria-label*="gappy"]').click();
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await showPanel('cleanup');
   await page.locator('#enhanceMode').selectOption('device');
   await page.locator('#btnSilenceSelected').click();
   await page.waitForFunction(()=>document.querySelector('#silenceStatus').textContent.includes('Removed 1 silent gap'),{},{timeout:60000});
@@ -319,26 +340,32 @@ const path = require('node:path');
   await page.locator('#btnApplyEnhanced').click();
   await page.waitForFunction(()=>document.querySelector('#timelineContainer .clip[aria-label*="gappy"]').getAttribute('aria-label').includes('Duration 00 minutes 07 seconds'));
   await page.locator('#enhanceMode').selectOption('automatic');
+  await showPanel('clips');
   await page.locator('#timelineContainer .clip[aria-label*="gappy"]').click();
   await page.locator('#selDelete').click();
   await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('gappy')));
   // Long-audio engine works in parts: dev-chunk-seconds=2 cleans the 3s clip in 2 parts.
+  await showPanel('clips');
   await page.setInputFiles('#fileAudio',{name:'chunky.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
   await page.locator('#timelineContainer .clip[aria-label*="chunky"]').click();
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await showPanel('cleanup');
   await page.locator('#enhanceMode').selectOption('device');
   await page.evaluate(()=>history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example')+'&dev-chunk-seconds=2'));
+  await showPanel('cleanup');
   await page.locator('#btnAIEnhanceSelected').click();
   await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('Checked in 2 parts'),{},{timeout:120000});
   await page.locator('#btnCloseAI').click();
   await page.evaluate(()=>history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example')));
   await page.locator('#enhanceMode').selectOption('automatic');
+  await showPanel('clips');
   await page.locator('#timelineContainer .clip[aria-label*="chunky"]').click();
   await page.locator('#selDelete').click();
   await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>![...document.querySelectorAll('#timelineContainer .clip')].some(el=>el.getAttribute('aria-label').includes('chunky')));
   // Clip reverse, audio merge with undo, video reverse download.
+  await showPanel('clips');
   await page.locator('#timelineContainer .clip[aria-label^="Music Track"]').first().click();
   await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
   await page.locator('#selReverse').click();
@@ -347,6 +374,7 @@ const path = require('node:path');
   await page.setInputFiles('#fileAudio',audioPath);
   await page.waitForFunction((n)=>[...document.querySelectorAll('#timelineContainer .clip[data-clip-id]')].filter(el=>!el.getAttribute('aria-label').startsWith('Video Segment')).length===n+1,clipsBefore);
   const beforeMerge=clipsBefore+1;
+  await showPanel('audio');await showSub('music');
   await page.locator('#btnMergeAudio').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Merged '),{},{timeout:60000});
   assert.match(await text('#statusText'),new RegExp('Merged '+beforeMerge+' clips into one'));
@@ -390,6 +418,7 @@ const path = require('node:path');
   assert.equal(await page.locator('#noiseLeftSlider').inputValue(),'31');
   assert.equal(await page.locator('#speechBoostSlider').inputValue(),'70');
   // Crop, rotate, and freeze-frame controls update the edit summary.
+  await showPanel('edit');
   await page.locator('#cropPreset').selectOption('1:1');
   await page.waitForFunction(()=>document.querySelector('#cropSummary').textContent.includes('1:1'));
   await page.locator('#rotateAngle').selectOption('90');
@@ -397,13 +426,15 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>2.4);
   await page.locator('#btnAddFreeze').click();
   await page.waitForFunction(()=>document.querySelectorAll('#freezeList li').length===1);
+  await showPanel('export');
   await page.locator('#exportFormat').selectOption('webm');await page.locator('#exportResolution').selectOption('720');
   // Export 0: rotation + freeze + burn-in are honored in the file.
+  await showPanel('export');
   await page.locator('#btnDoExport').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Exporting video'),{},{timeout:30000});
   await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
   {
-    const downloadPromise=page.waitForEvent('download');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
     assert.match(download.suggestedFilename(),/E2E_Renamed_export\.webm$/);
     const output=path.join(dir,'export-rotated.webm');await download.saveAs(output);
     const info=JSON.parse(execFileSync('ffprobe',['-v','error','-count_frames','-show_streams','-select_streams','v:0','-show_entries','stream=width,height,nb_read_frames,avg_frame_rate','-of','json',output],{encoding:'utf8'}));
@@ -432,7 +463,7 @@ const path = require('node:path');
     }};
   });
   await page.evaluate(()=>history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example')+'&dev-bridge-chunk-kb=64'));
-  await page.locator('#btnDownloadExported').click();
+  await showPanel('export');await page.locator('#btnDownloadExported').click();
   await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.includes('Video saved to your device gallery.'),{},{timeout:60000});
   {
     const summary=await page.evaluate(()=>({log:window.__bridgeLog,s:window.__bridgeStore}));
@@ -446,14 +477,16 @@ const path = require('node:path');
   }
   await page.evaluate(()=>{delete window.flutter_inappwebview;history.replaceState(null,'','#/editor?dev-backend='+encodeURIComponent('https://voicecut-test.example'));});
   // Export 1: plain export still carries audio, video, and burn-in.
+  await showPanel('edit');
   await page.locator('#cropPreset').selectOption('original');
   await page.locator('#rotateAngle').selectOption('0');
   await page.locator('#freezeList button').click();
   await page.waitForFunction(()=>document.querySelectorAll('#freezeList li').length===0);
+  await showPanel('export');
   await page.locator('#btnDoExport').click();
   await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
   {
-    const downloadPromise=page.waitForEvent('download');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
     const output=path.join(dir,'export-plain.webm');await download.saveAs(output);
     const info=JSON.parse(execFileSync('ffprobe',['-v','error','-show_streams','-of','json',output],{encoding:'utf8'}));
     assert.ok(info.streams.some(s=>s.codec_type==='audio'));assert.ok(info.streams.some(s=>s.codec_type==='video'));
@@ -461,6 +494,7 @@ const path = require('node:path');
     let white=0;for(let j=0;j<pixels.length;j+=3)if(pixels[j]>200&&pixels[j+1]>200&&pixels[j+2]>200)white++;
     assert.ok(white>100,'Export must contain visible burned-in caption glyphs');
   }
+  await showPanel('export');
   await page.locator('#btnDoExport').click();
   await page.waitForFunction(()=>!document.querySelector('#btnCancelExport').disabled);
   await page.locator('#btnCancelExport').click();
@@ -471,6 +505,79 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.activeElement && document.activeElement.id==='btnSaveProject');
   await page.keyboard.press('Space');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Project saved'));
+  // Simple editor: home Trim opens edit tools, home Split cuts at the playhead.
+  await page.locator('#mainVideo').evaluate(v=>{v.currentTime=1;});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>0.9);
+  await page.locator('#btnHomeTrim').click();
+  await page.locator('#section-edit:not(.hidden)').waitFor();
+  await page.locator('#btnHomeSplit').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Video split at'));
+  // Audio choices: voice-over and music open their own tools.
+  await showPanel('audio');
+  await page.locator('#audioSubTabs:not(.hidden)').waitFor();
+  await showSub('music');
+  await page.locator('#section-audio:not(.hidden)').waitFor();
+  assert.equal(await page.locator('#section-voiceover:not(.hidden)').count(),0);
+  await showSub('voiceover');
+  await page.locator('#section-voiceover:not(.hidden)').waitFor();
+  assert.equal(await page.locator('#section-audio:not(.hidden)').count(),0);
+  // A new song stops the previous one where it starts.
+  await page.locator('#mainVideo').evaluate(v=>{v.currentTime=0.5;});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>0.4);
+  await page.setInputFiles('#fileAudio',{name:'songone.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
+  await page.waitForFunction(()=>[...document.querySelectorAll('#timelineContainer .clip')].some(el=>(el.getAttribute('aria-label')||'').includes('songone')));
+  await page.locator('#mainVideo').evaluate(v=>{v.currentTime=1.5;});
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').currentTime>1.4);
+  await page.setInputFiles('#fileAudio',{name:'songtwo.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
+  await page.waitForFunction(()=>[...document.querySelectorAll('#timelineContainer .clip')].some(el=>(el.getAttribute('aria-label')||'').includes('songtwo')));
+  {
+    const stopsPrevious = await page.evaluate(()=>{
+      const clips=[...document.querySelectorAll('#timelineContainer .clip')].map(el=>el.getAttribute('aria-label')||'');
+      const one=clips.find(a=>a.includes('songone'));
+      return one && one.includes('Duration 00 minutes 01 second');
+    });
+    assert.ok(stopsPrevious,'previous song must stop where the new song starts');
+  }
+  // One volume for every song.
+  await showPanel('clips');
+  await page.locator('#timelineContainer .clip[aria-label*="songtwo"]').click();
+  await page.locator('#selectedClipPanel:not(.hidden)').waitFor();
+  await page.locator('#selVolumeNumber').fill('40');
+  await page.locator('#selVolumeNumber').dispatchEvent('change');
+  await showPanel('audio');await showSub('music');
+  await page.locator('#btnApplyVolumeAll').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('applied to all songs'));
+  // Voice changer offers every voice; preview renders or guides when empty.
+  await showSub('voiceover');
+  for (const v of ['high','low','chipmunk','alien','robot']) assert.ok(await page.locator('#voiceFilterSelect option[value="'+v+'"]').count(),v);
+  const hasVO = await page.evaluate(()=>!![...document.querySelectorAll('#timelineContainer .clip')].some(el=>/^Voice-over Track/.test(el.getAttribute('aria-label')||'')));
+  if (!hasVO) {
+    await page.locator('#voiceFilterSelect').selectOption('chipmunk');
+    await page.locator('#btnPreviewVoiceFilter').click();
+    await page.waitForFunction(()=>document.querySelector('#voiceFilterStatus').textContent.includes('Record or select a voice-over first'));
+  } else {
+    await page.locator('#voiceFilterSelect').selectOption('none');
+    await page.locator('#btnPreviewVoiceFilter').click();
+    await page.waitForFunction(()=>document.querySelector('#voiceFilterStatus').textContent.includes('Choose a voice effect first'));
+    await page.locator('#voiceFilterSelect').selectOption('chipmunk');
+    await page.locator('#btnPreviewVoiceFilter').click();
+    await page.waitForFunction(()=>document.querySelector('#aiResultText').textContent.includes('Voice filter: complete'),{},{timeout:60000});
+    await page.locator('#btnCloseAI').click();
+    await page.waitForFunction(()=>!document.querySelector('#aiProcessingDialog').open);
+  }
+  // Video looks change the preview and reset cleanly.
+  await showPanel('home');
+  await page.locator('#videoFilter').selectOption('vivid');
+  assert.match(await page.locator('#mainVideo').evaluate(v=>v.style.filter),/saturate\(1\.8\)/);
+  await page.locator('#videoFilter').selectOption('normal');
+  assert.equal(await page.locator('#mainVideo').evaluate(v=>v.style.filter),'');
+  // Captions panel names its source plainly; every file has its own tools.
+  await showPanel('captions');
+  assert.match(await page.locator('#section-captions').textContent(),/Get captions from/);
+  await showPanel('clips');
+  assert.equal(await page.locator('#btnVideoSilence:not(.hidden)').count(),1);
+  await page.locator('#timelineContainer .clip[aria-label*="songtwo"]').click();
+  await page.locator('#btnSelSilence:not(.hidden)').waitFor();
   // Filename is rendered as text, never HTML.
   await page.setInputFiles('#fileAudio',{name:'<img src=x onerror=window.INJECTED=1>.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('<img'));
@@ -478,6 +585,7 @@ const path = require('node:path');
   // Deletion routes to the library and must not reappear due to queued auto-save.
   await page.locator('#delRangeStart').fill('00:01');await page.locator('#delRangeEnd').fill('00:02');await page.locator('#btnDeleteRange').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Deleted'));
+  await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   await page.locator('#libraryScreen:not(.hidden)').waitFor();
@@ -498,12 +606,13 @@ const path = require('node:path');
   await page.locator('#btnApplyVideoRecord').click();
   await page.locator('#editorScreen:not(.hidden)').waitFor({timeout:30000});
   await page.waitForFunction(()=>document.querySelector('#mainVideo').duration>1,{},{timeout:30000});
+  await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   await page.goto('http://127.0.0.1:3099/#/editor');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

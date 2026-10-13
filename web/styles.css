@@ -129,8 +129,9 @@
   .status-area { position:sticky; bottom:0; z-index:90; background: var(--bg2); border-top:2px solid var(--accent); padding:12px 16px; display:flex; gap:12px; align-items:center; }
   .status-text { flex:1; font-weight:600; }
   .section-nav { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; position:sticky; top:72px; z-index:80; background: var(--bg); padding:8px 0; }
-  .section-nav a { padding:8px 14px; background: var(--bg3); border:1px solid var(--border); border-radius:20px; text-decoration:none; color: var(--text); font-size:14px; font-weight:600; }
-  .section-nav a:focus-visible, .section-nav a:hover { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+  .section-nav button { padding:8px 14px; background: var(--bg3); border:1px solid var(--border); border-radius:20px; color: var(--text); font-size:14px; font-weight:600; cursor:pointer; }
+  .section-nav button:focus-visible, .section-nav button:hover { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+  .section-nav button[aria-selected="true"] { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
   .badge { display:inline-flex; padding:2px 8px; border-radius:20px; font-size:12px; font-weight:700; background: var(--bg4); border:1px solid var(--border); }
   .badge.success { background: var(--success); color:black; border-color: var(--success); }
   .badge.warning { background: var(--warning); color:black; }
