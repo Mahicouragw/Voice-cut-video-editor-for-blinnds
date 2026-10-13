@@ -214,16 +214,19 @@
 
   <!-- EDITOR SCREEN -->
   <section id="editorScreen" class="hidden" aria-label="Video editor">
-    <nav class="section-nav" aria-label="Editor sections navigation" id="sectionNav">
-      <a href="#section-video" aria-label="Go to Video section">VIDEO</a>
-      <a href="#section-edit" aria-label="Go to Edit section">EDIT</a>
-      <a href="#section-audio" aria-label="Go to Audio section">AUDIO</a>
-      <a href="#section-voiceover" aria-label="Go to Voice-over section">VOICE-OVER</a>
-      <a href="#section-aitools" aria-label="Go to AI Audio section">AI AUDIO</a>
-      <a href="#section-captions" aria-label="Go to Captions section">CAPTIONS</a>
-      <a href="#section-timeline" aria-label="Go to Timeline section">TIMELINE</a>
-      <a href="#section-export" aria-label="Go to Export section">EXPORT</a>
+    <nav class="section-nav" aria-label="Editor panels" id="sectionNav" role="tablist">
+      <button id="tab-home" role="tab" aria-selected="true" aria-label="Home panel">HOME</button>
+      <button id="tab-edit" role="tab" aria-selected="false" aria-label="Edit panel">EDIT</button>
+      <button id="tab-audio" role="tab" aria-selected="false" aria-label="Audio panel">AUDIO</button>
+      <button id="tab-captions" role="tab" aria-selected="false" aria-label="Captions panel">CAPTIONS</button>
+      <button id="tab-cleanup" role="tab" aria-selected="false" aria-label="Cleanup panel">CLEANUP</button>
+      <button id="tab-clips" role="tab" aria-selected="false" aria-label="My files panel">MY FILES</button>
+      <button id="tab-export" role="tab" aria-selected="false" aria-label="Export panel">EXPORT</button>
     </nav>
+    <div id="audioSubTabs" class="flex gap-8 wrap hidden" role="group" aria-label="Audio choices" style="margin:8px 0;">
+      <button id="subVoiceover" class="primary" aria-pressed="true">🎙 Voice-over</button>
+      <button id="subMusic" aria-pressed="false">🎵 Music</button>
+    </div>
     <!-- PROJECT -->
     <div id="section-project" class="card" role="region" aria-labelledby="projectHeading">
       <h2 id="projectHeading">PROJECT</h2>
@@ -260,10 +263,12 @@
 
       <div class="playback-bar" role="toolbar" aria-label="Video playback controls">
         <button id="btnPlay" aria-label="Play video, button" class="primary">▶ Play</button>
-        <button id="btnPause" aria-label="Pause video, button">⏸ Pause</button>
-        <button id="btnStop" aria-label="Stop video, button">⏹ Stop</button>
         <button id="btnSkipBack" aria-label="Skip backward 5 seconds, button">⏪ Back</button>
         <button id="btnSkipForward" aria-label="Skip forward 5 seconds, button">Forward ⏩</button>
+        <button id="btnHomeTrim" aria-label="Trim tools, button. Opens trim controls">✂ Trim</button>
+        <button id="btnHomeSplit" aria-label="Split video at current position, button">🔪 Split</button>
+        <button id="btnPause" aria-label="Pause video, button">⏸ Pause</button>
+        <button id="btnStop" aria-label="Stop video, button">⏹ Stop</button>
         <button id="btnPrevFrame" aria-label="Previous frame, button">Prev Frame</button>
         <button id="btnNextFrame" aria-label="Next frame, button">Next Frame</button>
         <button id="btnFullscreen" aria-label="Full-screen preview, button">⛶ Full-screen</button>
@@ -286,6 +291,20 @@
             <option value="2">2x</option>
           </select>
         </div>
+      </div>
+
+      <div class="flex gap-8 wrap items-center mt-16">
+        <label for="videoFilter">Video look</label>
+        <select id="videoFilter" aria-label="Video look filter, select">
+          <option value="normal">Normal</option>
+          <option value="bright">Bright</option>
+          <option value="warm">Warm</option>
+          <option value="cool">Cool</option>
+          <option value="bw">Black and white</option>
+          <option value="vintage">Vintage</option>
+          <option value="vivid">Vivid</option>
+          <option value="overflow">Overflow glow</option>
+        </select>
       </div>
 
       <div class="grid grid-2 mt-16">
@@ -394,7 +413,7 @@
     </div>
 
     <!-- ORIGINAL AUDIO -->
-    <div class="card" role="region" aria-labelledby="originalAudioHeading">
+    <div id="section-originalaudio" class="card" role="region" aria-labelledby="originalAudioHeading">
       <h2 id="originalAudioHeading">ORIGINAL VIDEO AUDIO</h2>
       <div class="slider-group">
         <label id="origVolLabel" for="origVolumeSlider">Original Audio Volume</label>
@@ -411,6 +430,7 @@
         <button id="btnOrigFadeIn" aria-label="Fade in original audio, button">Fade In</button>
         <button id="btnOrigFadeOut" aria-label="Fade out original audio, button">Fade Out</button>
         <button id="btnOrigAIEnhance" class="primary" aria-label="Audio Reduce Noise for original video audio, button. Audio cleanup processing">🤖 Reduce Noise - Audio Enhance</button>
+        <button id="btnVideoSilence" aria-label="Remove silence from original video, button">✂ Remove Silence</button>
       </div>
       <div class="mt-16">
         <label for="origNoiseReduction">Noise Reduction for Original Audio</label>
@@ -432,6 +452,7 @@
       <div id="musicTracksList" class="timeline" role="list" aria-label="Music tracks list"></div>
       <button id="btnAddMusic2" class="mt-16" aria-label="Add Music, button. Adds new music track at current position">+ Add Music Track</button>
       <button id="btnMergeAudio" class="mt-16" aria-label="Merge audio clips, button. Mixes all unmuted audio clips into one clip">Merge Audio Clips</button>
+      <button id="btnApplyVolumeAll" class="mt-16" aria-label="Use the selected song volume for all songs, button">Use This Volume for All Songs</button>
     </div>
 
     <!-- VOICE-OVER -->
@@ -442,6 +463,19 @@
         <button id="btnStopVO" aria-label="Stop recording, button" disabled>■ Stop Recording</button>
         <button id="btnImportVO2" aria-label="Import Voice-over, button">Import Voice-over</button>
       </div>
+      <div class="flex gap-8 wrap items-center mt-16">
+        <label for="voiceFilterSelect">Voice changer</label>
+        <select id="voiceFilterSelect" aria-label="Voice changer effect, select">
+          <option value="none">No effect</option>
+          <option value="high">High voice</option>
+          <option value="low">Low voice</option>
+          <option value="chipmunk">Chipmunk</option>
+          <option value="alien">Alien</option>
+          <option value="robot">Robot</option>
+        </select>
+        <button id="btnPreviewVoiceFilter" aria-label="Preview voice changer on the voice-over, button">Preview Voice</button>
+      </div>
+      <p id="voiceFilterStatus" role="status" style="font-size:14px;"></p>
       <div id="recordingStatus" role="status" aria-live="assertive" class="mt-16 hidden"></div>
       <div id="voiceoverTracksList" class="timeline mt-16" role="list" aria-label="Voice-over tracks list"></div>
     </div>
@@ -505,7 +539,7 @@
       <h2 id="captionsHeading">Automatic captions</h2>
       <p>Automatic captions means the app listens to the speech in your video and writes it out as timed subtitles you can read, edit, and keep. Generate captions automatically, review the words and timing, then export captions on the video or as SRT/VTT. AI can make mistakes, especially with silence, noise and names. No speaker identity detection or translation is performed.</p>
       <div class="grid grid-2">
-        <div><label for="captionSource">Speech to caption</label><select id="captionSource"><option value="original">Original video audio</option><option value="voiceover">Voice-over track</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
+        <div><label for="captionSource">Get captions from</label><select id="captionSource"><option value="original">Original video audio</option><option value="voiceover">Voice-over track</option><option value="selected">Selected audio clip (select in the timeline first)</option></select></div>
         <div><label for="captionLanguage">Spoken language</label><select id="captionLanguage"><option value="">Detect automatically</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option><option value="kn">Kannada</option><option value="ml">Malayalam</option><option value="mr">Marathi</option><option value="bn">Bengali</option><option value="ur">Urdu</option></select></div>
       </div>
       <p>Generation replaces the current caption list after confirmation. Only the chosen source is transcribed, not the final mix. To caption all mixed speech, export the mix and import that video into a new project. Sources must be at most 10 minutes. Large video files are fine: only a small audio copy is sent.</p>
@@ -654,6 +688,7 @@
           <button id="selDelete" class="danger" aria-label="Delete selected clip, button">Delete</button>
           <button id="selDuplicate" aria-label="Duplicate selected clip, button">Duplicate</button>
           <button id="selAIEnhance" class="primary" aria-label="Audio Reduce Noise for selected clip, button. Audio cleanup processing with progress">🤖 Reduce Noise</button>
+          <button id="btnSelSilence" aria-label="Remove silence from selected clip, button">✂ Remove Silence</button>
         </div>
 
         <div class="grid grid-2 mt-16">

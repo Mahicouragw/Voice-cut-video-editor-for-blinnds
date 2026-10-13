@@ -86,6 +86,46 @@
     showView(VIEW_IDS[name] ? name : 'home');
   }
   function hashQuery() { const h=location.hash||''; return h.includes('?') ? '?'+h.split('?').slice(1).join('?') : ''; }
+  // Simple editor: the video stays on screen while one tool panel shows at
+  // a time. Home is just Play, Back, Forward, Trim and Split.
+  const EDITOR_PANELS = {
+    home: ['section-video'],
+    edit: ['section-video', 'section-edit'],
+    audio: ['section-video', 'section-audio', 'section-voiceover', 'section-effects'],
+    captions: ['section-video', 'section-captions'],
+    cleanup: ['section-video', 'section-aitools'],
+    clips: ['section-video', 'section-project', 'section-timeline', 'section-originalaudio'],
+    export: ['section-video', 'section-export'],
+  };
+  const EDITOR_PANEL_IDS = ['section-project','section-edit','section-audio','section-voiceover','section-effects','section-captions','section-aitools','section-timeline','section-export','section-originalaudio'];
+  const EDITOR_PANEL_NAMES = {home:'Home', edit:'Edit', audio:'Audio', captions:'Captions', cleanup:'Cleanup', clips:'My files', export:'Export'};
+  let editorPanel = 'home', audioSub = 'voiceover';
+  function showEditorPanel(name, quiet=false) {
+    if (!EDITOR_PANELS[name]) name = 'home';
+    editorPanel = name;
+    const visible = EDITOR_PANELS[name];
+    for (const id of EDITOR_PANEL_IDS) document.getElementById(id)?.classList.toggle('hidden', !visible.includes(id));
+    for (const key of Object.keys(EDITOR_PANELS)) document.getElementById('tab-'+key)?.setAttribute('aria-selected', key===name?'true':'false');
+    document.getElementById('audioSubTabs')?.classList.toggle('hidden', name!=='audio');
+    if (name==='audio') showAudioSub(audioSub, true);
+    if (!quiet) {
+      const head = document.querySelector('#'+visible[visible.length-1]+' h2');
+      if (head) { if (!head.hasAttribute('tabindex')) head.setAttribute('tabindex','-1'); head.focus({preventScroll:true}); }
+      announce(EDITOR_PANEL_NAMES[name]+' panel opened.');
+    }
+  }
+  function showAudioSub(which, quiet=false) {
+    audioSub = (which==='music') ? 'music' : 'voiceover';
+    const music = audioSub==='music';
+    document.getElementById('section-voiceover')?.classList.toggle('hidden', music);
+    document.getElementById('section-audio')?.classList.toggle('hidden', !music);
+    document.getElementById('section-effects')?.classList.toggle('hidden', !music);
+    document.getElementById('subVoiceover')?.setAttribute('aria-pressed', music?'false':'true');
+    document.getElementById('subMusic')?.setAttribute('aria-pressed', music?'true':'false');
+    document.getElementById('subVoiceover')?.classList.toggle('primary', !music);
+    document.getElementById('subMusic')?.classList.toggle('primary', music);
+    if (!quiet) announce(music?'Music tools opened.':'Voice-over tools opened.');
+  }
   function openEditor() { showView('editor'); const target='#/editor'+hashQuery(); if ((location.hash||'') !== target) history.pushState(null,'',target); }
   function retainedAndTotal(p) {
     const total = Number(p.duration) || 0;
@@ -162,9 +202,9 @@
       applyOriginalNR();
       selectedClipId = null;
       historyStack = []; historyIndex = -1;
-      pushHistory(); renderAll();
+      pushHistory(); renderAll(); ensureVoiceCurve();
       $('#videoPlaceholder').classList.toggle('hidden', !!project.videoUrl);
-      openEditor();
+      openEditor(); showEditorPanel('home',true);
       $('#section-video').scrollIntoView();
       announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}.`);
     } catch(e) { announce('Cannot open project: ' + e.message, true); }
@@ -173,7 +213,7 @@
     pauseAllAudio();
     currentRequest?.abort(); mediaEpoch++;
     clearTimeout(autoSaveTimeout); dirty = false;
-    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
     applyPrefsToProject(true);
     selectedClipId = null;
     video.src = '';
@@ -481,6 +521,7 @@
     $('#exportFormat').value = project.format;
     $('#duckingToggle').checked = project.ducking.enabled;
     $('#duckingLevel').value = project.ducking.level;
+    applyVideoFilter();
     $('#origVolumeSlider').value = project.originalAudio.volume;
     $('#origVolumeNumber').value = project.originalAudio.volume;
     $('#origVolumeText').textContent = project.originalAudio.volume+'%';
@@ -795,8 +836,8 @@
       announce(`Video loaded successfully. Duration ${formatTimeVerbose(video.duration)}.`, true);
       project.id = 'proj_'+Date.now();
       captionDefaults();
-      applyPrefsToProject(true);
-      openEditor();
+      applyPrefsToProject(true); ensureVoiceCurve();
+      openEditor(); showEditorPanel('home',true);
       $('#section-video').scrollIntoView({behavior:'smooth'});
       autoSave();
     }, {once:true});
@@ -850,15 +891,97 @@
         noiseReduction: type==='music' ? 'off' : 'medium',
         trackIndex: nextTrackIndex
       };
+      // A new song stops the previous one: earlier music ends where this starts.
+      let stopped = 0;
+      if (type==='music') for (const c of project.clips.filter(c=>c.type==='music')) {
+        const audibleEnd = c.startTime + (c.duration - c.trimStart - c.trimEnd);
+        if (c.startTime < clip.startTime && audibleEnd > clip.startTime + 0.05) {
+          c.trimEnd = Math.max(0, c.duration - c.trimStart - (clip.startTime - c.startTime));
+          stopped++;
+        }
+      }
       project.clips.push(clip);
       pushHistory();
       renderAll();
-      announce(`${type==='music'?'Music':'Voice-over'} Track ${nextTrackIndex} added at ${formatTimeVerbose(clip.startTime)}. ${escapeHTML(clip.name)}. Duration ${formatTimeVerbose(clip.duration)}. Volume ${clip.volume} percent.`);
+      announce(`${type==='music'?'Music':'Voice-over'} Track ${nextTrackIndex} added at ${formatTimeVerbose(clip.startTime)}. ${escapeHTML(clip.name)}. Duration ${formatTimeVerbose(clip.duration)}. Volume ${clip.volume} percent.${stopped?` Previous song stopped here.`:''}`);
       // Auto play preview?
       createAudioNodeForClip(clip);
     });
   }
 
+  function applyVolumeToAllMusic() {
+    const sel = project.clips.find(c=>c.id===selectedClipId && c.type==='music') || project.clips.find(c=>c.type==='music');
+    if (!sel) { announce('Add a song first.', true); return; }
+    for (const c of project.clips.filter(c=>c.type==='music')) {
+      c.volume = sel.volume;
+      const n = audioNodes.get(c.id);
+      if (n) n.gain.gain.value = c.muted?0:c.volume/100;
+    }
+    pushHistory(); renderAll();
+    announce(`Volume ${sel.volume} percent applied to all songs.`);
+  }
+  async function renderVoiceFilter(buffer, filter) {
+    const rate = VoiceCutCore.VOICE_FILTERS[filter] || 1;
+    const sr = buffer.sampleRate, len = Math.max(1, Math.ceil(buffer.length / rate));
+    const off = new OfflineAudioContext(buffer.numberOfChannels, len, sr);
+    const src = off.createBufferSource();
+    src.buffer = buffer; src.playbackRate.value = rate;
+    let head = src;
+    const ringMod = (freq, depth) => {
+      const mod = off.createGain(); mod.gain.value = 1 - depth;
+      const amt = off.createGain(); amt.gain.value = depth;
+      const osc = off.createOscillator(); osc.type = 'square'; osc.frequency.value = freq;
+      osc.connect(amt); amt.connect(mod.gain);
+      head.connect(mod); head = mod;
+      osc.start(0); osc.stop(len / sr);
+    };
+    if (filter==='alien') {
+      const lfo = off.createOscillator(); lfo.frequency.value = 7;
+      const lfoGain = off.createGain(); lfoGain.gain.value = 0.25;
+      lfo.connect(lfoGain); lfoGain.connect(src.playbackRate);
+      lfo.start(0); lfo.stop(len / sr);
+      ringMod(90, 0.25);
+    } else if (filter==='robot') {
+      ringMod(45, 0.5);
+    }
+    head.connect(off.destination);
+    src.start(0);
+    return off.startRendering();
+  }
+  async function previewVoiceFilter() {
+    const filter = $('#voiceFilterSelect').value;
+    const statusEl = $('#voiceFilterStatus');
+    const clip = project.clips.find(c=>c.id===selectedClipId && c.type==='voiceover') || project.clips.find(c=>c.type==='voiceover' && !c.muted) || project.clips.find(c=>c.type==='voiceover');
+    if (!clip || !(clip.file || clip.url)) { const m='Record or select a voice-over first.'; statusEl.textContent=m; announce(m,true); return; }
+    if (!filter || filter==='none') { const m='Choose a voice effect first.'; statusEl.textContent=m; announce(m,true); return; }
+    if (cleanupBusy || captionRequestBusy || isExporting) { announce('Wait for the current operation to finish.', true); return; }
+    statusEl.textContent = 'Changing voice…'; announce('Changing voice.');
+    try {
+      const file = clip.file || await (await fetch(clip.url)).blob();
+      const decoded = await decodeAudioFile(file);
+      const changed = await renderVoiceFilter(decoded, filter);
+      const blob = audioBufferToWavBlob(changed);
+      const enhancedUrl = URL.createObjectURL(blob);
+      const originalUrl = URL.createObjectURL(file);
+      currentAIJob = {type:'clip', clipId:clip.id, enhancedBlob:blob, enhancedBuffer:changed, enhancedUrl, originalUrl, level:'voice-'+filter, provider:'Voice filter', epoch:mediaEpoch};
+      $('#aiCurrentFile').textContent = clip.name;
+      const prog = $('#aiProgressText'); if (prog) prog.textContent = '';
+      $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
+      $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
+      $('#btnCloseAI').classList.remove('hidden');
+      $('#aiResultText').textContent = 'Voice filter: complete. Listen before applying.';
+      const dialog = $('#aiProcessingDialog');
+      if (!dialog.open) dialog.showModal();
+      statusEl.textContent = 'Listen and tap Apply to keep the new voice.';
+      announce('Voice preview ready. Listen before applying.');
+    } catch(e) { const m='Voice change stopped: '+e.message; statusEl.textContent=m; announce(m,true); }
+  }
+  function applyVideoFilter() {
+    const name = project.videoFilter || 'normal';
+    video.style.filter = VoiceCutCore.VIDEO_FILTERS[name] || '';
+    const sel = $('#videoFilter');
+    if (sel && sel.value !== name) sel.value = VoiceCutCore.VIDEO_FILTERS[name] !== undefined ? name : 'normal';
+  }
   function createAudioNodeForClip(clip) {
     const previous = audioNodes.get(clip.id);
     if (previous) { previous.element.pause(); previous.source.disconnect(); previous.gain.disconnect(); }
@@ -887,6 +1010,22 @@
     }
   }
 
+  // Voice-activity map of the original video: 10 checks per second saying
+  // speech or silence. Music dips under speech and lifts in pauses. Small
+  // videos get the full map; huge ones duck under voice-overs only.
+  let voiceCurve = null, voiceCurveKey = '';
+  async function ensureVoiceCurve() {
+    const key = project.id + '|' + (project.videoFile?.size || 0) + '|' + (project.duration || 0);
+    if (voiceCurveKey === key) return;
+    voiceCurveKey = key; voiceCurve = null;
+    try {
+      const file = project.videoFile;
+      if (!file || file.size > 100*1024*1024 || (project.duration||0) > 600 || (project.duration||0) <= 0) return;
+      const decoded = await decodeAudioFile(file);
+      if (voiceCurveKey !== key) return;
+      voiceCurve = VoiceCutCore.computeVoiceCurve(decoded.getChannelData(0), decoded.sampleRate);
+    } catch(e) { voiceCurve = null; }
+  }
   function syncAudioPlayback(forExport = false) {
     if (isExporting && !forExport) return;
     // FIX: Ensure video element muted state matches project setting to prevent double audio
@@ -906,7 +1045,9 @@
     video.volume = Math.max(0, Math.min(1, original.volume / 100 * fade));
     if (!project.clips.length) return;
     const currentTime = video.currentTime;
-    const voiceActive = project.clips.some(c=>c.type==='voiceover' && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
+    const voiceoverActive = project.clips.some(c=>c.type==='voiceover' && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
+    const originalSpeaking = !project.originalAudio.muted && (project.originalAudio.volume > 0) && VoiceCutCore.voiceActiveAt(voiceCurve, currentTime);
+    const voiceActive = voiceoverActive || originalSpeaking;
 
     project.clips.forEach(clip=>{
       const node = audioNodes.get(clip.id);
@@ -915,14 +1056,11 @@
       const shouldPlay = currentTime>=clip.startTime && currentTime<=clipEnd && !clip.muted && !video.paused;
       const audioEl = node.element;
 
-      // Ducking
+      // Smart ducking: music dips under any voice and lifts where nobody speaks.
       let effectiveVolume = clip.volume/100;
-      if (clip.type==='music' && voiceActive && project.ducking.enabled) {
-        effectiveVolume = effectiveVolume * (1 - project.ducking.level/100);
-        // Smooth transition
-        node.gain.gain.linearRampToValueAtTime(effectiveVolume, audioContext.currentTime+0.3);
-      } else {
-        if (!clip.muted) node.gain.gain.linearRampToValueAtTime(clip.muted?0:clip.volume/100, audioContext.currentTime+0.1);
+      if (clip.type==='music' && project.ducking.enabled) {
+        if (voiceCurve) effectiveVolume = VoiceCutCore.duckedGain(clip.volume, project.ducking.level, voiceActive, true);
+        else if (voiceoverActive) effectiveVolume = effectiveVolume * (1 - project.ducking.level/100);
       }
 
       // Fade
@@ -1491,13 +1629,14 @@
       const ctx = exportCanvas.getContext('2d');
       const drawFrame = () => {
         ctx.fillStyle = '#000'; ctx.fillRect(0,0,exportCanvas.width,exportCanvas.height);
+        ctx.filter = VoiceCutCore.VIDEO_FILTERS[project.videoFilter] || 'none';
         const rect = VoiceCutCore.cropRect(project.crop?.preset||'original',video.videoWidth,video.videoHeight,project.crop);
         const cw = exportCanvas.width, ch = exportCanvas.height;
         const fitW = portrait?ch:cw, fitH = portrait?cw:ch;
         const scale = Math.min(fitW/rect.w,fitH/rect.h), w = rect.w*scale, h = rect.h*scale;
-        if (rotation===0) { ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,(cw-w)/2,(ch-h)/2,w,h); return; }
+        if (rotation===0) { ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,(cw-w)/2,(ch-h)/2,w,h); ctx.filter='none'; return; }
         ctx.save(); ctx.translate(cw/2,ch/2); ctx.rotate(rotation*Math.PI/180);
-        ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,-w/2,-h/2,w,h); ctx.restore();
+        ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,-w/2,-h/2,w,h); ctx.restore(); ctx.filter='none';
       };
       const canvasStream = exportCanvas.captureStream(Number(project.fps));
       const stream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
@@ -2716,17 +2855,13 @@
     $('#noProjectUpload').addEventListener('click', ()=>$('#fileVideo').click());
     $('#noProjectOpen').addEventListener('click', ()=>openProjectById(null));
     $$('#mainNav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); location.hash = a.getAttribute('href'); }));
-    $$('a[href^="#section-"]').forEach(a => a.addEventListener('click', e => {
-      e.preventDefault();
-      const target = document.querySelector(a.getAttribute('href'));
-      if (!target) return;
+    for (const key of Object.keys(EDITOR_PANELS)) document.getElementById('tab-'+key)?.addEventListener('click', () => {
       if (!hasProject()) { announce('Upload a video first.', true); return; }
       if (currentView !== 'editor') openEditor();
-      target.scrollIntoView({behavior: 'smooth', block: 'start'});
-      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
-      target.focus({preventScroll: true});
-      announce((a.getAttribute('aria-label') || 'Section').replace(/^Go to /, '') + '. Swipe to explore.');
-    }));
+      showEditorPanel(key);
+    });
+    $('#subVoiceover')?.addEventListener('click', ()=>showAudioSub('voiceover'));
+    $('#subMusic')?.addEventListener('click', ()=>showAudioSub('music'));
     window.addEventListener('hashchange', route);
 
     $('#btnCloseHelp').addEventListener('click', ()=>$('#helpDialog').close());
@@ -2785,6 +2920,8 @@
     $('#playbackSpeedSelect').addEventListener('change', (e)=>{ project.playbackSpeed=parseFloat(e.target.value); video.playbackRate=project.playbackSpeed; announce(`Playback speed set to ${e.target.value}x.`); });
 
     $('#btnSplitVideo').addEventListener('click', splitVideo);
+    $('#btnHomeTrim').addEventListener('click', ()=>{ showEditorPanel('edit'); });
+    $('#btnHomeSplit').addEventListener('click', splitVideo);
     $('#btnMarkStart').addEventListener('click', markStartPoint);
     $('#btnMarkEnd').addEventListener('click', markEndPoint);
     $('#btnClearMarks').addEventListener('click', clearMarks);
@@ -2793,6 +2930,7 @@
     $('#btnKeepMarked').addEventListener('click', keepMarkedPart);
     $('#btnReverseVideo').addEventListener('click', reverseVideoViaServer);
     $('#btnMergeAudio').addEventListener('click', mergeAudioClips);
+    $('#btnApplyVolumeAll').addEventListener('click', applyVolumeToAllMusic);
     $('#btnTrimStart').addEventListener('click', trimStart);
     $('#btnTrimEnd').addEventListener('click', trimEnd);
     $('#btnSetStart').addEventListener('click', ()=>{ project.trimStart=video.currentTime; renderAll(); pushHistory(); announce(`Start set to ${formatTimeVerbose(project.trimStart)}`); });
@@ -2844,9 +2982,9 @@
         }
       }
     });
-    $('#btnCrop').addEventListener('click', ()=>{ $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#cropPreset').focus(); announce('Crop settings.'); });
-    $('#btnRotate').addEventListener('click', ()=>{ $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#rotateAngle').focus(); announce('Rotation settings.'); });
-    $('#btnFreezeFrame').addEventListener('click', ()=>{ $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#freezeSeconds').focus(); announce('Freeze frame settings.'); });
+    $('#btnCrop').addEventListener('click', ()=>{ showEditorPanel('edit',true); $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#cropPreset').focus(); announce('Crop settings.'); });
+    $('#btnRotate').addEventListener('click', ()=>{ showEditorPanel('edit',true); $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#rotateAngle').focus(); announce('Rotation settings.'); });
+    $('#btnFreezeFrame').addEventListener('click', ()=>{ showEditorPanel('edit',true); $('#section-edit').scrollIntoView({behavior:'smooth'}); $('#freezeSeconds').focus(); announce('Freeze frame settings.'); });
     $('#cropPreset').addEventListener('change',(e)=>{project.crop.preset=e.target.value;pushHistory();renderAll();announce(`Crop set to ${e.target.selectedOptions[0].textContent}. Applied at export.`);});
     for(const id of ['cropX','cropY','cropW','cropH']){$('#'+id).addEventListener('change',()=>{
       const v={x:Number($('#cropX').value),y:Number($('#cropY').value),w:Number($('#cropW').value),h:Number($('#cropH').value)};
@@ -2976,6 +3114,8 @@
     $('#fadeOutCustom').addEventListener('input', (e)=>{ $('#fadeOutCustomVal').textContent=e.target.value+'s'; if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip) clip.fadeOut=parseFloat(e.target.value); } });
     $('#duckingToggle').addEventListener('change', (e)=>{ project.ducking.enabled=e.target.checked; pushHistory(); announce(`Voice ducking ${e.target.checked?'enabled':'disabled'}.`); });
     $('#duckingLevel').addEventListener('change', (e)=>{ project.ducking.level=parseInt(e.target.value); pushHistory(); announce(`Ducking level set to ${e.target.value} percent.`); });
+    $('#videoFilter').addEventListener('change', (e)=>{ project.videoFilter=e.target.value; pushHistory(); applyVideoFilter(); announce(`Video look: ${e.target.selectedOptions[0].textContent}.`); });
+    $('#btnPreviewVoiceFilter').addEventListener('click', previewVoiceFilter);
 
     $('#btnPreviewNoiseReduction').addEventListener('click', () => announce('Use Reduce Noise, then compare the Original and Processed audio players before applying.'));
 
@@ -3001,20 +3141,22 @@
     $('#btnApplyEnhanced').addEventListener('click', applyCurrentAIEnhancement);
     $('#btnSilenceOriginal').addEventListener('click', silenceOriginalVideo);
     $('#btnSilenceSelected').addEventListener('click', silenceClipWithAI);
+    $('#btnSelSilence').addEventListener('click', silenceClipWithAI);
+    $('#btnVideoSilence').addEventListener('click', silenceOriginalVideo);
     $('#btnDetectSilenceOriginal').addEventListener('click', detectSilenceOriginal);
     $('#btnDetectSilenceSelected').addEventListener('click', detectSilenceClips);
     $('#aiOriginalAudio').addEventListener('play', () => $('#aiEnhancedAudio').pause());
     $('#aiEnhancedAudio').addEventListener('play', () => $('#aiOriginalAudio').pause());
 
     // Timeline exit
-    $('#btnExitTimeline').addEventListener('click', ()=>{ $('#section-project').scrollIntoView({behavior:'smooth'}); announce('Exited timeline editing. Focus moved to project section.'); });
+    $('#btnExitTimeline').addEventListener('click', ()=>{ showEditorPanel('home'); });
 
     // Export
     $('#exportResolution').addEventListener('change', (e)=>{ project.resolution=e.target.value; updateExportSummary(); });
     $('#exportFps').addEventListener('change', (e)=>{ project.fps=parseInt(e.target.value); updateExportSummary(); });
     $('#exportFormat').addEventListener('change', (e)=>{ project.format=e.target.value; updateExportSummary(); });
     $('#btnDoExport').addEventListener('click', doExport);
-    $('#btnExport').addEventListener('click', ()=>{ if(!hasProject()){ showView('none'); return; } openEditor(); $('#section-export').scrollIntoView({behavior:'smooth'}); doExport(); });
+    $('#btnExport').addEventListener('click', ()=>{ if(!hasProject()){ showView('none'); return; } openEditor(); showEditorPanel('export',true); doExport(); });
     $('#btnCancelExport').addEventListener('click', cancelExport);
     $('#btnPlayExported').addEventListener('click', ()=>{ exportedVideoEl.play(); });
     $('#btnDownloadExported').addEventListener('click', async ()=>{
@@ -3071,7 +3213,7 @@
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
         await VoiceCutStorage.remove(project.id);
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.removeEventListener('error', videoLoadError);
         video.src='';
