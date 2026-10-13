@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -80,14 +81,27 @@ class _EditorPageState extends State<EditorPage> {
     webController?.reload();
   }
   @override
-  // Fullscreen WebView with no native header: TalkBack linear navigation
-  // starts inside the page instead of getting stuck on an app bar.
+  // A native bar with a Reload button gives TalkBack a starting point, and
+  // hybrid composition exposes the page as native views so swiping walks
+  // straight into the editor buttons.
   Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('VoiceCut Studio'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: 'Reload page',
+          onPressed: retry,
+        ),
+      ],
+    ),
     body: SafeArea(child: Stack(children: [
       InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(siteUrl)),
         initialSettings: InAppWebViewSettings(
           javaScriptEnabled: true,
+          // Hybrid composition keeps TalkBack focus inside the page.
+          useHybridComposition: true,
           mediaPlaybackRequiresUserGesture: true,
           useShouldOverrideUrlLoading: true,
           supportZoom: true,
@@ -211,9 +225,13 @@ class _EditorPageState extends State<EditorPage> {
           }
           return PermissionResponse(resources: request.resources, action: granted ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY);
         },
-        onLoadStop: (controller, url) { if (mounted) setState(() { loading = false; error = null; }); },
+        onLoadStop: (controller, url) {
+          if (mounted) setState(() { loading = false; error = null; });
+          SemanticsService.announce('VoiceCut editor loaded.', TextDirection.ltr);
+        },
         onReceivedError: (controller, request, details) {
           if (request.isForMainFrame == true && mounted) setState(() { loading = false; error = 'Could not load the editor. Check your internet connection, then retry.'; });
+          if (request.isForMainFrame == true) SemanticsService.announce('Could not load the editor. Check your internet connection, then tap Retry.', TextDirection.ltr);
         },
       ),
       if (loading) const Center(child: CircularProgressIndicator(semanticsLabel: 'Loading editor')),

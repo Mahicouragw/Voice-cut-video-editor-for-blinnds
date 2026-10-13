@@ -206,6 +206,8 @@
       $('#videoPlaceholder').classList.toggle('hidden', !!project.videoUrl);
       openEditor(); showEditorPanel('home',true);
       $('#section-video').scrollIntoView();
+      // Put the screen-reader cursor on Play so focus is never lost on open.
+      $('#btnPlay')?.focus({preventScroll:true});
       announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}.`);
     } catch(e) { announce('Cannot open project: ' + e.message, true); }
   }
