@@ -226,6 +226,7 @@
     <div id="audioSubTabs" class="flex gap-8 wrap hidden" role="group" aria-label="Audio choices" style="margin:8px 0;">
       <button id="subVoiceover" class="primary" aria-pressed="true">🎙 Voice-over</button>
       <button id="subMusic" aria-pressed="false">🎵 Music</button>
+      <button id="subSfx" aria-pressed="false">🔔 Sound effects</button>
     </div>
     <!-- PROJECT -->
     <div id="section-project" class="card" role="region" aria-labelledby="projectHeading">
@@ -478,6 +479,13 @@
       <p id="voiceFilterStatus" role="status" style="font-size:14px;"></p>
       <div id="recordingStatus" role="status" aria-live="assertive" class="mt-16 hidden"></div>
       <div id="voiceoverTracksList" class="timeline mt-16" role="list" aria-label="Voice-over tracks list"></div>
+    </div>
+
+    <div id="section-sfx" class="card hidden" role="region" aria-labelledby="sfxHeading">
+      <h2 id="sfxHeading">SOUND EFFECTS</h2>
+      <p id="sfxHelp" style="color:var(--text2)">Sound effects play over the music. They never stop it.</p>
+      <div id="sfxTracksList" class="timeline" role="list" aria-label="Sound effects list"></div>
+      <button id="btnAddSfx" class="mt-16" aria-label="Add sound effect, button. Opens your device audio files">+ Add Sound Effect</button>
     </div>
 
     <!-- EFFECTS -->

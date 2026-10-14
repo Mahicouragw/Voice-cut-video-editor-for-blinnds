@@ -91,13 +91,13 @@
   const EDITOR_PANELS = {
     home: ['section-video'],
     edit: ['section-video', 'section-edit'],
-    audio: ['section-video', 'section-audio', 'section-voiceover', 'section-effects'],
+    audio: ['section-video', 'section-audio', 'section-voiceover', 'section-sfx', 'section-effects'],
     captions: ['section-video', 'section-captions'],
     cleanup: ['section-video', 'section-aitools'],
     clips: ['section-video', 'section-project', 'section-timeline', 'section-originalaudio'],
     export: ['section-video', 'section-export'],
   };
-  const EDITOR_PANEL_IDS = ['section-project','section-edit','section-audio','section-voiceover','section-effects','section-captions','section-aitools','section-timeline','section-export','section-originalaudio'];
+  const EDITOR_PANEL_IDS = ['section-project','section-edit','section-audio','section-voiceover','section-sfx','section-effects','section-captions','section-aitools','section-timeline','section-export','section-originalaudio'];
   const EDITOR_PANEL_NAMES = {home:'Home', edit:'Edit', audio:'Audio', captions:'Captions', cleanup:'Cleanup', clips:'My files', export:'Export'};
   let editorPanel = 'home', audioSub = 'voiceover';
   function showEditorPanel(name, quiet=false) {
@@ -115,16 +115,19 @@
     }
   }
   function showAudioSub(which, quiet=false) {
-    audioSub = (which==='music') ? 'music' : 'voiceover';
-    const music = audioSub==='music';
-    document.getElementById('section-voiceover')?.classList.toggle('hidden', music);
+    audioSub = (which==='music') ? 'music' : (which==='sfx') ? 'sfx' : 'voiceover';
+    const music = audioSub==='music', sfx = audioSub==='sfx';
+    document.getElementById('section-voiceover')?.classList.toggle('hidden', music || sfx);
     document.getElementById('section-audio')?.classList.toggle('hidden', !music);
+    document.getElementById('section-sfx')?.classList.toggle('hidden', !sfx);
     document.getElementById('section-effects')?.classList.toggle('hidden', !music);
-    document.getElementById('subVoiceover')?.setAttribute('aria-pressed', music?'false':'true');
+    document.getElementById('subVoiceover')?.setAttribute('aria-pressed', (!music && !sfx)?'true':'false');
     document.getElementById('subMusic')?.setAttribute('aria-pressed', music?'true':'false');
-    document.getElementById('subVoiceover')?.classList.toggle('primary', !music);
+    document.getElementById('subSfx')?.setAttribute('aria-pressed', sfx?'true':'false');
+    document.getElementById('subVoiceover')?.classList.toggle('primary', !music && !sfx);
     document.getElementById('subMusic')?.classList.toggle('primary', music);
-    if (!quiet) announce(music?'Music tools opened.':'Voice-over tools opened.');
+    document.getElementById('subSfx')?.classList.toggle('primary', sfx);
+    if (!quiet) announce(music?'Music tools opened.':sfx?'Sound effects tools opened.':'Voice-over tools opened.');
   }
   function openEditor() { showView('editor'); const target='#/editor'+hashQuery(); if ((location.hash||'') !== target) history.pushState(null,'',target); }
   function retainedAndTotal(p) {
@@ -549,6 +552,7 @@
     renderTimeline();
     renderMusicTracks();
     renderVoiceoverTracks();
+    renderSfxTracks();
     renderNoiseReductionTracks();
     updateExportSummary();
     renderSelectedClip();
@@ -664,6 +668,38 @@
       container.appendChild(trackEl);
     });
 
+    const sfxClips = project.clips.filter(c=>c.type==='sfx');
+    const sfxByTrack = {};
+    sfxClips.forEach(c=>{
+      const key = c.trackIndex ?? 1;
+      if (!sfxByTrack[key]) sfxByTrack[key]=[];
+      sfxByTrack[key].push(c);
+    });
+    Object.keys(sfxByTrack).sort().forEach(trackNum=>{
+      const clips = sfxByTrack[trackNum];
+      const trackEl = document.createElement('div');
+      trackEl.className='track';
+      trackEl.setAttribute('role','listitem');
+      trackEl.setAttribute('aria-label', `Sound effect Track ${trackNum}. ${clips.length} clips`);
+      trackEl.innerHTML = `
+        <div class="track-header"><span class="track-title">Sound effect Track ${trackNum}</span><span class="badge">${clips.length} clips</span></div>
+        <div class="track-clips">
+          ${clips.map(c=>`
+            <div class="clip ${selectedClipId===c.id?'selected':''} ${c.muted?'muted':''}" tabindex="0" role="button" aria-label="Sound effect Track ${trackNum}. ${escapeHTML(c.name)}. Starts at ${formatTimeVerbose(c.startTime)}. Ends at ${formatTimeVerbose(c.startTime + (c.duration - c.trimStart - c.trimEnd))}. Duration ${formatTimeVerbose(c.duration - c.trimStart - c.trimEnd)}. Volume ${c.volume} percent. ${c.muted?'Muted':'Unmuted'}. Noise reduction ${c.noiseReduction}. Press Enter to select" data-clip-id="${c.id}">
+              <div class="clip-label">${escapeHTML(c.name)}</div>
+              <div class="clip-meta">Start ${formatTime(c.startTime)} End ${formatTime(c.startTime + (c.duration - c.trimStart - c.trimEnd))} Dur ${formatTime(c.duration - c.trimStart - c.trimEnd)} | Vol ${c.volume}% | NR ${c.noiseReduction}</div>
+              <div class="clip-controls">
+                <button aria-label="Play ${escapeHTML(c.name)}, button" data-action="play" data-id="${c.id}">Play</button>
+                <button aria-label="Mute ${escapeHTML(c.name)}, button" data-action="mute" data-id="${c.id}">${c.muted?'Unmute':'Mute'}</button>
+                <button aria-label="Delete ${escapeHTML(c.name)}, button" data-action="delete" data-id="${c.id}">Delete</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+      container.appendChild(trackEl);
+    });
+
     // Attach listeners
     container.querySelectorAll('[data-clip-id]').forEach(el=>{
       el.addEventListener('click', (e)=>{
@@ -720,6 +756,20 @@
       </div>
     `).join('');
   }
+  function renderSfxTracks() {
+    const container = $('#sfxTracksList');
+    const clips = project.clips.filter(c=>c.type==='sfx');
+    if (clips.length===0) {
+      container.innerHTML = '<p style="color:var(--text2)">No sound effects yet. Add one to play over the music.</p>';
+      return;
+    }
+    container.innerHTML = clips.map(c=>`
+      <div class="track" role="listitem" aria-label="Sound effect clip ${escapeHTML(c.name)}. Starts at ${formatTimeVerbose(c.startTime)}. Volume ${c.volume} percent.">
+        <div class="track-header"><span class="track-title">${escapeHTML(c.name)}</span><span class="badge">Vol ${c.volume}%</span></div>
+        <div>Start ${formatTime(c.startTime)} | Duration ${formatTime(c.duration - c.trimStart - c.trimEnd)} | Vol ${c.volume}% | ${c.muted?'Muted':'Unmuted'}</div>
+      </div>
+    `).join('');
+  }
   function renderNoiseReductionTracks() {
     const container = $('#noiseReductionTracks');
     container.innerHTML = '';
@@ -769,7 +819,7 @@
       return;
     }
     panel.classList.remove('hidden');
-    $('#selectedClipInfo').textContent = `${clip.type==='music'?'Music':'Voice-over'} Track. ${escapeHTML(clip.name)}. Starts at ${formatTimeVerbose(clip.startTime)}. Ends at ${formatTimeVerbose(clip.startTime + (clip.duration - clip.trimStart - clip.trimEnd))}. Duration ${formatTimeVerbose(clip.duration - clip.trimStart - clip.trimEnd)}. Volume ${clip.volume} percent. ${clip.muted?'Muted':'Unmuted'}. Noise reduction ${clip.noiseReduction}.`;
+    $('#selectedClipInfo').textContent = `${clipTypeLabel(clip.type)} Track. ${escapeHTML(clip.name)}. Starts at ${formatTimeVerbose(clip.startTime)}. Ends at ${formatTimeVerbose(clip.startTime + (clip.duration - clip.trimStart - clip.trimEnd))}. Duration ${formatTimeVerbose(clip.duration - clip.trimStart - clip.trimEnd)}. Volume ${clip.volume} percent. ${clip.muted?'Muted':'Unmuted'}. Noise reduction ${clip.noiseReduction}.`;
     $('#selStartTime').value = formatTime(clip.startTime);
     $('#selEndTime').value = formatTime(clip.startTime + (clip.duration - clip.trimStart - clip.trimEnd));
     $('#selDuration').value = formatTime(clip.duration - clip.trimStart - clip.trimEnd);
@@ -789,7 +839,7 @@
     renderAll();
     const clip = project.clips.find(c=>c.id===id);
     if (clip) {
-      announce(`${clip.type==='music'?'Music':'Voice-over'} Track ${clip.trackIndex||''}. ${escapeHTML(clip.name)}. Starts at ${formatTimeVerbose(clip.startTime)}. Ends at ${formatTimeVerbose(clip.startTime + clip.duration)}. Volume ${clip.volume} percent. ${clip.muted?'Muted':'Unmuted'}. Noise reduction ${clip.noiseReduction}.`);
+      announce(`${clipTypeLabel(clip.type)} Track ${clip.trackIndex||''}. ${escapeHTML(clip.name)}. Starts at ${formatTimeVerbose(clip.startTime)}. Ends at ${formatTimeVerbose(clip.startTime + clip.duration)}. Volume ${clip.volume} percent. ${clip.muted?'Muted':'Unmuted'}. Noise reduction ${clip.noiseReduction}.`);
       $('#selectedClipPanel').focus();
     } else {
       const seg = project.segments.find(s=>s.id===id);
@@ -801,6 +851,7 @@
     const summary = $('#exportSummary');
     const musicCount = project.clips.filter(c=>c.type==='music').length;
     const voiceCount = project.clips.filter(c=>c.type==='voiceover').length;
+    const sfxCount = project.clips.filter(c=>c.type==='sfx').length;
     const totalDuration = VoiceCutCore.retainedDuration(project);
     summary.innerHTML = `
       Video duration: ${formatTime(totalDuration)}<br>
@@ -808,7 +859,7 @@
       Frame rate: ${project.fps} fps<br>
       Format: ${project.format.toUpperCase()}<br>
       Crop: ${project.crop?.preset||'original'} • Rotation: ${project.rotation||0}° • Freeze frames: ${(project.freezes||[]).length}<br>
-      Audio tracks: Original Audio (${project.originalAudio.volume}%) + ${musicCount} music + ${voiceCount} voice-over<br>
+      Audio tracks: Original Audio (${project.originalAudio.volume}%) + ${musicCount} music + ${voiceCount} voice-over + ${sfxCount} sound effects<br>
       Ducking: ${project.ducking.enabled?'On at '+project.ducking.level+'%':'Off'}<br>
       Estimated file size: ${Math.round(totalDuration* (project.resolution==='1080'?2.5:1.5))} MB (approx)
     `;
@@ -850,6 +901,7 @@
     announce('Video load failed. Try MP4 at 1080p.', true);
   }
 
+  function clipTypeLabel(type) { return type==='music' ? 'Music' : type==='sfx' ? 'Sound effect' : 'Voice-over'; }
   function addAudioFile(file, type='music', position=video.currentTime || 0) {
     if (!file) return;
     ensureAudioContext();
@@ -872,8 +924,8 @@
         const musicTracks = new Set(project.clips.filter(c=>c.type==='music').map(c=>c.trackIndex));
         nextTrackIndex = musicTracks.size + 1;
       } else {
-        const voiceTracks = new Set(project.clips.filter(c=>c.type==='voiceover').map(c=>c.trackIndex));
-        nextTrackIndex = voiceTracks.size + 1;
+        const typeTracks = new Set(project.clips.filter(c=>c.type===type).map(c=>c.trackIndex));
+        nextTrackIndex = typeTracks.size + 1;
       }
       const clip = {
         id: uid(),
@@ -891,7 +943,7 @@
         muted: false,
         fadeIn: 0,
         fadeOut: 0,
-        noiseReduction: type==='music' ? 'off' : 'medium',
+        noiseReduction: (type==='music'||type==='sfx') ? 'off' : 'medium',
         trackIndex: nextTrackIndex
       };
       // A new song stops the previous one: earlier music ends where this starts.
@@ -906,7 +958,7 @@
       project.clips.push(clip);
       pushHistory();
       renderAll();
-      announce(`${type==='music'?'Music':'Voice-over'} Track ${nextTrackIndex} added at ${formatTimeVerbose(clip.startTime)}. ${escapeHTML(clip.name)}. Duration ${formatTimeVerbose(clip.duration)}. Volume ${clip.volume} percent.${stopped?` Previous song stopped here.`:''}`);
+      announce(`${clipTypeLabel(type)} Track ${nextTrackIndex} added at ${formatTimeVerbose(clip.startTime)}. ${escapeHTML(clip.name)}. Duration ${formatTimeVerbose(clip.duration)}. Volume ${clip.volume} percent.${stopped?` Previous song stopped here.`:''}`);
       // Auto play preview?
       createAudioNodeForClip(clip);
     });
@@ -2925,6 +2977,7 @@
     });
     $('#subVoiceover')?.addEventListener('click', ()=>showAudioSub('voiceover'));
     $('#subMusic')?.addEventListener('click', ()=>showAudioSub('music'));
+    $('#subSfx')?.addEventListener('click', ()=>showAudioSub('sfx'));
     window.addEventListener('hashchange', route);
 
     $('#btnCloseHelp').addEventListener('click', ()=>$('#helpDialog').close());
@@ -2959,13 +3012,15 @@
     });
     // File inputs
     $('#fileVideo').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) loadVideoFile(f); });
-    $('#fileAudio').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) addAudioFile(f,'music'); e.target.value=''; });
+    let pendingAudioType = 'music';
+    $('#fileAudio').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) addAudioFile(f,pendingAudioType); pendingAudioType='music'; e.target.value=''; });
     $('#fileVoiceover').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) addAudioFile(f,'voiceover'); e.target.value=''; });
 
     $('#btnUploadVideoEditor').addEventListener('click', ()=>$('#fileVideo').click());
     $('#btnAddMusic').addEventListener('click', ()=>$('#fileAudio').click());
     $('#btnAddMusic2').addEventListener('click', ()=>$('#fileAudio').click());
     $('#btnImportAudioEditor').addEventListener('click', ()=>$('#fileAudio').click());
+    $('#btnAddSfx').addEventListener('click', ()=>{ pendingAudioType='sfx'; $('#fileAudio').click(); });
     $('#btnAddVoiceover').addEventListener('click', openRecordDialog);
     $('#btnImportVoiceover').addEventListener('click', ()=>$('#fileVoiceover').click());
     $('#btnImportVO2').addEventListener('click', ()=>$('#fileVoiceover').click());

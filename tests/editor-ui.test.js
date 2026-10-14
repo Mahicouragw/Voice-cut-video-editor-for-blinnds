@@ -39,7 +39,7 @@ test('editor hides upload and processing mechanics from users', () => {
 test('uploaded music keeps its original sound (full volume, no effects)', () => {
   assert.doesNotMatch(page, /type==='music' \? 60/);
   assert.match(page, /volume: 100,/);
-  assert.match(page, /noiseReduction: type==='music' \? 'off'/);
+  assert.match(page, /noiseReduction: \(type==='music'\|\|type==='sfx'\) \? 'off'/);
 });
 
 test('simple editor has one home screen with panel tabs', () => {
@@ -83,6 +83,23 @@ test('smart ducking reads a voice map of the video', () => {
 test('server silence results cut the open project timeline', () => {
   assert.match(page, /X-Silence-Gaps/);
   assert.match(page, /The video is shorter by/);
+});
+
+test('sound effects tab adds clips that never stop the music', () => {
+  assert.match(html, /id="subSfx"/);
+  assert.match(html, /id="section-sfx"/);
+  assert.match(html, /id="btnAddSfx"/);
+  assert.match(html, /id="sfxTracksList"/);
+  assert.match(html, /They never stop it/);
+  assert.match(html, /Opens your device audio files/);
+  assert.match(page, /function renderSfxTracks/);
+  assert.match(page, /function clipTypeLabel/);
+  assert.match(page, /pendingAudioType='sfx'/);
+  assert.match(page, /showAudioSub\('sfx'\)/);
+  // Only a new song stops the old song; sound effects never truncate music.
+  assert.match(page, /if \(type==='music'\) for \(const c of project\.clips\.filter\(c=>c\.type==='music'\)\)/);
+  // Merge keeps sound effects out so spot effects survive.
+  assert.match(page, /c\.type === 'music' \|\| c\.type === 'voiceover'/);
 });
 
 test('ducking waits out short pauses and hears the enhanced track', () => {
