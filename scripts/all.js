@@ -88,12 +88,12 @@ async function publish(){
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
   const blockedStaged=names.filter(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)&&name!=='flutter_app/android/app/voicecut-debug.keystore');if(blockedStaged.length)throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.15: ducking level dips music and lifts silence']);
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.16: ducking silence wait, enhanced-audio ducking fix']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');
-  fs.writeFileSync(body,'User-authorized VoiceCut app 2.15 update. The ducking level now moves both sides of the music: under voice the music drops by the selected percent, in silence it rises by the same percent, so 20% music at 50% ducking plays 10% under speech and 30% in pauses. Big videos without a precomputed voice map get the same behavior through a live speech check on the video sound. New 60%, 70% and 80% levels added. No API keys are included. Merges only after the website and Android workflows succeed.');
-  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.15: ducking dips and lifts by the level','--body-file',body]);
+  fs.writeFileSync(body,'User-authorized VoiceCut app 2.16 update. Ducking gains a silence-wait box: the music rises only after quiet lasts the chosen time (at once, 1, 2, 3 or 5 seconds), so short pauses stay dipped. Fixed ducking after enhancing the original audio: the enhanced track used to count as always talking, pinning music down; ducking now listens to speech in the enhanced sound for small and big videos alike. No API keys are included. Merges only after the website and Android workflows succeed.');
+  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.16: ducking silence wait + enhanced fix','--body-file',body]);
   const pr=await api(['pr','view',branch,'--repo',REPO,'--json','number,url']);console.log('Pull request: '+pr.url);
   await waitForRuns(branch,'pull_request',sha,['Test and deploy website','Android test APK and optional signed AAB'],40);
 

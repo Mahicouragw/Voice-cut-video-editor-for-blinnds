@@ -25,7 +25,7 @@
     segments: [], // {id, start, end, label}
     originalAudio: { volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'medium' },
     clips: [], // {id, name, type: 'music'|'voiceover', file, url, startTime, trimStart, trimEnd, duration, volume, muted, fadeIn, fadeOut, noiseReduction, trackIndex}
-    ducking: { enabled: true, level: 30 },
+    ducking: { enabled: true, level: 30, silenceWait: 0 },
     playbackSpeed: 1,
     skipAmount: 5,
     resolution: '1080',
@@ -215,7 +215,7 @@
     pauseAllAudio();
     currentRequest?.abort(); mediaEpoch++;
     clearTimeout(autoSaveTimeout); dirty = false;
-    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
     applyPrefsToProject(true);
     selectedClipId = null;
     video.src = '';
@@ -523,6 +523,7 @@
     $('#exportFormat').value = project.format;
     $('#duckingToggle').checked = project.ducking.enabled;
     $('#duckingLevel').value = project.ducking.level;
+    $('#duckingSilenceWait').value = project.ducking.silenceWait || 0;
     applyVideoFilter();
     $('#origVolumeSlider').value = project.originalAudio.volume;
     $('#origVolumeNumber').value = project.originalAudio.volume;
@@ -1005,6 +1006,14 @@
         source.connect(gain);
       }
       gain.connect(audioContext.destination);
+      // Voice-over style gains (including the enhanced original track) feed
+      // one shared speech tap so ducking can hear them. Music stays out.
+      if (clip.type==='voiceover') {
+        try {
+          if (!voiceClipTap) voiceClipTap = makeTap(gain);
+          else gain.connect(voiceClipTap.analyser);
+        } catch(e) {}
+      }
 
       audioNodes.set(clip.id, {element:audioEl, source, gain});
     } catch(e) {
@@ -1029,27 +1038,41 @@
     } catch(e) { voiceCurve = null; }
   }
   let liveVoiceTap = null; // {analyser, data, floor, hang}
+  let voiceClipTap = null; // shared speech tap fed by voice-over clip gains
+  let duckSilenceStart = null; // video time when the current silence began
+  function makeTap(sourceNode) {
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.4;
+    sourceNode.connect(analyser);
+    return {analyser, data:new Float32Array(analyser.fftSize), floor:1e-4, hang:0};
+  }
+  // Speech reads well above the room floor; short pauses inside speech keep
+  // counting as voice. Music never feeds these taps, so ducking cannot echo.
+  function tapSpeaking(tap) {
+    tap.analyser.getFloatTimeDomainData(tap.data);
+    let e = 0;
+    for (let i = 0; i < tap.data.length; i += 2) e += tap.data[i] * tap.data[i];
+    e /= tap.data.length / 2;
+    if (e < tap.floor) tap.floor = e; else tap.floor += (e - tap.floor) * 0.01;
+    const speaking = e > Math.max(1e-5, tap.floor * 8);
+    tap.hang = speaking ? 6 : Math.max(0, tap.hang - 1);
+    return speaking || tap.hang > 0;
+  }
   // Live speech check for big videos that skip the precomputed voice map:
-  // watches the video's own sound as it plays. Speech reads well above the
-  // room floor; short pauses inside speech keep counting as voice.
+  // watches the video's own sound as it plays.
   function liveVoiceActive() {
     try {
       if (!originalGain || !video || video.paused || video.muted) return false;
-      if (!liveVoiceTap) {
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.4;
-        originalGain.connect(analyser);
-        liveVoiceTap = {analyser, data:new Float32Array(analyser.fftSize), floor:1e-4, hang:0};
-      }
-      const tap = liveVoiceTap;
-      tap.analyser.getFloatTimeDomainData(tap.data);
-      let e = 0;
-      for (let i = 0; i < tap.data.length; i += 2) e += tap.data[i] * tap.data[i];
-      e /= tap.data.length / 2;
-      if (e < tap.floor) tap.floor = e; else tap.floor += (e - tap.floor) * 0.01;
-      const speaking = e > Math.max(1e-5, tap.floor * 8);
-      tap.hang = speaking ? 6 : Math.max(0, tap.hang - 1);
-      return speaking || tap.hang > 0;
+      if (!liveVoiceTap) liveVoiceTap = makeTap(originalGain);
+      return tapSpeaking(liveVoiceTap);
+    } catch(e) { return false; }
+  }
+  // Speech check on voice-over style clips (the enhanced original track):
+  // watches their sound as it plays.
+  function liveVoiceClipActive() {
+    try {
+      if (!voiceClipTap || !video || video.paused) return false;
+      return tapSpeaking(voiceClipTap);
     } catch(e) { return false; }
   }
   function syncAudioPlayback(forExport = false) {
@@ -1071,9 +1094,23 @@
     video.volume = Math.max(0, Math.min(1, original.volume / 100 * fade));
     if (!project.clips.length) return;
     const currentTime = video.currentTime;
-    const voiceoverActive = project.clips.some(c=>c.type==='voiceover' && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
+    const voiceoverActive = project.clips.some(c=>c.type==='voiceover' && !c.isEnhancedOriginal && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
     const originalSpeaking = !project.originalAudio.muted && (project.originalAudio.volume > 0) && (voiceCurve ? VoiceCutCore.voiceActiveAt(voiceCurve, currentTime) : liveVoiceActive());
-    const voiceActive = voiceoverActive || originalSpeaking;
+    // The enhanced original replaces the video sound for the whole timeline,
+    // so ducking listens to its speech instead of treating it as always on.
+    const enhancedAudible = project.clips.some(c=>c.isEnhancedOriginal && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
+    const enhancedSpeaking = enhancedAudible && (voiceCurve ? VoiceCutCore.voiceActiveAt(voiceCurve, currentTime) : liveVoiceClipActive());
+    const voiceActive = voiceoverActive || originalSpeaking || enhancedSpeaking;
+    // Silence wait: the music stays dipped until quiet lasts the chosen time.
+    let duckVoice = voiceActive;
+    const silenceWait = Math.max(0, Number(project.ducking.silenceWait) || 0);
+    if (silenceWait > 0) {
+      if (voiceActive) duckSilenceStart = null;
+      else {
+        if (duckSilenceStart === null || currentTime < duckSilenceStart - 0.5) duckSilenceStart = currentTime;
+        if (currentTime - duckSilenceStart < silenceWait) duckVoice = true;
+      }
+    }
 
     project.clips.forEach(clip=>{
       const node = audioNodes.get(clip.id);
@@ -1086,7 +1123,7 @@
       // Big videos without a precomputed voice map use the live speech check.
       let effectiveVolume = clip.volume/100;
       if (clip.type==='music' && project.ducking.enabled) {
-        effectiveVolume = VoiceCutCore.duckedGain(clip.volume, project.ducking.level, voiceActive, true);
+        effectiveVolume = VoiceCutCore.duckedGain(clip.volume, project.ducking.level, duckVoice, true);
       }
 
       // Fade
@@ -3140,6 +3177,7 @@
     $('#fadeOutCustom').addEventListener('input', (e)=>{ $('#fadeOutCustomVal').textContent=e.target.value+'s'; if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip) clip.fadeOut=parseFloat(e.target.value); } });
     $('#duckingToggle').addEventListener('change', (e)=>{ project.ducking.enabled=e.target.checked; pushHistory(); announce(`Voice ducking ${e.target.checked?'enabled':'disabled'}.`); });
     $('#duckingLevel').addEventListener('change', (e)=>{ project.ducking.level=parseInt(e.target.value); pushHistory(); announce(`Ducking level set to ${e.target.value} percent.`); });
+    $('#duckingSilenceWait').addEventListener('change', (e)=>{ project.ducking.silenceWait=parseInt(e.target.value); pushHistory(); announce(project.ducking.silenceWait>0?`Music rises after ${e.target.value} second${e.target.value==='1'?'':'s'} of silence.`:'Music rises as soon as there is silence.'); });
     $('#videoFilter').addEventListener('change', (e)=>{ project.videoFilter=e.target.value; pushHistory(); applyVideoFilter(); announce(`Video look: ${e.target.selectedOptions[0].textContent}.`); });
     $('#btnPreviewVoiceFilter').addEventListener('click', previewVoiceFilter);
 
@@ -3239,7 +3277,7 @@
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
         await VoiceCutStorage.remove(project.id);
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.removeEventListener('error', videoLoadError);
         video.src='';
