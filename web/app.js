@@ -1028,6 +1028,30 @@
       voiceCurve = VoiceCutCore.computeVoiceCurve(decoded.getChannelData(0), decoded.sampleRate);
     } catch(e) { voiceCurve = null; }
   }
+  let liveVoiceTap = null; // {analyser, data, floor, hang}
+  // Live speech check for big videos that skip the precomputed voice map:
+  // watches the video's own sound as it plays. Speech reads well above the
+  // room floor; short pauses inside speech keep counting as voice.
+  function liveVoiceActive() {
+    try {
+      if (!originalGain || !video || video.paused || video.muted) return false;
+      if (!liveVoiceTap) {
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.4;
+        originalGain.connect(analyser);
+        liveVoiceTap = {analyser, data:new Float32Array(analyser.fftSize), floor:1e-4, hang:0};
+      }
+      const tap = liveVoiceTap;
+      tap.analyser.getFloatTimeDomainData(tap.data);
+      let e = 0;
+      for (let i = 0; i < tap.data.length; i += 2) e += tap.data[i] * tap.data[i];
+      e /= tap.data.length / 2;
+      if (e < tap.floor) tap.floor = e; else tap.floor += (e - tap.floor) * 0.01;
+      const speaking = e > Math.max(1e-5, tap.floor * 8);
+      tap.hang = speaking ? 6 : Math.max(0, tap.hang - 1);
+      return speaking || tap.hang > 0;
+    } catch(e) { return false; }
+  }
   function syncAudioPlayback(forExport = false) {
     if (isExporting && !forExport) return;
     // FIX: Ensure video element muted state matches project setting to prevent double audio
@@ -1048,7 +1072,7 @@
     if (!project.clips.length) return;
     const currentTime = video.currentTime;
     const voiceoverActive = project.clips.some(c=>c.type==='voiceover' && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
-    const originalSpeaking = !project.originalAudio.muted && (project.originalAudio.volume > 0) && VoiceCutCore.voiceActiveAt(voiceCurve, currentTime);
+    const originalSpeaking = !project.originalAudio.muted && (project.originalAudio.volume > 0) && (voiceCurve ? VoiceCutCore.voiceActiveAt(voiceCurve, currentTime) : liveVoiceActive());
     const voiceActive = voiceoverActive || originalSpeaking;
 
     project.clips.forEach(clip=>{
@@ -1059,10 +1083,10 @@
       const audioEl = node.element;
 
       // Smart ducking: music dips under any voice and lifts where nobody speaks.
+      // Big videos without a precomputed voice map use the live speech check.
       let effectiveVolume = clip.volume/100;
       if (clip.type==='music' && project.ducking.enabled) {
-        if (voiceCurve) effectiveVolume = VoiceCutCore.duckedGain(clip.volume, project.ducking.level, voiceActive, true);
-        else if (voiceoverActive) effectiveVolume = effectiveVolume * (1 - project.ducking.level/100);
+        effectiveVolume = VoiceCutCore.duckedGain(clip.volume, project.ducking.level, voiceActive, true);
       }
 
       // Fade

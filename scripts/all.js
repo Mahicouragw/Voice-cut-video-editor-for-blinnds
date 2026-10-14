@@ -88,12 +88,12 @@ async function publish(){
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
   const blockedStaged=names.filter(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)&&name!=='flutter_app/android/app/voicecut-debug.keystore');if(blockedStaged.length)throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.14: TalkBack reaches the editor, app reload button']);
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.15: ducking level dips music and lifts silence']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');
-  fs.writeFileSync(body,'User-authorized VoiceCut app 2.14 update. TalkBack focus now reaches the editor inside the Android app: the page renders as native views, the app announces when the editor loads, and opening a project puts the cursor on the Play button. The app bar adds a Reload page button that reloads the live site when the internet drops, alongside the existing Retry on the error screen. No API keys are included. Merges only after the website and Android workflows succeed.');
-  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.14: TalkBack focus + app reload button','--body-file',body]);
+  fs.writeFileSync(body,'User-authorized VoiceCut app 2.15 update. The ducking level now moves both sides of the music: under voice the music drops by the selected percent, in silence it rises by the same percent, so 20% music at 50% ducking plays 10% under speech and 30% in pauses. Big videos without a precomputed voice map get the same behavior through a live speech check on the video sound. New 60%, 70% and 80% levels added. No API keys are included. Merges only after the website and Android workflows succeed.');
+  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.15: ducking dips and lifts by the level','--body-file',body]);
   const pr=await api(['pr','view',branch,'--repo',REPO,'--json','number,url']);console.log('Pull request: '+pr.url);
   await waitForRuns(branch,'pull_request',sha,['Test and deploy website','Android test APK and optional signed AAB'],40);
 
