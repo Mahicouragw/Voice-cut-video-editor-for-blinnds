@@ -15,11 +15,13 @@ test('voice curve marks speech active and silence quiet', () => {
   assert.equal(voiceActiveAt(null, 1), false);
 });
 
-test('smart music gain lifts silence by half and dips under voice', () => {
+test('music gain dips under voice and rises in silence by the ducking level', () => {
   assert.equal(duckedGain(100, 30, true, true), 0.7);
-  assert.equal(duckedGain(100, 30, false, true), 1.5);
-  assert.ok(Math.abs(duckedGain(60, 30, false, true) - 0.9) < 1e-9);
+  assert.ok(Math.abs(duckedGain(100, 30, false, true) - 1.3) < 1e-9);
+  assert.equal(duckedGain(20, 50, true, true), 0.1);
+  assert.ok(Math.abs(duckedGain(20, 50, false, true) - 0.3) < 1e-9);
   assert.equal(duckedGain(100, 50, true, true), 0.5);
+  assert.ok(Math.abs(duckedGain(60, 80, false, true) - 1.08) < 1e-9);
   assert.equal(duckedGain(100, 30, true, false), 1);
   assert.equal(duckedGain(100, 30, false, false), 1);
 });

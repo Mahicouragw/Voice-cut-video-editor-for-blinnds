@@ -582,6 +582,13 @@ const path = require('node:path');
   assert.equal(await page.locator('#btnVideoSilence:not(.hidden)').count(),1);
   await page.locator('#timelineContainer .clip[aria-label*="songtwo"]').click();
   await page.locator('#btnSelSilence:not(.hidden)').waitFor();
+  // Ducking: 20% music at 50% ducking dips to 10% under voice, rises to 30% in silence.
+  await showPanel('audio');await showSub('music');
+  for (const v of ['60','70','80']) assert.ok(await page.locator('#duckingLevel option[value="'+v+'"]').count(),v);
+  assert.equal(await page.evaluate(()=>window.VoiceCutCore.duckedGain(20,50,true,true)),0.1);
+  assert.ok(Math.abs(await page.evaluate(()=>window.VoiceCutCore.duckedGain(20,50,false,true))-0.3)<1e-9);
+  await page.locator('#duckingLevel').selectOption('50');
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Ducking level set to 50 percent'));
   // Filename is rendered as text, never HTML.
   await page.setInputFiles('#fileAudio',{name:'<img src=x onerror=window.INJECTED=1>.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('<img'));
@@ -617,6 +624,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

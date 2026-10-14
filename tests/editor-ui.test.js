@@ -84,3 +84,13 @@ test('server silence results cut the open project timeline', () => {
   assert.match(page, /X-Silence-Gaps/);
   assert.match(page, /The video is shorter by/);
 });
+
+test('ducking offers strong levels, plain dip-and-rise words, live speech check', () => {
+  for (const v of ['60', '70', '80']) {
+    assert.match(html, new RegExp(`<option value="${v}">${v}%<\\/option>`));
+  }
+  assert.match(html, /music goes down/);
+  assert.match(html, /comes back up/);
+  assert.match(page, /function liveVoiceActive/);
+  assert.match(page, /liveVoiceActive\(\)/);
+});
