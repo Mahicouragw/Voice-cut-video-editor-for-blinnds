@@ -18,7 +18,7 @@ const path = require('node:path');
  try {
   const text = sel => page.locator(sel).textContent();
   const showPanel = (name) => page.locator('#tab-'+name).click();
-  const showSub = (which) => page.locator(which==='music'?'#subMusic':'#subVoiceover').click();
+  const showSub = (which) => page.locator(which==='music'?'#subMusic':which==='sfx'?'#subSfx':'#subVoiceover').click();
   // HOME shell: nav only, editor hidden, no server/credential fields anywhere.
   await page.goto('http://127.0.0.1:3099');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Welcome to VoiceCut'));
@@ -593,6 +593,19 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Music rises after 2 seconds of silence.'));
   await page.locator('#duckingSilenceWait').selectOption('0');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Music rises as soon as there is silence.'));
+  // Sound effects: own tab, device picker, music keeps playing untouched.
+  await showPanel('audio');await showSub('sfx');
+  assert.equal(await page.locator('#section-sfx:not(.hidden)').count(),1);
+  assert.match(await page.locator('#sfxHelp').textContent(),/never stop it/);
+  const musicBefore = await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].map(el=>el.getAttribute('aria-label')).filter(a=>a&&a.startsWith('Music Track')));
+  assert.ok(musicBefore.length>0);
+  const [sfxChooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('#btnAddSfx').click()]);
+  await sfxChooser.setFiles(audioPath);
+  await page.waitForFunction(()=>document.querySelector('#sfxTracksList').textContent.includes('sample'));
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Sound effect Track'));
+  const musicAfter = await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].map(el=>el.getAttribute('aria-label')).filter(a=>a&&a.startsWith('Music Track')));
+  assert.deepEqual(musicAfter, musicBefore);
+  assert.ok(await page.locator('#timelineContainer .clip[aria-label^="Sound effect Track"]').count()>=1);
   // Filename is rendered as text, never HTML.
   await page.setInputFiles('#fileAudio',{name:'<img src=x onerror=window.INJECTED=1>.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('<img'));
@@ -628,6 +641,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
