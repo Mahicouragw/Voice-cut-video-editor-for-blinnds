@@ -85,6 +85,19 @@ test('server silence results cut the open project timeline', () => {
   assert.match(page, /The video is shorter by/);
 });
 
+test('ducking waits out short pauses and hears the enhanced track', () => {
+  assert.match(html, /id="duckingSilenceWait"/);
+  assert.match(html, /Music rises after silence of/);
+  for (const v of ['0', '1', '2', '3', '5']) {
+    assert.match(html, new RegExp(`<option value="${v}">[^<]+<\\/option>`));
+  }
+  assert.match(page, /ducking\.silenceWait/);
+  assert.match(page, /duckSilenceStart/);
+  assert.match(page, /!c\.isEnhancedOriginal/);
+  assert.match(page, /function liveVoiceClipActive/);
+  assert.match(page, /function tapSpeaking/);
+});
+
 test('ducking offers strong levels, plain dip-and-rise words, live speech check', () => {
   for (const v of ['60', '70', '80']) {
     assert.match(html, new RegExp(`<option value="${v}">${v}%<\\/option>`));
