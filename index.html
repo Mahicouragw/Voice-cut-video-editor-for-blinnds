@@ -262,6 +262,11 @@
         </div>
       </div>
 
+      <div id="reconnectVideoBox" class="hidden mt-16">
+        <p id="reconnectVideoText" role="status">The video file is no longer attached. Your edits are safe. Reconnect the same video file to play and export.</p>
+        <button id="btnReconnectVideo" class="primary" aria-label="Reconnect video file, button. Opens your device video files">Reconnect Video File</button>
+      </div>
+
       <div class="playback-bar" role="toolbar" aria-label="Video playback controls">
         <button id="btnPlay" aria-label="Play video, button" class="primary">▶ Play</button>
         <button id="btnSkipBack" aria-label="Skip backward 5 seconds, button">⏪ Back</button>
@@ -969,6 +974,7 @@
   </dialog>
 
   <input type="file" id="fileVideo" accept="video/*,.mp4,.mov,.webm,.mkv" class="sr-only" tabindex="-1" aria-hidden="true">
+  <input type="file" id="fileVideoReconnect" accept="video/*,.mp4,.mov,.webm,.mkv" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileAudio" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileVoiceover" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" class="sr-only" tabindex="-1" aria-hidden="true">
 

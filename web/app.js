@@ -527,6 +527,7 @@
     $('#duckingToggle').checked = project.ducking.enabled;
     $('#duckingLevel').value = project.ducking.level;
     $('#duckingSilenceWait').value = project.ducking.silenceWait || 0;
+    $('#reconnectVideoBox').classList.toggle('hidden', !(project.duration > 0 && !project.videoFile));
     applyVideoFilter();
     $('#origVolumeSlider').value = project.originalAudio.volume;
     $('#origVolumeNumber').value = project.originalAudio.volume;
@@ -866,6 +867,26 @@
   }
 
   // Video handling
+  // Re-attach the video file without losing edits: segments, clips, captions
+  // and settings all stay; only the missing picture comes back.
+  function reconnectVideoFile(file) {
+    if (!file) return;
+    project.videoFile = file;
+    project.videoUrl = URL.createObjectURL(file);
+    video.src = project.videoUrl;
+    video.load();
+    $('#videoPlaceholder').classList.add('hidden');
+    video.addEventListener('loadedmetadata', () => {
+      const stored = Number(project.duration) || 0;
+      if (stored > 0 && Math.abs(video.duration - stored) > 2) {
+        announce(`Video reconnected, but its length ${formatTimeVerbose(video.duration)} does not match this project ${formatTimeVerbose(stored)}. Pick the original file for correct timing.`, true);
+      } else {
+        announce('Video reconnected. All your edits are intact. You can play and export now.');
+      }
+      pushHistory(); renderAll(); ensureVoiceCurve();
+    }, {once:true});
+    video.addEventListener('error', videoLoadError, {once:true});
+  }
   function loadVideoFile(file) {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024 * 1024) { announce('Use a video under 2 GB. Larger files can exhaust device memory.',true); return; }
@@ -1712,6 +1733,12 @@
   async function doExport() {
     if (captionRequestBusy || cleanupBusy) { announce('Wait for audio or caption processing to finish.',true); return; }
     if (!project.videoUrl || isExporting) { announce('Load a video first, or wait for the current export.'); return; }
+    if (!project.videoFile) {
+      renderAll();
+      $('#btnReconnectVideo')?.focus();
+      announce('The video file is no longer attached to this project. Your edits are safe. Reconnect the same video file, then export again.', true);
+      return;
+    }
     let recorder;
     try {
       if (!window.MediaRecorder || !exportCanvas.captureStream) throw new Error('This browser cannot record video. Try current Chrome.');
@@ -1722,6 +1749,22 @@
       const exportDuration = duration + freezes.reduce((sum,f)=>sum+f.hold,0);
       const rotation = ((Number(project.rotation)%360)+360)%360;
       const portrait = rotation===90||rotation===270;
+      // Phone decoders can report no picture until the video is really ready:
+      // wait for it here instead of failing the whole export.
+      if (!(video.videoWidth > 0 && video.videoHeight > 0) || video.readyState < 2) {
+        try {
+          video.load();
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => { cleanup(); reject(new Error('LOAD_TIMEOUT')); }, 15000);
+            const cleanup = () => { clearTimeout(timer); video.removeEventListener('canplay', onReady); video.removeEventListener('error', onErr); };
+            const onReady = () => { cleanup(); resolve(); };
+            const onErr = () => { cleanup(); reject(new Error('LOAD_ERROR')); };
+            video.addEventListener('canplay', onReady, {once:true});
+            video.addEventListener('error', onErr, {once:true});
+          });
+        } catch(e) { /* the check below reports it in plain words */ }
+      }
+      if (!(video.videoWidth > 0 && video.videoHeight > 0)) throw new Error('The video picture is not loaded. Play the video once, then export again.');
       video.pause();
       for (const node of audioNodes.values()) node.element.pause();
       isExporting = true; exportCancelled = false; lockExportControls(true);
@@ -1742,10 +1785,21 @@
       exportCanvas.height = height;
       exportCanvas.width = portrait?Math.round(height*9/16/2)*2:Math.round(height*16/9/2)*2;
       const ctx = exportCanvas.getContext('2d');
+      let badFrames = 0;
       const drawFrame = () => {
         ctx.fillStyle = '#000'; ctx.fillRect(0,0,exportCanvas.width,exportCanvas.height);
         ctx.filter = VoiceCutCore.VIDEO_FILTERS[project.videoFilter] || 'none';
-        const rect = VoiceCutCore.cropRect(project.crop?.preset||'original',video.videoWidth,video.videoHeight,project.crop);
+        let rect;
+        try {
+          rect = VoiceCutCore.cropRect(project.crop?.preset||'original',video.videoWidth,video.videoHeight,project.crop);
+        } catch(e) {
+          // Phone decoders can blink during long exports: skip the odd frame,
+          // fail only if the picture stays gone.
+          if (++badFrames > 120) throw new Error('The video picture dropped out during export. Play the video once, then try again.');
+          ctx.filter = 'none';
+          return;
+        }
+        badFrames = 0;
         const cw = exportCanvas.width, ch = exportCanvas.height;
         const fitW = portrait?ch:cw, fitH = portrait?cw:ch;
         const scale = Math.min(fitW/rect.w,fitH/rect.h), w = rect.w*scale, h = rect.h*scale;
@@ -1890,6 +1944,22 @@
   function getNoiseLeft() { const v = Number($('#noiseLeftSlider')?.value); return Number.isFinite(v)?Math.max(0,Math.min(100,v)):31; }
   function getSpeechBoost() { const v = Number($('#speechBoostSlider')?.value); return Number.isFinite(v)?Math.max(0,Math.min(100,v)):70; }
   // Convert AudioBuffer to WAV Blob (real audio processing)
+  // Retained-range buffer helpers: noise reduction on the original video
+  // processes and previews only the kept timeline, never deleted parts.
+  function bufferToChannels(buf) { const out = []; for (let c = 0; c < buf.numberOfChannels; c++) out.push(buf.getChannelData(c)); return out; }
+  function channelsToBuffer(channels, sampleRate) {
+    const buf = new AudioBuffer({numberOfChannels: channels.length, length: channels[0].length, sampleRate});
+    for (let c = 0; c < channels.length; c++) buf.getChannelData(c).set(channels[c]);
+    return buf;
+  }
+  function sliceBufferRetained(buf, ranges) {
+    const sel = VoiceCutCore.selectRanges(bufferToChannels(buf), buf.sampleRate, ranges);
+    return channelsToBuffer(sel.channels, sel.sampleRate);
+  }
+  function expandBufferRetained(buf, fullLength, ranges) {
+    const exp = VoiceCutCore.expandRanges(bufferToChannels(buf), buf.sampleRate, fullLength, ranges);
+    return channelsToBuffer(exp.channels, exp.sampleRate);
+  }
   function audioBufferToWavBlob(buffer) {
     const numChannels = buffer.numberOfChannels;
     const sampleRate = buffer.sampleRate;
@@ -2582,19 +2652,42 @@
     try {
       progress(0,'Preparing audio');
       const file = input instanceof Blob ? input : await (await fetch(input)).blob();
+      // Deleted parts must not come back in noise reduction: when the
+      // original video has deletes or trims, process and preview only the
+      // kept ranges, then re-expand so the applied track stays aligned.
+      let keptRanges = null;
+      if (!clipId) {
+        try {
+          const kept = VoiceCutCore.ranges(project);
+          const fullDur = Number(project.duration) || 0;
+          if (kept.length > 1 || kept[0].start > 0.01 || kept[0].end < fullDur - 0.01) keptRanges = kept;
+        } catch(e) { keptRanges = null; }
+      }
       const metaDur = audibleDurationOf(clipId);
       if (metaDur > 1800) throw new Error('Cleanup supports up to 30 minutes. Trim a shorter section first.');
       if (file.size > 100 * 1024 * 1024) progress(8,'Large file: skipping server upload. Using strong on-device cleanup.');
-      let enhancedBlob, enhancedBuffer, originalBuffer = null;
+      let enhancedBlob, enhancedBuffer, originalBuffer = null, retainedPreview = null;
       const serverResult = await enhanceWithRealAI(file,level,progress,metaDur);
       if (aiProcessingCancelled) throw new Error('Cancelled');
       if (serverResult) {
         enhancedBlob = serverResult.blob; enhancedBuffer = await decodeAudioFile(enhancedBlob);
+        if (keptRanges) {
+          const cleanRetained = sliceBufferRetained(enhancedBuffer, keptRanges);
+          if (!originalBuffer) originalBuffer = await decodeAudioFile(file);
+          retainedPreview = {before: audioBufferToWavBlob(sliceBufferRetained(originalBuffer, keptRanges)), after: audioBufferToWavBlob(cleanRetained)};
+        }
       } else {
         progress(5,'Decoding audio. Some video codecs cannot be decoded by Web Audio.');
         originalBuffer = await decodeAudioFile(file);
         if (aiProcessingCancelled) throw new Error('Cancelled');
-        enhancedBuffer = await processLongAudioWithAI(originalBuffer,level,progress);
+        if (keptRanges) {
+          const retainedIn = sliceBufferRetained(originalBuffer, keptRanges);
+          const cleanRetained = await processLongAudioWithAI(retainedIn,level,progress);
+          enhancedBuffer = expandBufferRetained(cleanRetained, originalBuffer.length, keptRanges);
+          retainedPreview = {before: audioBufferToWavBlob(retainedIn), after: audioBufferToWavBlob(cleanRetained)};
+        } else {
+          enhancedBuffer = await processLongAudioWithAI(originalBuffer,level,progress);
+        }
         enhancedBlob = audioBufferToWavBlob(enhancedBuffer);
       }
       if (aiProcessingCancelled) throw new Error('Cancelled');
@@ -2614,12 +2707,16 @@
       if (aiProcessingCancelled) throw new Error('Cancelled');
       const enhancedUrl = URL.createObjectURL(enhancedBlob);
       const originalUrl = URL.createObjectURL(file);
+      // The applied track stays full-timeline aligned, but the players only
+      // ever play the kept timeline when parts were deleted or trimmed.
+      const previewOriginalUrl = retainedPreview ? URL.createObjectURL(retainedPreview.before) : originalUrl;
+      const previewEnhancedUrl = retainedPreview ? URL.createObjectURL(retainedPreview.after) : enhancedUrl;
       if (epoch !== mediaEpoch) throw new Error('Project changed during processing. Result not applied.');
       const engineName = 'Noise reduction';
       const rescueText = (!serverResult && lastBuriedRescue) ? 'Buried voice rescue kept your voice audible. ' : '';
       const reportText = (!serverResult && lastScanReport) ? lastScanReport+' '+rescueText : rescueText;
       currentAIJob = {type:clipId ? 'clip' : 'original',clipId,enhancedBlob,enhancedBuffer,enhancedUrl,originalUrl,level,provider:engineName,epoch};
-      $('#aiOriginalAudio').src = originalUrl; $('#aiEnhancedAudio').src = enhancedUrl;
+      $('#aiOriginalAudio').src = previewOriginalUrl; $('#aiEnhancedAudio').src = previewEnhancedUrl;
       $('#aiBeforeAfter').classList.remove('hidden'); $('#btnApplyEnhanced').classList.remove('hidden');
       $('#aiResultText').textContent = engineName+': complete. '+reportText+'Listen before applying.';
       progress(100,'Complete'); announce('Audio processing complete. '+reportText+'Preview before applying.');
@@ -3012,6 +3109,8 @@
     });
     // File inputs
     $('#fileVideo').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) loadVideoFile(f); });
+    $('#btnReconnectVideo').addEventListener('click', ()=>$('#fileVideoReconnect').click());
+    $('#fileVideoReconnect').addEventListener('change', (e)=>{ const f=e.target.files[0]; e.target.value=''; if(f) reconnectVideoFile(f); });
     let pendingAudioType = 'music';
     $('#fileAudio').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) addAudioFile(f,pendingAudioType); pendingAudioType='music'; e.target.value=''; });
     $('#fileVoiceover').addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) addAudioFile(f,'voiceover'); e.target.value=''; });
