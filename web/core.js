@@ -223,7 +223,7 @@
   function recordErrorHint(name) {
     if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone permission was denied. Allow the microphone for VoiceCut in the app settings, then try again.';
     if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No microphone was found. Recording needs a working mic.';
-    if (name === 'NotReadableError') return 'The microphone is busy. Close other apps using the mic such as calls, voice recorder or assistant, wait a moment, then try again.';
+    if (name === 'NotReadableError') return 'The microphone would not start. If another app is using the mic (calls, recorder, assistant), close it, wait a moment, then try again. If nothing uses the mic, update VoiceCut Studio to the latest version.';
     if (name === 'OverconstrainedError' || name === 'AbortError') return 'Recording was interrupted. Try again.';
     return '';
   }

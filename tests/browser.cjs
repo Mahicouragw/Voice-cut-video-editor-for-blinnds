@@ -5,11 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 (async()=>{
  const dir = path.resolve('artifacts');fs.mkdirSync(dir,{recursive:true});
- const videoPath=path.join(dir,'sample.mp4'), audioPath=path.join(dir,'sample.wav'), bigPath=path.join(dir,'bigcaption.wav'), gappyPath=path.join(dir,'gappy.wav');
+ const videoPath=path.join(dir,'sample.mp4'), audioPath=path.join(dir,'sample.wav'), bigPath=path.join(dir,'bigcaption.wav'), gappyPath=path.join(dir,'gappy.wav'), audioOnlyPath=path.join(dir,'audioonly.mp4');
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=320x180:r=24:d=3','-f','lavfi','-i','sine=frequency=440:duration=3','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest','-y',videoPath]);
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=660:duration=3','-y',audioPath]);
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=560','-ac','2','-ar','48000','-y',bigPath]);
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=3','-f','lavfi','-i','anullsrc=r=44100:cl=stereo:d=5','-f','lavfi','-i','sine=frequency=880:duration=4','-filter_complex','[0:a][1:a][2:a]concat=n=3:v=0:a=1','-y',gappyPath]);
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=3','-ac','2','-ar','44100','-c:a','aac','-y',audioOnlyPath]);
  const server=spawn(process.execPath,['scripts/serve.js'],{env:{...process.env,PORT:'3099'},stdio:['ignore','pipe','inherit']});
  await new Promise((resolve,reject)=>{server.stdout.on('data',data=>{if(data.toString().includes('preview on port'))resolve();});server.on('error',reject);server.on('exit',code=>{if(code)reject(new Error('Server failed'));});});
  const browser=await chromium.launch({args:['--autoplay-policy=no-user-gesture-required','--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream']}).catch(error=>{server.kill();throw error;});
@@ -120,9 +121,20 @@ const path = require('node:path');
   await page.evaluate(()=>{ window.__origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); navigator.mediaDevices.getUserMedia = ()=>Promise.reject(new DOMException('Could not start audio source','NotReadableError')); });
   await page.locator('#btnRecordVO').click();
   await page.locator('#btnStartRecording').click();
-  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('microphone is busy'),{},{timeout:30000});
-  assert.match(await page.locator('#recordCountdown').textContent(),/Close other apps/);
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('microphone would not start'),{},{timeout:30000});
+  assert.match(await page.locator('#recordCountdown').textContent(),/update VoiceCut Studio/);
   await page.locator('#btnCloseRecord').click();
+  await page.evaluate(()=>{ navigator.mediaDevices.getUserMedia = window.__origGUM; });
+  // An enhanced-mode mic failure falls back to the basic mic and still records.
+  await page.evaluate(()=>{ navigator.mediaDevices.getUserMedia = (c)=> (c && c.audio === true) ? Promise.reject(new DOMException('Could not start audio source','NotReadableError')) : window.__origGUM(c); });
+  await page.locator('#btnRecordVO').click();
+  await page.locator('#btnStartRecording').click();
+  await page.waitForFunction(()=>!document.querySelector('#btnStopRecordingDialog').disabled,{},{timeout:30000});
+  assert.match(await page.locator('#statusText').textContent(),/basic microphone mode/);
+  await page.waitForTimeout(1200);
+  await page.locator('#btnStopRecordingDialog').click();
+  await page.locator('#recordReview:not(.hidden)').waitFor();
+  await page.locator('#btnDiscardRecord').click();
   await page.evaluate(()=>{ navigator.mediaDevices.getUserMedia = window.__origGUM; });
   // Voice Focus noise-reduction level applies live without errors.
   await showPanel('cleanup');
@@ -659,7 +671,26 @@ const path = require('node:path');
   await page.goto('http://127.0.0.1:3099/#/editor');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
+  // An audio-only MP4 (a voice recording saved as video) exports with a still background.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',audioOnlyPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await page.waitForFunction(()=>document.querySelector('#videoPlaceholder p').textContent.includes('Audio file loaded'),{},{timeout:30000});
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('webm');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('still background'),{},{timeout:30000});
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-audioonly.webm');await download.saveAs(output);
+    const info=JSON.parse(execFileSync('ffprobe',['-v','error','-show_streams','-of','json',output],{encoding:'utf8'}));
+    assert.ok(info.streams.some(s=>s.codec_type==='audio'));assert.ok(info.streams.some(s=>s.codec_type==='video'));
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

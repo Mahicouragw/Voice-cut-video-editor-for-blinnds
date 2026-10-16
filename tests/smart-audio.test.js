@@ -47,8 +47,8 @@ test('retained slicing drops deleted parts and expands back aligned', () => {
 });
 
 test('recording failures speak plain words', () => {
-  assert.match(recordErrorHint('NotReadableError'), /microphone is busy/);
-  assert.match(recordErrorHint('NotReadableError'), /Close other apps/);
+  assert.match(recordErrorHint('NotReadableError'), /microphone would not start/);
+  assert.match(recordErrorHint('NotReadableError'), /update VoiceCut Studio/);
   assert.match(recordErrorHint('NotAllowedError'), /permission was denied/);
   assert.match(recordErrorHint('SecurityError'), /permission was denied/);
   assert.match(recordErrorHint('NotFoundError'), /No microphone was found/);
