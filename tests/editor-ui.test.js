@@ -168,3 +168,16 @@ test('audio-only uploads export with a still background', () => {
   assert.match(page, /Audio file loaded\. No video picture/);
   assert.match(page, /still background is used/);
 });
+
+test('export verifies length, retries short phone recordings, clears stale files', () => {
+  assert.match(page, /mimeCandidates/);
+  assert.match(page, /measureBlobDuration/);
+  assert.match(page, /exportLooksShort/);
+  assert.match(page, /That recording came out short/);
+  assert.match(page, /Saved as WebM because/);
+  assert.match(page, /exportedBlob = null;/);
+  assert.match(page, /lastChunkAt/);
+  assert.match(page, /formatExportLength/);
+  assert.match(page, /btnDoExport'\)\.addEventListener\('click', \(\)=>doExport\(0\)\)/);
+  assert.doesNotMatch(page, /addEventListener\('click', doExport\)/);
+});

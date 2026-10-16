@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {ranges,mimeFor,extension,expired,TTL_MS,deleteRange} = require('../web/core');
+const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange} = require('../web/core');
 test('15-minute boundary',()=>{assert.equal(expired(0,TTL_MS-1),false);assert.equal(expired(0,TTL_MS),true);});
 test('deleted segments omitted and trim intersects retained segments',()=>assert.deepEqual(ranges({trimStart:2,trimEnd:9,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),[{start:2,end:4},{start:6,end:9}]));
 test('invalid trim rejected',()=>assert.throws(()=>ranges({trimStart:5,trimEnd:2,duration:10,segments:[]})));
@@ -107,4 +107,15 @@ test('chooseCutPoint stays at nominal when nothing is quieter',()=>{
  const sr=8000,loud=new Float32Array(sr*10).fill(0.5);
  assert.equal(chooseCutPoint(loud,sr,6,2),6);
  assert.equal(chooseCutPoint(new Float32Array(0),sr,6,2),6);
+});
+test('export prefers plain containers and detects cut-short phone recordings',()=>{
+  assert.deepEqual(mimeOptions('mp4'),['video/mp4','video/mp4;codecs=avc1,opus','video/mp4;codecs=avc1.42E01E,mp4a.40.2']);
+  assert.equal(mimeOptions('webm')[0],'video/webm');
+  assert.equal(mimeFor('mp4',()=>true),'video/mp4');
+  assert.equal(exportLooksShort(3,420),true);
+  assert.equal(exportLooksShort(419,420),false);
+  assert.equal(exportLooksShort(NaN,420),false);
+  assert.equal(exportLooksShort(Infinity,420),false);
+  assert.equal(exportLooksShort(2.5,3),false);
+  assert.equal(exportLooksShort(0.5,3),true);
 });
