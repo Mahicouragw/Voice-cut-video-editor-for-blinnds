@@ -15,6 +15,7 @@ test('Android source declares only the app permissions it uses and keeps camera 
   assert.deepEqual(declared, [
     'android.permission.CAMERA',
     'android.permission.INTERNET',
+    'android.permission.MODIFY_AUDIO_SETTINGS',
     'android.permission.POST_NOTIFICATIONS',
     'android.permission.RECORD_AUDIO',
   ]);
@@ -29,7 +30,8 @@ test('WebView camera and microphone grants remain restricted to the VoiceCut ori
   assert.match(wrapper, /request\.resources\.every\(captureResources\.contains\)/);
   assert.match(wrapper, /Permission\.camera\.request\(\)/);
   assert.match(wrapper, /Permission\.microphone\.request\(\)/);
-  assert.match(page, /navigator\.mediaDevices\.getUserMedia\(\{video:\{facingMode:'environment'\},audio:true\}\)/);
+  assert.match(page, /\{video:\{facingMode:'environment'\},audio:true\}/);
+  assert.match(page, /navigator\.mediaDevices\.getUserMedia\(constraints\)/);
   assert.match(page, /blob\.size > 500 \* 1024 \* 1024/);
   assert.match(page, /requestNotificationPermission/);
 });

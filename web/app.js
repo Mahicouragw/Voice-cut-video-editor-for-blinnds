@@ -901,8 +901,15 @@
     project.videoUrl = URL.createObjectURL(file);
     video.src = project.videoUrl;
     video.load();
-    $('#videoPlaceholder').classList.add('hidden');
     video.addEventListener('loadedmetadata', () => {
+      // Audio-only uploads (voice recordings saved as MP4) have no picture:
+      // say so for sighted helpers instead of showing a wrong empty player.
+      if (!(video.videoWidth > 0) && Number.isFinite(video.duration) && video.duration > 0) {
+        $('#videoPlaceholder').querySelector('p').textContent = 'Audio file loaded. No video picture.';
+        $('#videoPlaceholder').classList.remove('hidden');
+      } else {
+        $('#videoPlaceholder').classList.add('hidden');
+      }
       project.duration = video.duration;
       project.trimEnd = video.duration;
       project.segments = [{id:uid(), start:0, end:video.duration, label:'Full Video'}];
@@ -1469,15 +1476,26 @@
         const devices = await navigator.mediaDevices.enumerateDevices();
         if (devices && !devices.some(d=>d.kind==='audioinput')) throw Object.assign(new Error('No microphone was found. Recording needs a working mic.'), {name:'NotFoundError'});
       } catch(e) { if (e?.name === 'NotFoundError') throw e; }
-      let stream = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      } catch(e) {
-        // A busy mic often clears within a moment: one automatic retry.
-        if (e?.name === 'NotReadableError' || e?.name === 'AbortError') {
-          await new Promise(r=>setTimeout(r, 900));
-          stream = await navigator.mediaDevices.getUserMedia({audio:true});
-        } else throw e;
+      // Some phones refuse the enhanced mic mode (the app wrapper enables it
+      // fully only from the latest version): fall back to the basic mic,
+      // which records the same voice without the failing enhancement.
+      const micAttempts = [
+        {audio:true},
+        {audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}},
+      ];
+      let stream = null, basicMic = false;
+      for (const constraints of micAttempts) {
+        try { stream = await navigator.mediaDevices.getUserMedia(constraints); break; }
+        catch(e) {
+          if (e?.name !== 'NotReadableError' && e?.name !== 'OverconstrainedError') throw e;
+          basicMic = true;
+        }
+      }
+      if (!stream) {
+        // A truly busy mic often clears within a moment: one waited retry.
+        await new Promise(r=>setTimeout(r, 900));
+        stream = await navigator.mediaDevices.getUserMedia(micAttempts[1]);
+        basicMic = true;
       }
       if (requestId !== recordingRequest || !$('#recordDialog').open) { stream.getTracks().forEach(t=>t.stop()); return; }
       recordingStream = stream;
@@ -1522,7 +1540,7 @@
       $('#recordCountdown').textContent='Recording your voice\u2026'; $('#recordCountdown').classList.remove('hidden');
       // No video sound through speakers during voice-over recording.
       video.pause(); for (const node of audioNodes.values()) node.element.pause();
-      announce('Recording started. Speak now.');
+      announce(basicMic ? 'Recording started in basic microphone mode. Speak now.' : 'Recording started. Speak now.');
       recordTimerInterval=setInterval(()=>{ $('#recordTimer').textContent=formatTime((Date.now()-recordStartTime)/1000); },1000);
     } catch(e) {
       recordingStream?.getTracks().forEach(t=>t.stop()); recordingStream=null;
@@ -1588,9 +1606,22 @@
     try {
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Video recording needs HTTPS and a browser with camera support.');
       pauseAllAudio(); video.pause();
-      let stream = null;
-      try { stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:true}); }
-      catch(e) { stream = await navigator.mediaDevices.getUserMedia({video:true,audio:true}); }
+      const avAttempts = [
+        {video:{facingMode:'environment'},audio:true},
+        {video:true,audio:true},
+        {video:{facingMode:'environment'},audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}},
+        {video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}},
+      ];
+      let stream = null, lastAvError = null;
+      for (const constraints of avAttempts) {
+        try { stream = await navigator.mediaDevices.getUserMedia(constraints); break; }
+        catch(e) {
+          lastAvError = e;
+          if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') throw e;
+          stream = null;
+        }
+      }
+      if (!stream) throw lastAvError || new Error('Cannot start camera.');
       if (requestId !== videoRecordRequest || !$('#videoRecordDialog').open) { stream.getTracks().forEach(t=>t.stop()); return; }
       videoRecordStream = stream;
       const pv = $('#cameraPreview');
@@ -1786,7 +1817,10 @@
           });
         } catch(e) { /* the check below reports it in plain words */ }
       }
-      if (!(video.videoWidth > 0 && video.videoHeight > 0)) throw new Error('The video picture is not loaded. Play the video once, then export again.');
+      // Audio-only files (voice recordings converted to MP4) never have a
+      // picture: export them with a still background instead of failing.
+      const audioOnly = !(video.videoWidth > 0 && video.videoHeight > 0) && Number.isFinite(video.duration) && video.duration > 0 && video.readyState >= 1;
+      if (!audioOnly && !(video.videoWidth > 0 && video.videoHeight > 0)) throw new Error('The video picture is not loaded. Play the video once, then export again.');
       video.pause();
       for (const node of audioNodes.values()) node.element.pause();
       isExporting = true; exportCancelled = false; lockExportControls(true);
@@ -1795,7 +1829,7 @@
       $('#exportProgressContainer').classList.remove('hidden');
       $('#exportProgressContainer').removeAttribute('aria-hidden');
       $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-      announce('Export started. Keep this tab visible. Export runs in real time.');
+      announce(audioOnly ? 'Export started. This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. Keep this tab visible. Export runs in real time.');
       await ensureAudioContext().resume();
       const gain = ensureOriginalGraph();
       const dest = audioContext.createMediaStreamDestination();
@@ -1808,7 +1842,18 @@
       exportCanvas.width = portrait?Math.round(height*9/16/2)*2:Math.round(height*16/9/2)*2;
       const ctx = exportCanvas.getContext('2d');
       let badFrames = 0;
+      const drawAudioOnlyFrame = () => {
+        const grad = ctx.createLinearGradient(0, 0, 0, exportCanvas.height);
+        grad.addColorStop(0, '#1a1a2e'); grad.addColorStop(1, '#0f0f1a');
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+        ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.font = `${Math.round(exportCanvas.height / 10)}px sans-serif`;
+        ctx.fillText('\u{1F399}', exportCanvas.width / 2, exportCanvas.height / 2 - exportCanvas.height / 12);
+        ctx.font = `${Math.round(exportCanvas.height / 20)}px sans-serif`;
+        ctx.fillText((project.name || 'VoiceCut audio').slice(0, 60), exportCanvas.width / 2, exportCanvas.height / 2 + exportCanvas.height / 8);
+      };
       const drawFrame = () => {
+        if (audioOnly) { ctx.filter = 'none'; drawAudioOnlyFrame(); return; }
         ctx.fillStyle = '#000'; ctx.fillRect(0,0,exportCanvas.width,exportCanvas.height);
         ctx.filter = VoiceCutCore.VIDEO_FILTERS[project.videoFilter] || 'none';
         let rect;

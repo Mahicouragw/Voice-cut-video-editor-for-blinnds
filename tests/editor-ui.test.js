@@ -139,7 +139,7 @@ test('noise reduction previews only the kept timeline after deletes', () => {
 test('voice recording rescues a busy mic with retry and plain words', () => {
   assert.match(page, /recordErrorHint\(e\?\.name\)/);
   assert.match(page, /enumerateDevices/);
-  assert.match(page, /one automatic retry/);
+  assert.match(page, /one waited retry/);
   assert.match(page, /microphone is muted\. Unmute it/);
 });
 
@@ -151,4 +151,20 @@ test('ducking offers strong levels, plain dip-and-rise words, live speech check'
   assert.match(html, /comes back up/);
   assert.match(page, /function liveVoiceActive/);
   assert.match(page, /liveVoiceActive\(\)/);
+});
+
+test('mic recording falls back to the basic mic and wrapper declares audio settings', () => {
+  assert.match(page, /echoCancellation:false/);
+  assert.match(page, /basic microphone mode/);
+  assert.match(page, /micAttempts/);
+  assert.match(page, /avAttempts/);
+  const manifest = fs.readFileSync(path.join(root, 'flutter_app/android/app/src/main/AndroidManifest.xml'), 'utf8');
+  assert.match(manifest, /MODIFY_AUDIO_SETTINGS/);
+});
+
+test('audio-only uploads export with a still background', () => {
+  assert.match(page, /audioOnly/);
+  assert.match(page, /drawAudioOnlyFrame/);
+  assert.match(page, /Audio file loaded\. No video picture/);
+  assert.match(page, /still background is used/);
 });
