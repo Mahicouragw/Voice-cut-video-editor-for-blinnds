@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, duckedGain, VIDEO_FILTERS, VOICE_FILTERS} = require('../web/core');
+const {computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS} = require('../web/core');
 
 test('voice curve marks speech active and silence quiet', () => {
   const sr = 8000, len = sr * 4, samples = new Float32Array(len);
@@ -44,4 +44,15 @@ test('retained slicing drops deleted parts and expands back aligned', () => {
   assert.deepEqual([...exp.channels[0]], [0, 0, 2, 3, 4, 0, 0, 7, 8, 0]);
   assert.throws(() => selectRanges([ch0], 10, []), /No video segments remain/);
   assert.throws(() => selectRanges([], 10, [{start: 0, end: 1}]), /Audio is unavailable/);
+});
+
+test('recording failures speak plain words', () => {
+  assert.match(recordErrorHint('NotReadableError'), /microphone is busy/);
+  assert.match(recordErrorHint('NotReadableError'), /Close other apps/);
+  assert.match(recordErrorHint('NotAllowedError'), /permission was denied/);
+  assert.match(recordErrorHint('SecurityError'), /permission was denied/);
+  assert.match(recordErrorHint('NotFoundError'), /No microphone was found/);
+  assert.match(recordErrorHint('AbortError'), /interrupted/);
+  assert.equal(recordErrorHint('TypeError'), '');
+  assert.equal(recordErrorHint(''), '');
 });

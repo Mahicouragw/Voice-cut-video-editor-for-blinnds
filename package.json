@@ -1,6 +1,6 @@
 {
   "name": "voicecut-video-editor",
-  "version": "2.18.0",
+  "version": "2.19.0",
   "private": true,
   "description": "Accessible browser video editor with optional FFmpeg server",
   "scripts": {

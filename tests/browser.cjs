@@ -116,6 +116,14 @@ const path = require('node:path');
   assert.match(await page.locator('#recordPreview').getAttribute('src'),/^blob:/);
   await page.locator('#btnApplyRecord').click();
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('Voiceover_'));
+  // A busy mic gets one automatic retry, then plain guidance.
+  await page.evaluate(()=>{ window.__origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); navigator.mediaDevices.getUserMedia = ()=>Promise.reject(new DOMException('Could not start audio source','NotReadableError')); });
+  await page.locator('#btnRecordVO').click();
+  await page.locator('#btnStartRecording').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('microphone is busy'),{},{timeout:30000});
+  assert.match(await page.locator('#recordCountdown').textContent(),/Close other apps/);
+  await page.locator('#btnCloseRecord').click();
+  await page.evaluate(()=>{ navigator.mediaDevices.getUserMedia = window.__origGUM; });
   // Voice Focus noise-reduction level applies live without errors.
   await showPanel('cleanup');
   await page.locator('#globalNoiseReduction').selectOption('voicefocus');
@@ -652,6 +660,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
