@@ -136,6 +136,13 @@ test('noise reduction previews only the kept timeline after deletes', () => {
   assert.match(page, /previewEnhancedUrl/);
 });
 
+test('voice recording rescues a busy mic with retry and plain words', () => {
+  assert.match(page, /recordErrorHint\(e\?\.name\)/);
+  assert.match(page, /enumerateDevices/);
+  assert.match(page, /one automatic retry/);
+  assert.match(page, /microphone is muted\. Unmute it/);
+});
+
 test('ducking offers strong levels, plain dip-and-rise words, live speech check', () => {
   for (const v of ['60', '70', '80']) {
     assert.match(html, new RegExp(`<option value="${v}">${v}%<\\/option>`));

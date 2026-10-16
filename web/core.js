@@ -219,6 +219,14 @@
     }
     return {channels: out, sampleRate: sr};
   }
+  // Plain-words recording failures: raw browser errors confuse, these guide.
+  function recordErrorHint(name) {
+    if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone permission was denied. Allow the microphone for VoiceCut in the app settings, then try again.';
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No microphone was found. Recording needs a working mic.';
+    if (name === 'NotReadableError') return 'The microphone is busy. Close other apps using the mic such as calls, voice recorder or assistant, wait a moment, then try again.';
+    if (name === 'OverconstrainedError' || name === 'AbortError') return 'Recording was interrupted. Try again.';
+    return '';
+  }
   // Smart music gain: the ducking level moves both sides. Under voice the
   // music drops by the level; in silence it rises by the level.
   function duckedGain(volumePercent, duckLevel, voiceActive, duckingEnabled) {
@@ -230,7 +238,7 @@
   }
   const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
   const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

@@ -1463,9 +1463,26 @@
     pendingRecording=null; $('#recordReview').classList.add('hidden'); $('#recordPreview').removeAttribute('src');
     try {
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Recording needs HTTPS and a browser with microphone support.');
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      // Silence playback first so nothing fights the microphone for audio focus.
+      video.pause(); for (const node of audioNodes.values()) node.element.pause();
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (devices && !devices.some(d=>d.kind==='audioinput')) throw Object.assign(new Error('No microphone was found. Recording needs a working mic.'), {name:'NotFoundError'});
+      } catch(e) { if (e?.name === 'NotFoundError') throw e; }
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      } catch(e) {
+        // A busy mic often clears within a moment: one automatic retry.
+        if (e?.name === 'NotReadableError' || e?.name === 'AbortError') {
+          await new Promise(r=>setTimeout(r, 900));
+          stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        } else throw e;
+      }
       if (requestId !== recordingRequest || !$('#recordDialog').open) { stream.getTracks().forEach(t=>t.stop()); return; }
       recordingStream = stream;
+      const micTrack = stream.getAudioTracks()[0];
+      if (micTrack && micTrack.muted) announce('The microphone is muted. Unmute it to record your voice.', true);
       const mime = ['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));
       if (!mime) throw new Error('No supported audio recorder format.');
       for (const n of [3,2,1]) {
@@ -1509,7 +1526,11 @@
       recordTimerInterval=setInterval(()=>{ $('#recordTimer').textContent=formatTime((Date.now()-recordStartTime)/1000); },1000);
     } catch(e) {
       recordingStream?.getTracks().forEach(t=>t.stop()); recordingStream=null;
-      $('#btnStartRecording').disabled=false; announce('Cannot record: '+e.message,true);
+      $('#btnStartRecording').disabled=false;
+      const hint = VoiceCutCore.recordErrorHint(e?.name) || e.message;
+      $('#recordCountdown').textContent = 'Cannot record: ' + hint;
+      $('#recordCountdown').classList.remove('hidden');
+      announce('Cannot record: ' + hint, true);
     }
   }
   function closeRecordDialog() { if ($('#recordDialog').open) $('#recordDialog').close(); }
@@ -1579,9 +1600,10 @@
       announce('Camera ready. Point the camera, then Start Recording.');
     } catch(e) {
       if (requestId !== videoRecordRequest) return;
-      $('#videoRecordCountdown').textContent = 'Cannot use camera: ' + e.message;
+      const hint = VoiceCutCore.recordErrorHint(e?.name) || e.message;
+      $('#videoRecordCountdown').textContent = 'Cannot use camera: ' + hint;
       $('#btnStartVideoRecording').disabled = true;
-      announce('Cannot use camera: ' + e.message, true);
+      announce('Cannot use camera: ' + hint, true);
     }
   }
   async function startVideoRecording() {
@@ -1613,7 +1635,7 @@
       videoRecordTimerInt = setInterval(()=>{ $('#videoRecordTimer').textContent = formatTime((Date.now()-videoRecordStart)/1000); }, 500);
     } catch(e) {
       $('#btnStartVideoRecording').disabled = false;
-      announce('Cannot record: ' + e.message, true);
+      announce('Cannot record: ' + (VoiceCutCore.recordErrorHint(e?.name) || e.message), true);
     }
   }
   function stopVideoRecording() {
