@@ -88,12 +88,12 @@ async function publish(){
   await git(['add','.github','.gitignore','.dockerignore','Dockerfile','render.yaml','README.md','START_HERE.md','AI_UPDATE_START_HERE.md','PUSH_TO_GITHUB.md','REAL_AI_SETUP_CLICKABLE.md','docs','index.html','package.json','package-lock.json','web','server','scripts','tests','flutter_app']);
   const names=(await git(['diff','--cached','--name-only'],{capture:true})).stdout.split('\n');
   const blockedStaged=names.filter(name=>/(^|\/)\.env$|\.(jks|keystore|pem|base64)$|(^|\/)key\.properties$/.test(name)&&name!=='flutter_app/android/app/voicecut-debug.keystore');if(blockedStaged.length)throw new Error('A credential-related file was staged. Refusing to commit.');
-  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.17: sound effects tab over music']);
+  await git(['-c','user.name=VoiceCut deployment automation','-c','user.email=voicecut-deployment@users.noreply.github.com','commit','-m','VoiceCut app 2.18: export survives deletes, kept-only noise reduction']);
   const sha=(await git(['rev-parse','HEAD'],{capture:true})).stdout;
   await git(['-c','credential.helper=','-c','credential.helper=!'+gh+' auth git-credential','push','-u','origin',branch]);
   const body=path.join(authDir,'pull-request.md');
-  fs.writeFileSync(body,'User-authorized VoiceCut app 2.17 update. The Audio panel gains a Sound effects tab next to Music and Voice-over: Add Sound Effect opens the device audio files, and effects play over the music without stopping it, with their own timeline group, per-clip volume, trim, mute and delete. Merge keeps sound effects out so spot effects survive. No API keys are included. Merges only after the website and Android workflows succeed.');
-  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.17: sound effects over music','--body-file',body]);
+  fs.writeFileSync(body,'User-authorized VoiceCut app 2.18 update. Export after deletes is hardened: it waits for the video picture before recording, skips rare bad frames instead of cancelling, and if the video file is ever detached it says so plainly with a Reconnect Video File button that keeps every edit. Noise reduction on the original video now processes and previews only the kept timeline, so deleted parts never come back in the before/after players. No API keys are included. Merges only after the website and Android workflows succeed.');
+  await run(gh,['pr','create','--repo',REPO,'--base','main','--head',branch,'--title','VoiceCut app 2.18: export fix + kept-only cleanup','--body-file',body]);
   const pr=await api(['pr','view',branch,'--repo',REPO,'--json','number,url']);console.log('Pull request: '+pr.url);
   await waitForRuns(branch,'pull_request',sha,['Test and deploy website','Android test APK and optional signed AAB'],40);
 

@@ -115,6 +115,27 @@ test('ducking waits out short pauses and hears the enhanced track', () => {
   assert.match(page, /function tapSpeaking/);
 });
 
+test('export survives deletes: readiness wait, frame tolerance, reconnect', () => {
+  assert.match(html, /id="reconnectVideoBox"/);
+  assert.match(html, /id="btnReconnectVideo"/);
+  assert.match(html, /id="fileVideoReconnect"/);
+  assert.match(html, /Your edits are safe/);
+  assert.match(page, /function reconnectVideoFile/);
+  assert.match(page, /The video picture is not loaded\. Play the video once, then export again\./);
+  assert.match(page, /The video picture dropped out during export/);
+  assert.match(page, /badFrames/);
+  assert.match(page, /The video file is no longer attached to this project/);
+});
+
+test('noise reduction previews only the kept timeline after deletes', () => {
+  assert.match(page, /function sliceBufferRetained/);
+  assert.match(page, /function expandBufferRetained/);
+  assert.match(page, /keptRanges/);
+  assert.match(page, /retainedPreview/);
+  assert.match(page, /previewOriginalUrl/);
+  assert.match(page, /previewEnhancedUrl/);
+});
+
 test('ducking offers strong levels, plain dip-and-rise words, live speech check', () => {
   for (const v of ['60', '70', '80']) {
     assert.match(html, new RegExp(`<option value="${v}">${v}%<\\/option>`));

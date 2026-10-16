@@ -606,6 +606,17 @@ const path = require('node:path');
   const musicAfter = await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].map(el=>el.getAttribute('aria-label')).filter(a=>a&&a.startsWith('Music Track')));
   assert.deepEqual(musicAfter, musicBefore);
   assert.ok(await page.locator('#timelineContainer .clip[aria-label^="Sound effect Track"]').count()>=1);
+  // Retained slicing in the shipped core: deleted parts drop out and expand back aligned.
+  assert.equal(await page.locator('#reconnectVideoBox.hidden').count(),1);
+  const sliceRoundTrip = await page.evaluate(()=>{
+    const ch = [new Float32Array([0,1,2,3,4,5,6,7,8,9])];
+    const ranges = [{start:0.2,end:0.5},{start:0.7,end:0.9}];
+    const sel = window.VoiceCutCore.selectRanges(ch, 10, ranges);
+    const exp = window.VoiceCutCore.expandRanges(sel.channels, 10, 10, ranges);
+    return {kept:[...sel.channels[0]], full:[...exp.channels[0]]};
+  });
+  assert.deepEqual(sliceRoundTrip.kept,[2,3,4,7,8]);
+  assert.deepEqual(sliceRoundTrip.full,[0,0,2,3,4,0,0,7,8,0]);
   // Filename is rendered as text, never HTML.
   await page.setInputFiles('#fileAudio',{name:'<img src=x onerror=window.INJECTED=1>.wav',mimeType:'audio/wav',buffer:fs.readFileSync(audioPath)});
   await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('<img'));
@@ -641,6 +652,6 @@ const path = require('node:path');
   await page.locator('#noProjectScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>VoiceCutStorage.load()),null);
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

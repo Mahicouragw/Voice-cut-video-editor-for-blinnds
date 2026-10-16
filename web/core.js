@@ -181,6 +181,44 @@
     if (!Number.isFinite(i) || i < 0) return false;
     return !!curve.frames[Math.min(i, curve.frames.length - 1)];
   }
+  // Keep only the retained ranges of decoded channel data, concatenated.
+  // channels: array of Float32Arrays, all the same length. ranges: [{start,
+  // end}] in seconds. Deleted parts never reach the result.
+  function selectRanges(channels, sampleRate, ranges) {
+    const sr = Number(sampleRate);
+    if (!Array.isArray(channels) || !channels.length || !Number.isFinite(sr) || sr <= 0) throw new Error('Audio is unavailable.');
+    const cuts = (ranges || []).map(r => ({start: Math.max(0, Number(r.start)), end: Math.max(0, Number(r.end))})).filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start);
+    if (!cuts.length) throw new Error('No video segments remain. Undo deletion or upload a video.');
+    const len = channels[0].length;
+    const pieces = cuts.map(r => [Math.min(len, Math.floor(r.start * sr)), Math.min(len, Math.floor(r.end * sr))]).filter(([a, b]) => b > a);
+    const total = pieces.reduce((s, [a, b]) => s + (b - a), 0);
+    if (!total) throw new Error('No video segments remain. Undo deletion or upload a video.');
+    const out = [];
+    for (let c = 0; c < channels.length; c++) {
+      const dst = new Float32Array(total);
+      let o = 0;
+      for (const [a, b] of pieces) { dst.set(channels[c].subarray(a, b), o); o += b - a; }
+      out.push(dst);
+    }
+    return {channels: out, sampleRate: sr};
+  }
+  // Spread retained-only channels back onto the full timeline so enhanced
+  // audio stays aligned with the video. Deleted parts become silence.
+  function expandRanges(channels, sampleRate, fullLength, ranges) {
+    const sr = Number(sampleRate), full = Math.floor(Number(fullLength));
+    if (!Array.isArray(channels) || !channels.length || !Number.isFinite(sr) || sr <= 0 || !Number.isFinite(full) || full <= 0) throw new Error('Audio is unavailable.');
+    const cuts = (ranges || []).map(r => ({start: Math.max(0, Number(r.start)), end: Math.max(0, Number(r.end))})).filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start);
+    const out = channels.map(() => new Float32Array(full));
+    let o = 0;
+    for (const r of cuts) {
+      const a = Math.min(full, Math.floor(r.start * sr)), b = Math.min(full, Math.floor(r.end * sr));
+      const n = Math.min(b - a, channels[0].length - o);
+      if (n <= 0) break;
+      for (let c = 0; c < channels.length; c++) out[c].set(channels[c].subarray(o, o + n), a);
+      o += n;
+    }
+    return {channels: out, sampleRate: sr};
+  }
   // Smart music gain: the ducking level moves both sides. Under voice the
   // music drops by the level; in silence it rises by the level.
   function duckedGain(volumePercent, duckLevel, voiceActive, duckingEnabled) {
@@ -192,7 +230,7 @@
   }
   const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
   const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
+  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);
