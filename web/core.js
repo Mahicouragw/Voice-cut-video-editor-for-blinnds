@@ -9,11 +9,25 @@
     if (!kept.length) throw new Error('No video segments remain. Undo deletion or upload a video.');
     return kept;
   }
+  // Plain containers first: explicit avc1 codec strings make Chrome (phone
+  // Chrome especially) write cut-short MP4 files, while the default
+  // container choice records reliably.
+  function mimeOptions(format) {
+    if (format === 'mp4') return ['video/mp4', 'video/mp4;codecs=avc1,opus', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2'];
+    return ['video/webm', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'];
+  }
   function mimeFor(format, supports) {
-    const options = format === 'mp4' ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4'] : ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
-    const mime = options.find(supports);
+    const mime = mimeOptions(format).find(supports);
     if (!mime) throw new Error(format.toUpperCase() + ' recording is unavailable in this browser. Choose another format.');
     return mime;
+  }
+  // A phone recorder can silently write only the first seconds: anything
+  // finite under half the expected length counts as cut short. Unmeasurable
+  // files (WebM reports no length) pass so they are never wrongly rejected.
+  function exportLooksShort(measured, expected) {
+    if (!Number.isFinite(measured) || !Number.isFinite(expected) || expected <= 0) return false;
+    if (expected <= 5) return measured < expected - 2;
+    return measured < expected * 0.5;
   }
   function extension(mime) { return mime.startsWith('video/mp4') ? 'mp4' : 'webm'; }
   function expired(createdAt, now = Date.now()) { return now - createdAt >= TTL_MS; }
@@ -238,7 +252,7 @@
   }
   const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
   const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
-  const api = { TTL_MS, ranges, mimeFor, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

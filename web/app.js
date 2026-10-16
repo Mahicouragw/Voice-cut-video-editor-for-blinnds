@@ -1783,7 +1783,30 @@
       video.currentTime = time;
     });
   }
-  async function doExport() {
+  function measureBlobDuration(blob) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const url = URL.createObjectURL(blob);
+      const done = (value) => { if (settled) return; settled = true; clearTimeout(timer); URL.revokeObjectURL(url); resolve(value); };
+      const timer = setTimeout(() => done(NaN), 15000);
+      const probe = document.createElement('video');
+      probe.preload = 'metadata'; probe.muted = true;
+      probe.onloadedmetadata = () => done(probe.duration);
+      probe.onerror = () => done(NaN);
+      probe.src = url;
+    });
+  }
+  function formatExportLength(seconds) {
+    const total = Math.max(0, Math.round(seconds));
+    const h = Math.floor(total/3600), m = Math.floor((total%3600)/60), s = total%60;
+    const parts = [];
+    if (h) parts.push(h + (h===1?' hour':' hours'));
+    if (m) parts.push(m + (m===1?' minute':' minutes'));
+    if (s || !parts.length) parts.push(s + (s===1?' second':' seconds'));
+    return parts.join(' ');
+  }
+  async function doExport(exportAttempt = 0) {
+    exportAttempt = Number.isInteger(exportAttempt) && exportAttempt >= 0 ? exportAttempt : 0;
     if (captionRequestBusy || cleanupBusy) { announce('Wait for audio or caption processing to finish.',true); return; }
     if (!project.videoUrl || isExporting) { announce('Load a video first, or wait for the current export.'); return; }
     if (!project.videoFile) {
@@ -1795,8 +1818,18 @@
     let recorder;
     try {
       if (!window.MediaRecorder || !exportCanvas.captureStream) throw new Error('This browser cannot record video. Try current Chrome.');
+      // A failed export must never leave an older file behind the Save
+      // button: clear it before every attempt.
+      exportedBlob = null;
+      exportedVideoEl.removeAttribute('src');
+      for (const id of ['exportedVideo','btnPlayExported','btnDownloadExported','btnShareExported']) $('#'+id).classList.add('hidden');
       const ranges = VoiceCutCore.ranges(project);
-      const mime = VoiceCutCore.mimeFor(project.format, value => MediaRecorder.isTypeSupported(value));
+      // Phone recorders can silently cut MP4 files short: try every working
+      // method in order, falling back to WebM when MP4 keeps failing.
+      const wanted = VoiceCutCore.mimeOptions(project.format).concat(project.format === 'mp4' ? VoiceCutCore.mimeOptions('webm') : []);
+      const mimeCandidates = wanted.filter(value => { try { return MediaRecorder.isTypeSupported(value); } catch(e) { return false; } });
+      if (!mimeCandidates.length) throw new Error(project.format.toUpperCase() + ' recording is unavailable in this browser. Choose another format.');
+      const mime = mimeCandidates[Math.min(exportAttempt, mimeCandidates.length - 1)];
       const duration = ranges.reduce((sum,r) => sum+r.end-r.start,0);
       const freezes = [...(project.freezes||[])].filter(f=>Number.isFinite(f.at)&&Number.isFinite(f.hold)).sort((a,b)=>a.at-b.at);
       const exportDuration = duration + freezes.reduce((sum,f)=>sum+f.hold,0);
@@ -1899,18 +1932,38 @@
       recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 6000000});
       exportRecorder = recorder;
       const chunks = [];
-      recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      let lastChunkAt = 0;
+      recorder.ondataavailable = e => { if (e.data.size) { chunks.push(e.data); lastChunkAt = performance.now(); } };
       recorder.onerror = () => { exportCancelled = true; exportCleanup?.(); announce('Recording failed. Try another browser or resolution.', true); };
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         exportCleanup?.();
         if (exportCancelled) { $('#exportStatus').textContent = 'Export cancelled. No partial file saved.'; return; }
         exportedBlob = new Blob(chunks, {type: recorder.mimeType});
+        // Some phones report success yet write only the first seconds: measure
+        // the file and automatically try the next method when it came out short.
+        const measuredLength = await measureBlobDuration(exportedBlob);
+        const cameOutShort = !exportedBlob.size || VoiceCutCore.exportLooksShort(measuredLength, exportDuration);
+        if (cameOutShort && exportAttempt + 1 < mimeCandidates.length) {
+          $('#exportStatus').textContent = 'That recording came out short. Trying another way.';
+          announce('That recording came out short. Trying another way, attempt ' + (exportAttempt + 2) + ' of ' + mimeCandidates.length + '.');
+          return doExport(exportAttempt + 1);
+        }
+        if (cameOutShort) {
+          exportedBlob = null;
+          $('#exportStatus').textContent = 'Export failed: the recording came out too short. Try the WebM format or another browser.';
+          announce('Export failed: the recording came out too short. Try the WebM format or another browser.', true);
+          notifyComplete('Export failed','Video export failed. Open the app to try again.');
+          return;
+        }
         if (exportUrl) URL.revokeObjectURL(exportUrl);
         exportUrl = URL.createObjectURL(exportedBlob); exportedVideoEl.src = exportUrl;
         for (const id of ['exportedVideo','btnPlayExported','btnDownloadExported','btnShareExported']) $('#'+id).classList.remove('hidden');
         $('#exportProgressBar').style.width = '100%'; $('#exportProgressBar').setAttribute('aria-valuenow','100');
-        $('#exportStatus').textContent = 'Export complete. Preview, then download.';
-        announce('Export complete. Preview, then download.', true);
+        const fellBackToWebm = project.format === 'mp4' && exportedBlob.type.indexOf('video/webm') === 0;
+        const lengthWords = Number.isFinite(measuredLength) ? ' ' + formatExportLength(measuredLength) + '.' : '';
+        const formatWords = fellBackToWebm ? ' Saved as WebM because this phone cuts MP4 files short.' : '';
+        $('#exportStatus').textContent = 'Export complete.' + lengthWords + formatWords + ' Preview, then download.';
+        announce('Export complete.' + lengthWords + formatWords + ' Preview, then download.', true);
         notifyComplete('Export complete','Your video export is ready. Preview, then download.');
       };
       await seekTo(ranges[0].start);
@@ -1922,6 +1975,9 @@
       async function frame() {
         if (!isExporting || exportCancelled) return;
         try {
+          // Fail fast when the phone stops writing data mid-recording: stop
+          // this attempt so the length check retries the next method.
+          if (lastChunkAt && performance.now() - lastChunkAt > 8000 && recorder.state !== 'inactive') { recorder.stop(); return; }
           const range = ranges[rangeIndex];
           if (freezeHoldUntil) {
             if (performance.now() < freezeHoldUntil) {
@@ -3440,7 +3496,7 @@
     $('#exportResolution').addEventListener('change', (e)=>{ project.resolution=e.target.value; updateExportSummary(); });
     $('#exportFps').addEventListener('change', (e)=>{ project.fps=parseInt(e.target.value); updateExportSummary(); });
     $('#exportFormat').addEventListener('change', (e)=>{ project.format=e.target.value; updateExportSummary(); });
-    $('#btnDoExport').addEventListener('click', doExport);
+    $('#btnDoExport').addEventListener('click', ()=>doExport(0));
     $('#btnExport').addEventListener('click', ()=>{ if(!hasProject()){ showView('none'); return; } openEditor(); showEditorPanel('export',true); doExport(); });
     $('#btnCancelExport').addEventListener('click', cancelExport);
     $('#btnPlayExported').addEventListener('click', ()=>{ exportedVideoEl.play(); });

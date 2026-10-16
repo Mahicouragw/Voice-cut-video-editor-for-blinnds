@@ -690,7 +690,27 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // MP4 export after a delete keeps the full kept length and speaks it.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await page.locator('#delRangeStart').fill('00:01');await page.locator('#delRangeEnd').fill('00:02');await page.locator('#btnDeleteRange').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Deleted'),{},{timeout:30000});
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('mp4');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  assert.match(await page.locator('#exportStatus').textContent(),/seconds/);
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-mp4delete.mp4');await download.saveAs(output);
+    const dur=Number(execFileSync('ffprobe',['-v','error','-show_entries','format=duration','-of','csv=p=0',output],{encoding:'utf8'}).trim());
+    assert.ok(Math.abs(dur-2)<1,'MP4 export after delete must keep ~2s, got '+dur);
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 delete length');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
