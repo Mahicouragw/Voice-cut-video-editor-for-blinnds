@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange} = require('../web/core');
+const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch} = require('../web/core');
 test('15-minute boundary',()=>{assert.equal(expired(0,TTL_MS-1),false);assert.equal(expired(0,TTL_MS),true);});
 test('deleted segments omitted and trim intersects retained segments',()=>assert.deepEqual(ranges({trimStart:2,trimEnd:9,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),[{start:2,end:4},{start:6,end:9}]));
 test('invalid trim rejected',()=>assert.throws(()=>ranges({trimStart:5,trimEnd:2,duration:10,segments:[]})));
@@ -118,4 +118,20 @@ test('export prefers plain containers and detects cut-short phone recordings',()
   assert.equal(exportLooksShort(Infinity,420),false);
   assert.equal(exportLooksShort(2.5,3),false);
   assert.equal(exportLooksShort(0.5,3),true);
+});
+test('transcript script check proves the real caption language',()=>{
+  const te='నేను తెలుగు మాట్లాడుతున్నాను';
+  const hi='मैं हिंदी बोल रहा हूँ';
+  const en='hello how are you doing today';
+  assert.equal(detectCaptionScript(te),'te');
+  assert.equal(detectCaptionScript(hi),'dev');
+  assert.equal(detectCaptionScript(en),'');
+  const cues=(t)=>[{text:t,start:0,end:1}];
+  assert.equal(captionScriptMismatch(cues(te),'te'),'');
+  assert.equal(captionScriptMismatch(cues(en),'te'),'latin');
+  assert.equal(captionScriptMismatch(cues(hi),'te'),'dev');
+  assert.equal(captionScriptMismatch(cues(te),'en'),'te');
+  assert.equal(captionScriptMismatch(cues(en),'en'),'');
+  assert.equal(captionScriptMismatch(cues(hi),'mr'),'');
+  assert.equal(captionScriptMismatch([],'te'),'');
 });

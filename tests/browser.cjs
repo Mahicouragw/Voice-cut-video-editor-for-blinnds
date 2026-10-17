@@ -1,6 +1,6 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {spawn,execFileSync} = require('node:child_process');
+const {spawn,spawnSync,execFileSync} = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 (async()=>{
@@ -20,6 +20,7 @@ const path = require('node:path');
   const text = sel => page.locator(sel).textContent();
   const showPanel = (name) => page.locator('#tab-'+name).click();
   const showSub = (which) => page.locator(which==='music'?'#subMusic':which==='sfx'?'#subSfx':'#subVoiceover').click();
+  const meanVolume = (file) => { const r=spawnSync('ffmpeg',['-v','info','-i',file,'-map','0:a','-af','volumedetect','-f','null','-'],{encoding:'utf8'}); const m=String(r.stderr||'').match(/mean_volume:\s*([-\d.]+|n\/a)/); return m?m[1]:'n/a'; };
   // HOME shell: nav only, editor hidden, no server/credential fields anywhere.
   await page.goto('http://127.0.0.1:3099');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Welcome to VoiceCut'));
@@ -136,6 +137,23 @@ const path = require('node:path');
   await page.locator('#recordReview:not(.hidden)').waitFor();
   await page.locator('#btnDiscardRecord').click();
   await page.evaluate(()=>{ navigator.mediaDevices.getUserMedia = window.__origGUM; });
+  // Voice changer effects really transform the sound, not just relabel it.
+  {
+    const changed = await page.evaluate(async ()=>{
+      const sr = 44100, len = sr;
+      const ctx = new OfflineAudioContext(1, len, sr);
+      const buf = ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for (let i=0;i<len;i++) d[i]=Math.sin(2*Math.PI*440*i/sr)*0.5;
+      const out = await window.VoiceCutTestAudio.renderVoiceFilter(buf, 'robot');
+      const o = out.getChannelData(0);
+      let diff=0, n=0;
+      for (let i=0;i<Math.min(len,o.length);i+=7) { diff+=Math.abs(o[i]-d[i]); n++; }
+      return {inLen:len,outLen:o.length,meanDiff:diff/Math.max(1,n)};
+    });
+    assert.ok(changed.outLen > changed.inLen, 'robot filter slows audio, lengthening it');
+    assert.ok(changed.meanDiff > 0.05, 'robot filter must audibly change audio, got '+changed.meanDiff);
+  }
   // Voice Focus noise-reduction level applies live without errors.
   await showPanel('cleanup');
   await page.locator('#globalNoiseReduction').selectOption('voicefocus');
@@ -710,7 +728,56 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // A recorded voice-over is audible in the export, not just on the timeline.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await showPanel('audio');await showSub('voiceover');
+  await page.locator('#btnRecordVO').click();
+  await page.locator('#btnStartRecording').click();
+  await page.waitForFunction(()=>!document.querySelector('#btnStopRecordingDialog').disabled,{},{timeout:30000});
+  await page.waitForTimeout(1500);
+  await page.locator('#btnStopRecordingDialog').click();
+  await page.locator('#recordReview:not(.hidden)').waitFor();
+  await page.locator('#btnApplyRecord').click();
+  await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('Voiceover_'),{},{timeout:30000});
+  await showPanel('clips');
+  await page.locator('#btnMuteOrig').click();
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('webm');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-voiceover.webm');await download.saveAs(output);
+    const vol=meanVolume(output);
+    assert.ok(vol!=='n/a'&&Number(vol)>-50,'voice-over must be audible in export, mean_volume '+vol);
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // Added music is audible in the export.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await page.setInputFiles('#fileAudio',audioPath);
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Music Track'),{},{timeout:30000});
+  await showPanel('clips');
+  await page.locator('#btnMuteOrig').click();
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('webm');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-music.webm');await download.saveAs(output);
+    const vol=meanVolume(output);
+    assert.ok(vol!=='n/a'&&Number(vol)>-50,'music must be audible in export, mean_volume '+vol);
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 delete length');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 delete length, voice filter dsp, clip export audio');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
