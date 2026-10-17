@@ -2241,6 +2241,12 @@
         let boxes = [];
         try { boxes = mux.finish(); } catch (e) { exportCleanup?.(); failover('Direct recording produced no file.'); }
         for (const b of boxes) fileParts.push(b);
+        // Instagram reads the total length from the file header: patch the
+        // real muxed durations in before handing the file over.
+        try {
+          const moovPart = fileParts.find(b => b.length > 8 && b[4] === 0x6d && b[5] === 0x6f && b[6] === 0x6f && b[7] === 0x76);
+          if (moovPart) window.VoiceCutMuxer.patchMoovDurations(moovPart, mux.totalDurations());
+        } catch (e) {}
         exportedBlob = new Blob(fileParts, { type: 'video/mp4' });
         fileParts.length = 0;
         const measuredLength = await measureBlobDuration(exportedBlob);

@@ -730,6 +730,11 @@ const path = require('node:path');
     assert.ok(['aac','opus'].includes(acode),'MP4 audio track must be AAC (Opus on AAC-less desktops), got '+acode);
     const raw=fs.readFileSync(output);
     assert.ok(raw.indexOf('moov')>-1&&raw.indexOf('moov')<raw.indexOf('mdat'),'movie header must come before media data');
+    const mvhdBox=raw.indexOf('mvhd')-4;
+    assert.equal(raw[mvhdBox+8],0,'mvhd must be version 0');
+    assert.equal(raw.readUInt32BE(mvhdBox+20),1000,'mvhd timescale must be 1000');
+    const mvhdMs=raw.readUInt32BE(mvhdBox+24);
+    assert.ok(Math.abs(mvhdMs/1000-2)<1.5,'mvhd must carry the real ~2s length, got '+mvhdMs+'ms');
     execFileSync('ffmpeg',['-v','error','-i',output,'-f','null','-']);
   }
   await showPanel('clips');
@@ -785,6 +790,6 @@ const path = require('node:path');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, voice filter dsp, clip export audio');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
