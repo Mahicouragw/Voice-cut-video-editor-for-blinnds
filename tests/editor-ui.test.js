@@ -216,3 +216,8 @@ test('position displays follow the kept timeline after deletes', () => {
   assert.match(page, /Current position \$\{formatTimeVerbose\(kp\.pos\)\} of \$\{formatTimeVerbose\(kp\.total\)\}/);
   assert.match(page, /Total: \$\{formatTime\(kpNow\.total\)\}/);
 });
+
+test('direct MP4 falls back when its file cannot be measured', () => {
+  const hits = page.match(/!Number\.isFinite\(measuredLength\)/g) || [];
+  assert.equal(hits.length, 1, 'only the direct path must demand a measurable file');
+});
