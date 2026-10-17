@@ -57,7 +57,9 @@
   const VIDEO_TIMESCALE = 90000;
 
   function ftypBox() {
-    return box('ftyp', ascii('isom'), u32(0x200), ascii('isom'), ascii('iso6'), ascii('mp41'), ascii('mp42'));
+    // Brands match ffmpeg's fragmented MP4 (major iso5 + iso6/mp41) plus
+    // mp42/isom so header-keyed readers always find a brand they accept.
+    return box('ftyp', ascii('iso5'), u32(0x200), ascii('iso5'), ascii('iso6'), ascii('mp41'), ascii('mp42'), ascii('isom'));
   }
 
   function mvhdBox() {

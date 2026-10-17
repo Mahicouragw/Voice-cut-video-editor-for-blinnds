@@ -258,3 +258,113 @@ test('header patch handles v1 boxes and ignores non-moov input', () => {
   patchMoovDurations(ftyp, { movie: 5, tracks: {} });
   assert.deepEqual(Array.from(ftyp), before, 'non-moov input untouched');
 });
+
+test('ftyp brands match fragmented-MP4 convention', () => {
+  const { WCMuxer } = require('../web/wc-muxer.js');
+  const mux = new WCMuxer();
+  mux.setVideoConfig(64, 64, AVCC);
+  mux.setAudioConfig({ codec: 'aac', sampleRate: 48000, channels: 2, bitrate: 128000, asc: ASC });
+  const ftyp = mux.takeBoxes()[0];
+  const s = (o) => String.fromCharCode(ftyp[o], ftyp[o + 1], ftyp[o + 2], ftyp[o + 3]);
+  assert.equal(s(4), 'ftyp');
+  assert.equal(s(8), 'iso5', 'major brand');
+  const compat = [s(16), s(20), s(24), s(28), s(32)];
+  for (const b of ['iso5', 'iso6', 'mp41', 'mp42']) assert.ok(compat.includes(b), 'compat carries ' + b);
+});
+
+// ---- Duration/timestamp regression scenarios (synthetic feeds, exact math) ----
+// Each scenario feeds interleaved video+audio the way the live exporter does
+// (chained durations from real stamps, never fps multiplication) and pins the
+// muxed lengths. Tolerances: video/audio track ends within 250ms of each other
+// (encoder-delay tail), movie header within 250ms of the intended window.
+const VID = new Uint8Array([0, 0, 0, 4, 0x65, 1, 2, 3]);
+const AUD = new Uint8Array([0x21, 0x10, 0x04, 0x60, 0x8c, 0x1c]);
+function runScenario({ videoGaps, audioGaps, videoStartUs = 33000, audioStartUs = 2000, audioRate = 48000, audioCodec = 'aac' }) {
+  const mux = new WCMuxer({ fragmentUs: 1000000 });
+  mux.setVideoConfig(320, 180, AVCC);
+  mux.setAudioConfig({ codec: audioCodec, sampleRate: audioRate, channels: 2, bitrate: 128000, asc: audioCodec === 'aac' ? ASC : null });
+  const ops = [];
+  let t = videoStartUs;
+  const vpts = videoGaps.map((g) => { const p = t; t += g; return p; });
+  t = audioStartUs;
+  const apts = audioGaps.map((g) => { const p = t; t += g; return p; });
+  vpts.forEach((p, k) => ops.push({ ts: p, v: k }));
+  apts.forEach((p, k) => ops.push({ ts: p, a: k }));
+  ops.sort((x, y) => x.ts - y.ts);
+  const parts = [];
+  const drain = () => { for (const b of mux.takeBoxes()) parts.push(b); };
+  drain();
+  for (const op of ops) {
+    if (op.v !== undefined) {
+      const k = op.v;
+      const dur = k + 1 < vpts.length ? vpts[k + 1] - vpts[k] : videoGaps[videoGaps.length - 1];
+      mux.addVideoSample(vpts[k], dur, k === 0, VID);
+    } else {
+      const k = op.a;
+      const dur = k + 1 < apts.length ? apts[k + 1] - apts[k] : audioGaps[audioGaps.length - 1];
+      mux.addAudioSample(apts[k], dur, AUD);
+    }
+    drain();
+  }
+  for (const b of mux.finish()) parts.push(b);
+  const total = mux.totalDurations();
+  const bytes = concat(parts);
+  return { mux, total, bytes, videoEndUs: vpts[vpts.length - 1] + videoGaps[videoGaps.length - 1] - videoStartUs, audioEndUs: apts[apts.length - 1] + audioGaps[audioGaps.length - 1] - audioStartUs };
+}
+const gaps = (n, us, jitter = 0) => Array.from({ length: n }, (_, k) => us + (jitter ? ((k * 7919) % (2 * jitter + 1)) - jitter : 0));
+
+for (const secs of [3, 4, 30]) {
+  test(`muxed length is exact at ${secs}s scale`, () => {
+    const n = secs * 30;
+    const r = runScenario({ videoGaps: gaps(n, 33333, 500), audioGaps: gaps(Math.ceil(secs * 48000 / 1024), 21333) });
+    assert.ok(Math.abs(r.total.movie - secs * 1000) < 250, `movie ${r.total.movie}ms vs ${secs}s`);
+    assert.ok(Math.abs(r.videoEndUs / 1000 - secs * 1000) < 250, 'video span');
+    assert.ok(Math.abs(r.audioEndUs / 1000 - secs * 1000) < 250, 'audio span');
+    assert.ok(Math.abs(r.videoEndUs - r.audioEndUs) < 250000, 'A/V ends within 250ms');
+  });
+}
+
+test('142s VFR soak: chained durations stay exact, no assumed fps', () => {
+  const r = runScenario({ videoGaps: gaps(4260, 33333, 500), audioGaps: gaps(6658, 21333) });
+  assert.ok(Math.abs(r.total.movie - 142000) < 250, `movie ${r.total.movie}ms`);
+  assert.ok(Math.abs(r.total.tracks[1] / 90 - 142000) < 250, 'video track ms');
+  assert.ok(Math.abs(r.total.tracks[2] / 48 - 142000) < 250, 'audio track ms');
+  assert.ok(Math.abs(r.videoEndUs - r.audioEndUs) < 250000, 'A/V ends within 250ms');
+  const tops = topBoxes(r.bytes).map((b) => b.type);
+  assert.equal(tops[0], 'ftyp');
+  assert.equal(tops[1], 'moov');
+  assert.ok(tops.filter((t) => t === 'moof').length > 100, 'one fragment per second-ish');
+});
+
+test('trimmed window: durations measure the window, not the source', () => {
+  // 9-minute source trimmed to 142s: stamps restart at the trim point.
+  const r = runScenario({ videoGaps: gaps(3408, 41667, 800), audioGaps: gaps(6658, 21333), videoStartUs: 41000, audioStartUs: 3000 });
+  assert.ok(Math.abs(r.total.movie - 142000) < 250, `movie ${r.total.movie}ms`);
+  assert.ok(r.total.tracks[1] < 200 * 90000, 'video track must not carry source-position ticks');
+});
+
+test('mixed frame rate mid-export does not skew the timeline', () => {
+  const r = runScenario({ videoGaps: [...gaps(720, 41667, 500), ...gaps(900, 33333, 500)], audioGaps: gaps(2813, 21333) });
+  const expectMs = (720 * 41667 + 900 * 33333) / 1000;
+  assert.ok(Math.abs(r.total.movie - expectMs) < 400, `movie ${r.total.movie}ms vs ${expectMs}ms`);
+});
+
+test('trailing audio tail stays inside tolerance and sets the container', () => {
+  const v = gaps(4260, 33333, 500);
+  const vSum = v.reduce((a, b) => a + b, 0);
+  const aCount = Math.ceil((vSum + 60000) / 21333); // audio runs ~60ms past video
+  const r = runScenario({ videoGaps: v, audioGaps: gaps(aCount, 21333) });
+  assert.ok(r.audioEndUs - r.videoEndUs < 250000, 'tail within 250ms');
+  assert.ok(Math.abs(r.total.movie - r.audioEndUs / 1000) < 60, 'container follows the longest track');
+});
+
+test('late audio start does not corrupt the chains', () => {
+  const r = runScenario({ videoGaps: gaps(900, 33333, 500), audioGaps: gaps(1407, 21333), audioStartUs: 500000 });
+  assert.ok(Math.abs(r.total.movie - 30000) < 300, `movie ${r.total.movie}ms`);
+  assert.ok(r.total.tracks[1] > 0 && r.total.tracks[2] > 0, 'both tracks present');
+});
+
+test('cancelled export finalizes only fed samples (no invented tail)', () => {
+  const r = runScenario({ videoGaps: gaps(1500, 33333, 500), audioGaps: gaps(2344, 21333) });
+  assert.ok(r.total.movie > 40000 && r.total.movie < 60000, `movie ${r.total.movie}ms ~ fed 50s`);
+});
