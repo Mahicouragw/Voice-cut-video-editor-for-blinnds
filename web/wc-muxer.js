@@ -57,7 +57,7 @@
   const VIDEO_TIMESCALE = 90000;
 
   function ftypBox() {
-    return box('ftyp', ascii('isom'), u32(0x200), ascii('isom'), ascii('iso6'), ascii('mp41'));
+    return box('ftyp', ascii('isom'), u32(0x200), ascii('isom'), ascii('iso6'), ascii('mp41'), ascii('mp42'));
   }
 
   function mvhdBox() {
@@ -185,6 +185,77 @@
     return box('traf', tfhd, tfdt, trun);
   }
 
+  function readU32At(buf, off) {
+    return (((buf[off] * 256 + buf[off + 1]) * 256 + buf[off + 2]) * 256 + buf[off + 3]) >>> 0;
+  }
+  function writeU32At(buf, off, v) {
+    v = Math.max(0, Math.min(0xffffffff, Math.round(v))) >>> 0;
+    buf[off] = (v >>> 24) & 255; buf[off + 1] = (v >>> 16) & 255;
+    buf[off + 2] = (v >>> 8) & 255; buf[off + 3] = v & 255;
+  }
+  function fourccAt(buf, off) {
+    return String.fromCharCode(buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]);
+  }
+  // Some players (Instagram included) read the total length from the moov
+  // header instead of the fragments. The header is written before the
+  // length is known, so after muxing we patch the real durations into
+  // mvhd/tkhd/mdhd. moovBytes is modified in place.
+  // durations: {movie: <mvhd timescale units>, tracks: {<trackId>: <track timescale units>}}.
+  function patchMoovDurations(moovBytes, durations) {
+    const tracks = (durations && durations.tracks) || {};
+    const patchMdia = (start, end, dur) => {
+      let o = start;
+      while (o + 8 <= end) {
+        const size = readU32At(moovBytes, o);
+        if (size < 8 || o + size > end) return;
+        if (fourccAt(moovBytes, o) === 'mdhd') {
+          if (moovBytes[o + 8] === 1) { writeU32At(moovBytes, o + 32, 0); writeU32At(moovBytes, o + 36, dur); }
+          else writeU32At(moovBytes, o + 24, dur);
+        }
+        o += size;
+      }
+    };
+    const patchTrak = (start, end) => {
+      let o = start, trackId = 0;
+      while (o + 8 <= end) {
+        const size = readU32At(moovBytes, o);
+        if (size < 8 || o + size > end) return;
+        if (fourccAt(moovBytes, o) === 'tkhd') {
+          trackId = moovBytes[o + 8] === 1 ? readU32At(moovBytes, o + 28) : readU32At(moovBytes, o + 20);
+        }
+        o += size;
+      }
+      if (!Number.isFinite(tracks[trackId])) return;
+      o = start;
+      while (o + 8 <= end) {
+        const size = readU32At(moovBytes, o);
+        if (size < 8 || o + size > end) return;
+        const t = fourccAt(moovBytes, o);
+        if (t === 'tkhd') {
+          if (moovBytes[o + 8] === 1) { writeU32At(moovBytes, o + 36, 0); writeU32At(moovBytes, o + 40, tracks[trackId]); }
+          else writeU32At(moovBytes, o + 28, tracks[trackId]);
+        } else if (t === 'mdia') {
+          patchMdia(o + 8, o + size, tracks[trackId]);
+        }
+        o += size;
+      }
+    };
+    if (fourccAt(moovBytes, 0) !== 'moov') return;
+    let o = 8;
+    while (o + 8 <= moovBytes.length) {
+      const size = readU32At(moovBytes, o);
+      if (size < 8 || o + size > moovBytes.length) return;
+      const t = fourccAt(moovBytes, o);
+      if (t === 'mvhd' && durations && Number.isFinite(durations.movie)) {
+        if (moovBytes[o + 8] === 1) { writeU32At(moovBytes, o + 32, 0); writeU32At(moovBytes, o + 36, durations.movie); }
+        else writeU32At(moovBytes, o + 24, durations.movie);
+      } else if (t === 'trak') {
+        patchTrak(o + 8, o + size);
+      }
+      o += size;
+    }
+  }
+
   class WCMuxer {
     constructor(opts) {
       opts = opts || {};
@@ -299,9 +370,23 @@
       this._flush(true);
       return this.takeBoxes();
     }
+    // Exact muxed lengths for the header patch: movie in mvhd timescale
+    // (1000) units, tracks in their own timescale units. Call after finish().
+    totalDurations() {
+      const vSec = this.videoNextDts / VIDEO_TIMESCALE;
+      const aSec = this.audioCfg && this.audioCfg.sampleRate
+        ? this.audioNextDts / this.audioCfg.sampleRate : 0;
+      return {
+        movie: Math.max(0, Math.round(Math.max(vSec, aSec) * 1000)),
+        tracks: {
+          1: Math.max(0, Math.round(this.videoNextDts)),
+          2: Math.max(0, Math.round(this.audioNextDts)),
+        },
+      };
+    }
   }
 
-  const api = { WCMuxer, VIDEO_TIMESCALE, KEY_FLAGS, NONKEY_FLAGS };
+  const api = { WCMuxer, VIDEO_TIMESCALE, KEY_FLAGS, NONKEY_FLAGS, patchMoovDurations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VoiceCutMuxer = api;
 })(typeof self !== 'undefined' ? self : this);

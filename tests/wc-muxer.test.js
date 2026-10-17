@@ -182,3 +182,79 @@ test('takeBoxes drains the queue', () => {
   assert.ok(mux.takeBoxes().length >= 2, 'ftyp + moov emitted');
   assert.deepEqual(mux.takeBoxes(), [], 'queue empty after drain');
 });
+
+test('header patch writes the real muxed durations into moov', () => {
+  const { WCMuxer, patchMoovDurations } = require('../web/wc-muxer.js');
+  const mux = new WCMuxer({ fragmentUs: 500000 });
+  mux.setVideoConfig(64, 64, AVCC);
+  mux.setAudioConfig({ codec: 'aac', sampleRate: 48000, channels: 2, bitrate: 128000, asc: ASC });
+  const parts = [...mux.takeBoxes()];
+  const frameUs = Math.round(1000000 / 30);
+  for (let f = 0; f < 30; f++) {
+    mux.addVideoSample(f * frameUs, frameUs, f === 0, fakeBytes(100, f));
+    parts.push(...mux.takeBoxes());
+  }
+  const audioDurUs = Math.round((1024 / 48000) * 1000000);
+  for (let a = 0; a < 47; a++) mux.addAudioSample(a * audioDurUs, audioDurUs, fakeBytes(300, a));
+  parts.push(...mux.finish());
+  const moov = parts.find((b) => b[4] === 0x6d && b[5] === 0x6f && b[6] === 0x6f && b[7] === 0x76);
+  assert.ok(moov, 'moov part found');
+  assert.equal(u32at(moov, 8 + 24), 0, 'mvhd duration starts at zero');
+  patchMoovDurations(moov, mux.totalDurations());
+  const child = (start, end, cc) => {
+    let o = start;
+    while (o + 8 <= end) {
+      const size = u32at(moov, o);
+      assert.ok(size >= 8 && o + size <= end, 'child box fits');
+      if (String.fromCharCode(moov[o + 4], moov[o + 5], moov[o + 6], moov[o + 7]) === cc) return o;
+      o += size;
+    }
+    assert.fail('missing ' + cc);
+  };
+  const mvhd = child(8, moov.length, 'mvhd');
+  assert.equal(u32at(moov, mvhd + 20), 1000, 'mvhd timescale untouched');
+  assert.equal(u32at(moov, mvhd + 24), 1003, 'mvhd carries the real length in ms');
+  const traks = [];
+  let o = 8;
+  while (o + 8 <= moov.length) {
+    const size = u32at(moov, o);
+    if (String.fromCharCode(moov[o + 4], moov[o + 5], moov[o + 6], moov[o + 7]) === 'trak') traks.push(o);
+    o += size;
+  }
+  assert.equal(traks.length, 2);
+  const tkhd1 = child(traks[0] + 8, traks[0] + u32at(moov, traks[0]), 'tkhd');
+  assert.equal(u32at(moov, tkhd1 + 20), 1, 'video track id intact');
+  assert.equal(u32at(moov, tkhd1 + 28), 90000, 'video tkhd duration');
+  const mdia1 = child(traks[0] + 8, traks[0] + u32at(moov, traks[0]), 'mdia');
+  const mdhd1 = child(mdia1 + 8, mdia1 + u32at(moov, mdia1), 'mdhd');
+  assert.equal(u32at(moov, mdhd1 + 20), 90000, 'video mdhd timescale untouched');
+  assert.equal(u32at(moov, mdhd1 + 24), 90000, 'video mdhd duration');
+  const tkhd2 = child(traks[1] + 8, traks[1] + u32at(moov, traks[1]), 'tkhd');
+  assert.equal(u32at(moov, tkhd2 + 28), 48128, 'audio tkhd duration');
+  const mdia2 = child(traks[1] + 8, traks[1] + u32at(moov, traks[1]), 'mdia');
+  const mdhd2 = child(mdia2 + 8, mdia2 + u32at(moov, mdia2), 'mdhd');
+  assert.equal(u32at(moov, mdhd2 + 24), 48128, 'audio mdhd duration');
+});
+
+test('header patch handles v1 boxes and ignores non-moov input', () => {
+  const { patchMoovDurations } = require('../web/wc-muxer.js');
+  const w32 = (buf, off, v) => { buf[off] = (v >>> 24) & 255; buf[off + 1] = (v >>> 16) & 255; buf[off + 2] = (v >>> 8) & 255; buf[off + 3] = v & 255; };
+  const tag = (buf, off, s) => { for (let i = 0; i < 4; i++) buf[off + i] = s.charCodeAt(i); };
+  const mvhd = new Uint8Array(40); w32(mvhd, 0, 40); tag(mvhd, 4, 'mvhd'); mvhd[8] = 1; w32(mvhd, 28, 1000);
+  const tkhd = new Uint8Array(44); w32(tkhd, 0, 44); tag(tkhd, 4, 'tkhd'); tkhd[8] = 1; w32(tkhd, 28, 7);
+  const mdhd = new Uint8Array(40); w32(mdhd, 0, 40); tag(mdhd, 4, 'mdhd'); mdhd[8] = 1; w32(mdhd, 28, 90000);
+  const mdia = concat([new Uint8Array([0, 0, 0, 48, 109, 100, 105, 97]), mdhd]);
+  const trak = concat([new Uint8Array([0, 0, 0, 100, 116, 114, 97, 107]), tkhd, mdia]);
+  const moov = concat([new Uint8Array([0, 0, 0, 148, 109, 111, 111, 118]), mvhd, trak]);
+  patchMoovDurations(moov, { movie: 2500, tracks: { 7: 225000 } });
+  assert.equal(u32at(moov, 8 + 32), 0, 'v1 mvhd high word zero');
+  assert.equal(u32at(moov, 8 + 36), 2500, 'v1 mvhd duration');
+  assert.equal(u32at(moov, 48 + 8 + 36), 0, 'v1 tkhd high word zero');
+  assert.equal(u32at(moov, 48 + 8 + 40), 225000, 'v1 tkhd duration');
+  assert.equal(u32at(moov, 48 + 8 + 44 + 8 + 36), 225000, 'v1 mdhd duration');
+  assert.equal(u32at(moov, 48 + 8 + 28), 7, 'v1 track id intact');
+  const ftyp = new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]);
+  const before = Array.from(ftyp);
+  patchMoovDurations(ftyp, { movie: 5, tracks: {} });
+  assert.deepEqual(Array.from(ftyp), before, 'non-moov input untouched');
+});
