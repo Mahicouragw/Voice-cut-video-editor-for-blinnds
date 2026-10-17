@@ -2056,7 +2056,7 @@
               drainMuxer();
             }
             pendingVideo = cur;
-          } catch (e) {}
+          } catch (e) { console.warn('VoiceCut export: a video sample could not be written.', e); }
         },
         error: () => { if (!exportCancelled && !finished) { exportCancelled = true; exportCleanup?.(); announce('Recording failed. Try another browser or resolution.', true); } },
       });
@@ -2076,7 +2076,7 @@
             chunk.copyTo(data);
             mux.addAudioSample(chunk.timestamp, chunk.duration || Math.round(1024 / audioSampleRate * 1000000), data);
             drainMuxer();
-          } catch (e) {}
+          } catch (e) { console.warn('VoiceCut export: an audio sample could not be written.', e); }
         },
         error: () => { if (!exportCancelled && !finished) { exportCancelled = true; exportCleanup?.(); announce('Recording failed. Try another browser or resolution.', true); } },
       });
@@ -2246,7 +2246,7 @@
         try {
           const moovPart = fileParts.find(b => b.length > 8 && b[4] === 0x6d && b[5] === 0x6f && b[6] === 0x6f && b[7] === 0x76);
           if (moovPart) window.VoiceCutMuxer.patchMoovDurations(moovPart, mux.totalDurations());
-        } catch (e) {}
+        } catch (e) { console.warn('VoiceCut export: the header length patch failed.', e); }
         exportedBlob = new Blob(fileParts, { type: 'video/mp4' });
         fileParts.length = 0;
         const measuredLength = await measureBlobDuration(exportedBlob);
