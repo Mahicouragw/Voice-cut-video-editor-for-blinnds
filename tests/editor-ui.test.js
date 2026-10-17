@@ -221,3 +221,13 @@ test('direct MP4 falls back when its file cannot be measured', () => {
   const hits = page.match(/!Number\.isFinite\(measuredLength\)/g) || [];
   assert.equal(hits.length, 1, 'only the direct path must demand a measurable file');
 });
+
+test('skip and frame buttons move on the kept timeline', () => {
+  assert.match(page, /function keptSeekNow\(delta\)/);
+  assert.match(page, /video\.currentTime = keptSeekNow\(-amt\)/);
+  assert.match(page, /video\.currentTime = keptSeekNow\(amt\)/);
+  assert.match(page, /video\.currentTime = keptSeekNow\(-1\/30\)/);
+  assert.match(page, /video\.currentTime = keptSeekNow\(1\/30\)/);
+  assert.match(page, /Previous frame\. Position \$\{formatTimeVerbose\(keptPositionNow\(\)\.pos\)\}/);
+  assert.match(page, /Next frame\. Position \$\{formatTimeVerbose\(keptPositionNow\(\)\.pos\)\}/);
+});

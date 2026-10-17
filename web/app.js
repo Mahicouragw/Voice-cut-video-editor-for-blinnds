@@ -1319,25 +1319,35 @@
       return { pos: VoiceCutCore.keptPositionAt(rs, video.currentTime), total: VoiceCutCore.retainedDuration(project) };
     } catch (e) { return { pos: video.currentTime, total: project.duration }; }
   }
+  // Ripple navigation like other editors: skip and frame buttons move on
+  // the kept timeline, jumping over deleted parts. Unedited projects move
+  // exactly as before.
+  function keptSeekNow(delta) {
+    try {
+      return VoiceCutCore.keptSeekAt(VoiceCutCore.ranges(project), video.currentTime, delta);
+    } catch (e) {
+      return Math.max(project.trimStart, Math.min(project.trimEnd || project.duration, video.currentTime + delta));
+    }
+  }
   function skipBack() {
     const amt = project.skipAmount;
-    video.currentTime = Math.max(project.trimStart, video.currentTime - amt);
+    video.currentTime = keptSeekNow(-amt);
     const kp = keptPositionNow();
     announce(`Skipped backward ${amt} seconds. Current position ${formatTimeVerbose(kp.pos)} of ${formatTimeVerbose(kp.total)}.`);
   }
   function skipForward() {
     const amt = project.skipAmount;
-    video.currentTime = Math.min(project.trimEnd||project.duration, video.currentTime + amt);
+    video.currentTime = keptSeekNow(amt);
     const kp = keptPositionNow();
     announce(`Skipped forward ${amt} seconds. Current position ${formatTimeVerbose(kp.pos)} of ${formatTimeVerbose(kp.total)}.`);
   }
   function prevFrame() {
-    video.currentTime = Math.max(0, video.currentTime - 1/30);
-    announce(`Previous frame. Position ${formatTimeVerbose(video.currentTime)}.`);
+    video.currentTime = keptSeekNow(-1/30);
+    announce(`Previous frame. Position ${formatTimeVerbose(keptPositionNow().pos)}.`);
   }
   function nextFrame() {
-    video.currentTime = Math.min(video.duration, video.currentTime + 1/30);
-    announce(`Next frame. Position ${formatTimeVerbose(video.currentTime)}.`);
+    video.currentTime = keptSeekNow(1/30);
+    announce(`Next frame. Position ${formatTimeVerbose(keptPositionNow().pos)}.`);
   }
   function splitVideo() {
     const pos = video.currentTime;
