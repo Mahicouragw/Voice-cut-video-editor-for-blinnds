@@ -2234,7 +2234,10 @@
         exportedBlob = new Blob(fileParts, { type: 'video/mp4' });
         fileParts.length = 0;
         const measuredLength = await measureBlobDuration(exportedBlob);
-        const cameOutShort = !exportedBlob.size || VoiceCutCore.exportLooksShort(measuredLength, exportDuration);
+        // The direct file must prove itself measurable: an unmeasurable
+        // file means this browser cannot play what was just written, so
+        // fall back to the recording path instead of handing it over.
+        const cameOutShort = !exportedBlob.size || !Number.isFinite(measuredLength) || VoiceCutCore.exportLooksShort(measuredLength, exportDuration);
         if (cameOutShort) {
           exportedBlob = null;
           exportCleanup?.();
