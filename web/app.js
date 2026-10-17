@@ -1311,15 +1311,25 @@
   }
   function pauseVideo() { video.pause(); announce('Video paused.'); }
   function stopVideo() { video.pause(); video.currentTime = project.trimStart || 0; announce('Video stopped.'); }
+  // Position displays follow the kept timeline (after deletes), matching
+  // the library, timeline and export summary. Unedited projects read the same.
+  function keptPositionNow() {
+    try {
+      const rs = VoiceCutCore.ranges(project);
+      return { pos: VoiceCutCore.keptPositionAt(rs, video.currentTime), total: VoiceCutCore.retainedDuration(project) };
+    } catch (e) { return { pos: video.currentTime, total: project.duration }; }
+  }
   function skipBack() {
     const amt = project.skipAmount;
     video.currentTime = Math.max(project.trimStart, video.currentTime - amt);
-    announce(`Skipped backward ${amt} seconds. Current position ${formatTimeVerbose(video.currentTime)} of ${formatTimeVerbose(project.duration)}.`);
+    const kp = keptPositionNow();
+    announce(`Skipped backward ${amt} seconds. Current position ${formatTimeVerbose(kp.pos)} of ${formatTimeVerbose(kp.total)}.`);
   }
   function skipForward() {
     const amt = project.skipAmount;
     video.currentTime = Math.min(project.trimEnd||project.duration, video.currentTime + amt);
-    announce(`Skipped forward ${amt} seconds. Current position ${formatTimeVerbose(video.currentTime)} of ${formatTimeVerbose(project.duration)}.`);
+    const kp = keptPositionNow();
+    announce(`Skipped forward ${amt} seconds. Current position ${formatTimeVerbose(kp.pos)} of ${formatTimeVerbose(kp.total)}.`);
   }
   function prevFrame() {
     video.currentTime = Math.max(0, video.currentTime - 1/30);
@@ -1837,6 +1847,419 @@
     if (s || !parts.length) parts.push(s + (s===1?' second':' seconds'));
     return parts.join(' ');
   }
+  // WebCodecs direct MP4 path: encodes Constrained-Baseline H.264 + AAC
+  // (Opus where AAC is unavailable) and muxes a moov-first fragmented MP4
+  // with our own muxer, so the file plays everywhere including Instagram.
+  // An export clock pauses across seeks, so video and audio stay in sync.
+  function webCodecsExportSize() {
+    const rotation = ((Number(project.rotation) % 360) + 360) % 360;
+    const portrait = rotation === 90 || rotation === 270;
+    const height = Number(project.resolution);
+    return {
+      width: portrait ? Math.round(height * 9 / 16 / 2) * 2 : Math.round(height * 16 / 9 / 2) * 2,
+      height,
+    };
+  }
+  function webCodecsAvcCodec(height) {
+    // Constrained Baseline stays free of B-frames (decode order equals
+    // presentation order) and decodes on every phone. Level 3.0 covers up
+    // to 720p; 1080p needs level 4.0.
+    return height > 720 ? 'avc1.42E028' : 'avc1.42E01E';
+  }
+  async function webCodecsExportAvailable() {
+    try {
+      if (!window.VideoEncoder || !window.AudioEncoder || !window.VideoFrame ||
+          !window.AudioData || !window.MediaStreamTrackProcessor || !window.VoiceCutMuxer) return false;
+      const size = webCodecsExportSize();
+      const v = await VideoEncoder.isConfigSupported({
+        codec: webCodecsAvcCodec(size.height), width: size.width, height: size.height,
+        bitrate: 6000000, framerate: Number(project.fps),
+      });
+      if (!v.supported) return false;
+      ensureAudioContext();
+      const aac = await AudioEncoder.isConfigSupported({
+        codec: 'mp4a.40.2', sampleRate: audioContext.sampleRate, numberOfChannels: 2, bitrate: 128000,
+      });
+      if (aac.supported) return true;
+      const opus = await AudioEncoder.isConfigSupported({
+        codec: 'opus', sampleRate: audioContext.sampleRate, numberOfChannels: 2, bitrate: 128000,
+      });
+      return !!opus.supported;
+    } catch (e) { return false; }
+  }
+  async function doExportWebCodecs() {
+    const failover = (why) => { throw new Error(why || 'WebCodecs export failed.'); };
+    // Clear any older file behind the Save button before starting.
+    exportedBlob = null;
+    exportedVideoEl.removeAttribute('src');
+    for (const id of ['exportedVideo', 'btnPlayExported', 'btnDownloadExported', 'btnShareExported']) $('#' + id).classList.add('hidden');
+    const ranges = VoiceCutCore.ranges(project);
+    const duration = ranges.reduce((sum, r) => sum + r.end - r.start, 0);
+    const freezes = [...(project.freezes || [])].filter(f => Number.isFinite(f.at) && Number.isFinite(f.hold)).sort((a, b) => a.at - b.at);
+    const exportDuration = duration + freezes.reduce((sum, f) => sum + f.hold, 0);
+    if (!(video.videoWidth > 0 && video.videoHeight > 0) || video.readyState < 2) {
+      try {
+        video.load();
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { cleanup(); reject(new Error('LOAD_TIMEOUT')); }, 15000);
+          const cleanup = () => { clearTimeout(timer); video.removeEventListener('canplay', onReady); video.removeEventListener('error', onErr); };
+          const onReady = () => { cleanup(); resolve(); };
+          const onErr = () => { cleanup(); reject(new Error('LOAD_ERROR')); };
+          video.addEventListener('canplay', onReady, { once: true });
+          video.addEventListener('error', onErr, { once: true });
+        });
+      } catch (e) { /* the check below reports it in plain words */ }
+    }
+    const audioOnly = !(video.videoWidth > 0 && video.videoHeight > 0) && Number.isFinite(video.duration) && video.duration > 0 && video.readyState >= 1;
+    if (!audioOnly && !(video.videoWidth > 0 && video.videoHeight > 0)) failover('The video picture is not loaded.');
+    video.pause();
+    for (const node of audioNodes.values()) node.element.pause();
+    isExporting = true; exportCancelled = false; lockExportControls(true);
+    exportRecorder = null;
+    $('#btnDoExport').disabled = true;
+    $('#btnCancelExport').disabled = false;
+    $('#exportProgressContainer').classList.remove('hidden');
+    $('#exportProgressContainer').removeAttribute('aria-hidden');
+    $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
+    announce('Export started. Keep this tab visible. Export runs in real time.');
+    await ensureAudioContext().resume();
+    const dest = audioContext.createMediaStreamDestination();
+    const gain = wireExportAudio(dest);
+    gain.gain.value = 1;
+    const size = webCodecsExportSize();
+    exportCanvas.height = size.height;
+    exportCanvas.width = size.width;
+    const ctx = exportCanvas.getContext('2d');
+    const fps = Number(project.fps) || 30;
+    const frameIntervalUs = Math.round(1000000 / fps);
+    let badFrames = 0;
+    const drawAudioOnlyFrame = () => {
+      const grad = ctx.createLinearGradient(0, 0, 0, exportCanvas.height);
+      grad.addColorStop(0, '#1a1a2e'); grad.addColorStop(1, '#0f0f1a');
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `${Math.round(exportCanvas.height / 10)}px sans-serif`;
+      ctx.fillText('\u{1F399}', exportCanvas.width / 2, exportCanvas.height / 2 - exportCanvas.height / 12);
+      ctx.font = `${Math.round(exportCanvas.height / 20)}px sans-serif`;
+      ctx.fillText((project.name || 'VoiceCut audio').slice(0, 60), exportCanvas.width / 2, exportCanvas.height / 2 + exportCanvas.height / 8);
+    };
+    const drawFrame = () => {
+      if (audioOnly) { ctx.filter = 'none'; drawAudioOnlyFrame(); return; }
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      ctx.filter = VoiceCutCore.VIDEO_FILTERS[project.videoFilter] || 'none';
+      let rect;
+      try {
+        rect = VoiceCutCore.cropRect(project.crop?.preset || 'original', video.videoWidth, video.videoHeight, project.crop);
+      } catch (e) {
+        if (++badFrames > 120) throw new Error('The video picture dropped out during export. Play the video once, then try again.');
+        ctx.filter = 'none';
+        return;
+      }
+      badFrames = 0;
+      const cw = exportCanvas.width, ch = exportCanvas.height;
+      const rotation = ((Number(project.rotation) % 360) + 360) % 360;
+      const portrait = rotation === 90 || rotation === 270;
+      const fitW = portrait ? ch : cw, fitH = portrait ? cw : ch;
+      const scale = Math.min(fitW / rect.w, fitH / rect.h), w = rect.w * scale, h = rect.h * scale;
+      if (rotation === 0) { ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h, (cw - w) / 2, (ch - h) / 2, w, h); ctx.filter = 'none'; return; }
+      ctx.save(); ctx.translate(cw / 2, ch / 2); ctx.rotate(rotation * Math.PI / 180);
+      ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h, -w / 2, -h / 2, w, h); ctx.restore(); ctx.filter = 'none';
+    };
+    // Export clock: both tracks stamp from this, and it pauses across seeks,
+    // so a slow seek can never stretch the audio or captions.
+    let clockUs = 0, clockWall = 0, clockRate = 1, clockRunning = false;
+    const clockTick = () => {
+      if (!clockRunning) return;
+      const now = performance.now();
+      clockUs += Math.max(0, (now - clockWall) * 1000 * clockRate);
+      clockWall = now;
+    };
+    const clockNowUs = () => { clockTick(); return Math.round(clockUs); };
+    const clockStart = (rate) => { clockRate = rate; clockWall = performance.now(); clockRunning = true; };
+    const clockPause = () => { clockTick(); clockRunning = false; };
+    const mux = new window.VoiceCutMuxer.WCMuxer({ fragmentUs: 1000000 });
+    const fileParts = [];
+    const drainMuxer = () => { for (const b of mux.takeBoxes()) fileParts.push(b); };
+    let venc = null, aenc = null, reader = null, audioTrack = null;
+    let audioCodec = null, audioSampleRate = 0, audioChannels = 0;
+    let pendingVideo = null; // duration chaining: each output's length is the gap to the next stamp
+    let raf = 0, timeout = 0, completed = 0, rangeIndex = 0, lastAnnouncement = -1;
+    let freezeIndex = 0, holdsDone = 0, freezeHoldUntil = 0, frozenTime = 0, currentHold = 0, holdStart = 0;
+    let lastEmitUs = -frameIntervalUs, requestKey = true, audioDone = false, finished = false;
+    let doneResolve = null;
+    const donePromise = new Promise((resolve) => { doneResolve = resolve; });
+    const finishPump = () => { if (!finished) { finished = true; doneResolve(); } };
+    const reportProgress = (elapsed) => {
+      const percent = Math.min(99, Math.round(100 * elapsed / exportDuration));
+      $('#exportProgressBar').style.width = percent + '%'; $('#exportProgressBar').setAttribute('aria-valuenow', String(percent));
+      const quarter = Math.floor(percent / 25);
+      if (quarter > lastAnnouncement) { lastAnnouncement = quarter; announce('Exporting video. ' + quarter * 25 + ' percent.'); }
+    };
+    const visibility = () => { if (document.hidden) cancelExport(); };
+    document.addEventListener('visibilitychange', visibility);
+    exportCleanup = () => {
+      cancelAnimationFrame(raf); clearTimeout(timeout);
+      document.removeEventListener('visibilitychange', visibility);
+      clockRunning = false; audioDone = true;
+      try { reader?.cancel(); } catch (e) {}
+      try { venc?.close(); } catch (e) {}
+      try { aenc?.close(); } catch (e) {}
+      venc = null; aenc = null;
+      video.pause();
+      for (const node of audioNodes.values()) node.element.pause();
+      wireExportAudio(audioContext.destination);
+      try { audioTrack?.stop(); } catch (e) {}
+      try { dest.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      isExporting = false; lockExportControls(false); $('#btnDoExport').disabled = false; $('#btnCancelExport').disabled = true;
+      exportCleanup = null;
+      finishPump();
+    };
+    try {
+      audioTrack = dest.stream.getAudioTracks()[0];
+      if (!audioTrack) failover('This browser cannot record sound.');
+      const processor = new MediaStreamTrackProcessor({ track: audioTrack });
+      reader = processor.readable.getReader();
+      const first = await reader.read();
+      if (exportCancelled) { exportCleanup?.(); return; }
+      if (first.done || !first.value) failover('This browser cannot record sound.');
+      const q0 = first.value;
+      audioSampleRate = q0.sampleRate; audioChannels = q0.numberOfChannels;
+      const tryCodecs = ['mp4a.40.2', 'opus'];
+      for (const c of tryCodecs) {
+        try {
+          const sup = await AudioEncoder.isConfigSupported({ codec: c, sampleRate: audioSampleRate, numberOfChannels: audioChannels, bitrate: 128000 });
+          if (sup.supported) { audioCodec = c; break; }
+        } catch (e) {}
+      }
+      if (!audioCodec) { try { q0.close(); } catch (e) {} failover('This browser cannot record sound.'); }
+      venc = new VideoEncoder({
+        output: (chunk, meta) => {
+          try {
+            if (meta?.decoderConfig?.description && !mux.videoCfg) {
+              mux.setVideoConfig(size.width, size.height, new Uint8Array(meta.decoderConfig.description));
+            }
+            const data = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(data);
+            const cur = { ts: chunk.timestamp, key: chunk.type === 'key', data };
+            if (pendingVideo) {
+              mux.addVideoSample(pendingVideo.ts, Math.max(1, cur.ts - pendingVideo.ts), pendingVideo.key, pendingVideo.data);
+              drainMuxer();
+            }
+            pendingVideo = cur;
+          } catch (e) {}
+        },
+        error: () => { if (!exportCancelled && !finished) { exportCancelled = true; exportCleanup?.(); announce('Recording failed. Try another browser or resolution.', true); } },
+      });
+      venc.configure({ codec: webCodecsAvcCodec(size.height), width: size.width, height: size.height, bitrate: 6000000, framerate: fps, avc: { format: 'avc' } });
+      aenc = new AudioEncoder({
+        output: (chunk, meta) => {
+          try {
+            if (!mux.audioCfg) {
+              const desc = meta?.decoderConfig?.description;
+              mux.setAudioConfig({
+                codec: audioCodec === 'mp4a.40.2' ? 'aac' : 'opus',
+                sampleRate: audioSampleRate, channels: audioChannels, bitrate: 128000,
+                asc: desc ? new Uint8Array(desc) : null,
+              });
+            }
+            const data = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(data);
+            mux.addAudioSample(chunk.timestamp, chunk.duration || Math.round(1024 / audioSampleRate * 1000000), data);
+            drainMuxer();
+          } catch (e) {}
+        },
+        error: () => { if (!exportCancelled && !finished) { exportCancelled = true; exportCleanup?.(); announce('Recording failed. Try another browser or resolution.', true); } },
+      });
+      aenc.configure({ codec: audioCodec, sampleRate: audioSampleRate, numberOfChannels: audioChannels, bitrate: 128000 });
+      drainMuxer();
+      // Audio pump: re-stamp captured sound onto the export clock, dropping
+      // anything captured while the clock is paused (seeks).
+      const BLOCK = 1024;
+      let carry = [];
+      let carryFrames = 0;
+      let lastAudioTs = -1;
+      const feedQuantum = (qd) => {
+        if (!qd || clockRunning === false) { try { qd?.close(); } catch (e) {} return; }
+        try {
+        const n = qd.numberOfFrames;
+        const planes = [];
+        for (let c = 0; c < audioChannels; c++) {
+          const plane = new Float32Array(n);
+          qd.copyTo(plane, { planeIndex: Math.min(c, qd.numberOfChannels - 1), frameCount: n, format: 'f32-planar' });
+          planes.push(plane);
+        }
+        try { qd.close(); } catch (e) {}
+        carry.push({ n, planes });
+        carryFrames += n;
+        while (carryFrames >= BLOCK && isExporting && !exportCancelled) {
+          const out = new Float32Array(BLOCK * audioChannels);
+          let need = BLOCK, qp = 0;
+          while (need > 0) {
+            const head = carry[qp];
+            const take = Math.min(need, head.n - (head.off || 0));
+            for (let c = 0; c < audioChannels; c++) {
+              out.set(head.planes[c].subarray(head.off || 0, (head.off || 0) + take), (BLOCK - need) * 1 + c * BLOCK);
+            }
+            head.off = (head.off || 0) + take;
+            need -= take;
+            if (head.off >= head.n) qp++;
+          }
+          carry = carry.slice(qp);
+          carryFrames -= BLOCK;
+          const ts = Math.max(lastAudioTs + 1, clockNowUs());
+          lastAudioTs = ts;
+          try {
+            aenc.encode(new AudioData({
+              format: 'f32-planar', sampleRate: audioSampleRate, numberOfFrames: BLOCK,
+              numberOfChannels: audioChannels, timestamp: ts, data: out.buffer,
+            }));
+          } catch (e) {}
+        }
+        } catch (e) {}
+      };
+      const audioPump = (async () => {
+        feedQuantum(q0);
+        for (;;) {
+          if (audioDone || !isExporting || exportCancelled) break;
+          let r;
+          try { r = await reader.read(); } catch (e) { break; }
+          if (!r || r.done) break;
+          feedQuantum(r.value);
+        }
+        // Pad the tail with silence so the last frame is complete.
+        if (carryFrames > 0 && !exportCancelled) {
+          const out = new Float32Array(BLOCK * audioChannels);
+          let qp = 0;
+          for (const head of carry) {
+            for (let c = 0; c < audioChannels; c++) {
+              out.set(head.planes[c].subarray(head.off || 0, head.n), qp + c * BLOCK);
+            }
+            qp += head.n - (head.off || 0);
+          }
+          const ts = Math.max(lastAudioTs + 1, clockNowUs());
+          lastAudioTs = ts;
+          try {
+            aenc.encode(new AudioData({
+              format: 'f32-planar', sampleRate: audioSampleRate, numberOfFrames: BLOCK,
+              numberOfChannels: audioChannels, timestamp: ts, data: out.buffer,
+            }));
+          } catch (e) {}
+        }
+        carry = []; carryFrames = 0;
+      })();
+      await seekTo(ranges[0].start);
+      if (exportCancelled) { exportCleanup?.(); await audioPump.catch(() => {}); return; }
+      video.playbackRate = project.playbackSpeed;
+      timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
+      clockStart(project.playbackSpeed);
+      await video.play();
+      async function frame() {
+        if (!isExporting || exportCancelled) return;
+        try {
+          const range = ranges[rangeIndex];
+          if (freezeHoldUntil) {
+            if (performance.now() < freezeHoldUntil) {
+              drawFrame();
+              if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx, VoiceCutCaptions.active(project.captions, frozenTime), exportCanvas.width, exportCanvas.height);
+              emitVideo(false);
+              reportProgress(clockNowUs() / 1000000);
+              raf = requestAnimationFrame(frame);
+              return;
+            }
+            holdsDone += currentHold; freezeHoldUntil = 0;
+            clockStart(project.playbackSpeed);
+            await video.play();
+          }
+          const freeze = freezes[freezeIndex];
+          if (freeze && video.currentTime >= freeze.at && video.currentTime < range.end) {
+            freezeIndex++;
+            video.pause();
+            for (const node of audioNodes.values()) node.element.pause();
+            frozenTime = video.currentTime; currentHold = freeze.hold; holdStart = performance.now();
+            freezeHoldUntil = holdStart + freeze.hold * 1000;
+            clockStart(1); // holds run at wall speed, like the recording path
+          }
+          if (video.currentTime >= range.end - 0.015 || video.ended) {
+            completed += range.end - range.start;
+            rangeIndex++;
+            if (rangeIndex === ranges.length) { await finishExport(); return; }
+            clockPause(); video.pause();
+            for (const node of audioNodes.values()) node.element.pause();
+            await seekTo(ranges[rangeIndex].start);
+            while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
+            if (!isExporting || exportCancelled) return;
+            requestKey = true;
+            clockStart(project.playbackSpeed);
+            await video.play();
+          }
+          drawFrame();
+          if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx, VoiceCutCaptions.active(project.captions, video.currentTime), exportCanvas.width, exportCanvas.height);
+          syncAudioPlayback(true);
+          emitVideo(false);
+          reportProgress(clockNowUs() / 1000000);
+          raf = requestAnimationFrame(frame);
+        } catch (e) {
+          if (!exportCancelled) { exportCancelled = true; exportCleanup?.(); announce('Export failed: ' + e.message, true); }
+        }
+      }
+      function emitVideo(force) {
+        if (!venc || venc.state !== 'configured') return;
+        const nowUs = clockNowUs();
+        if (!force && nowUs - lastEmitUs < frameIntervalUs) return;
+        if (venc.encodeQueueSize > 90) return; // let a slow encoder catch up; the clock keeps sync
+        lastEmitUs = force ? lastEmitUs : nowUs;
+        let vf = null;
+        try {
+          vf = new VideoFrame(exportCanvas, { timestamp: nowUs, duration: frameIntervalUs });
+          venc.encode(vf, requestKey ? { keyFrame: true } : undefined);
+          requestKey = false;
+        } catch (e) {} finally { try { vf?.close(); } catch (err) {} }
+      }
+      async function finishExport() {
+        clockPause();
+        video.pause();
+        for (const node of audioNodes.values()) node.element.pause();
+        audioDone = true;
+        try { await audioPump; } catch (e) {}
+        try { if (pendingVideo) { mux.addVideoSample(pendingVideo.ts, frameIntervalUs, pendingVideo.key, pendingVideo.data); pendingVideo = null; drainMuxer(); } } catch (e) {}
+        try { await venc.flush(); } catch (e) {}
+        try { await aenc.flush(); } catch (e) {}
+        // Flush delivers any outputs still queued; drain them into the file.
+        try { if (pendingVideo) { mux.addVideoSample(pendingVideo.ts, frameIntervalUs, pendingVideo.key, pendingVideo.data); pendingVideo = null; } } catch (e) {}
+        drainMuxer();
+        if (exportCancelled || !isExporting) { exportCleanup?.(); return; }
+        let boxes = [];
+        try { boxes = mux.finish(); } catch (e) { exportCleanup?.(); failover('Direct recording produced no file.'); }
+        for (const b of boxes) fileParts.push(b);
+        exportedBlob = new Blob(fileParts, { type: 'video/mp4' });
+        fileParts.length = 0;
+        const measuredLength = await measureBlobDuration(exportedBlob);
+        const cameOutShort = !exportedBlob.size || VoiceCutCore.exportLooksShort(measuredLength, exportDuration);
+        if (cameOutShort) {
+          exportedBlob = null;
+          exportCleanup?.();
+          $('#exportStatus').textContent = 'That recording came out short. Trying another way.';
+          announce('That recording came out short. Trying another way.');
+          failover('WebCodecs file came out short.');
+        }
+        if (exportUrl) URL.revokeObjectURL(exportUrl);
+        exportUrl = URL.createObjectURL(exportedBlob); exportedVideoEl.src = exportUrl;
+        for (const id of ['exportedVideo', 'btnPlayExported', 'btnDownloadExported', 'btnShareExported']) $('#' + id).classList.remove('hidden');
+        $('#exportProgressBar').style.width = '100%'; $('#exportProgressBar').setAttribute('aria-valuenow', '100');
+        const lengthWords = Number.isFinite(measuredLength) ? ' ' + formatExportLength(measuredLength) + '.' : '';
+        $('#exportStatus').textContent = 'Export complete.' + lengthWords + ' Preview, then download.';
+        announce('Export complete.' + lengthWords + ' Preview, then download.', true);
+        notifyComplete('Export complete', 'Your video export is ready. Preview, then download.');
+        exportCleanup?.();
+      }
+      raf = requestAnimationFrame(frame);
+      await donePromise;
+    } catch (e) {
+      if (!finished) { try { exportCleanup?.(); } catch (err) {} }
+      if (exportCancelled) return;
+      throw e;
+    }
+  }
   async function doExport(exportAttempt = 0) {
     exportAttempt = Number.isInteger(exportAttempt) && exportAttempt >= 0 ? exportAttempt : 0;
     if (captionRequestBusy || cleanupBusy) { announce('Wait for audio or caption processing to finish.',true); return; }
@@ -1849,6 +2272,23 @@
     }
     let recorder;
     try {
+      // Direct MP4 first: deterministic H.264 + AAC that plays everywhere,
+      // falling back to the recording path when it cannot run or comes out
+      // short. A cancelled export returns quietly instead of retrying.
+      if (exportAttempt === 0 && project.format === 'mp4') {
+        let directAvailable = false;
+        try { directAvailable = await webCodecsExportAvailable(); } catch (e) { directAvailable = false; }
+        if (directAvailable) {
+          try { await doExportWebCodecs(); return; }
+          catch (e) {
+            try { exportCleanup?.(); } catch (err) {}
+            isExporting = false; lockExportControls(false);
+            $('#btnDoExport').disabled = false; $('#btnCancelExport').disabled = true;
+            if (exportCancelled) { $('#exportStatus').textContent = 'Export cancelled. No partial file saved.'; return; }
+            announce('Direct recording did not work. Trying another way.');
+          }
+        }
+      }
       if (!window.MediaRecorder || !exportCanvas.captureStream) throw new Error('This browser cannot record video. Try current Chrome.');
       // A failed export must never leave an older file behind the Save
       // button: clear it before every attempt.
@@ -3625,8 +4065,9 @@
     // Video time updates
     video.addEventListener('timeupdate', ()=>{
       currentVideoTime=video.currentTime;
-      $('#currentPositionDisplay').textContent=`Current: ${formatTime(video.currentTime)} / Total: ${formatTime(project.duration)}`;
-      $('#currentPositionDisplay').setAttribute('aria-label', `Current position ${formatTimeVerbose(video.currentTime)} of ${formatTimeVerbose(project.duration)}. Playback speed ${project.playbackSpeed}x`);
+      const kpNow = keptPositionNow();
+      $('#currentPositionDisplay').textContent=`Current: ${formatTime(kpNow.pos)} / Total: ${formatTime(kpNow.total)}`;
+      $('#currentPositionDisplay').setAttribute('aria-label', `Current position ${formatTimeVerbose(kpNow.pos)} of ${formatTimeVerbose(kpNow.total)}. Playback speed ${project.playbackSpeed}x`);
       if(!isExporting && !video.paused) {
         try {
           const ranges=VoiceCutCore.ranges(project);

@@ -199,3 +199,20 @@ test('caption languages cover the required list and transcript script is verifie
   assert.match(page, /captionScriptMismatch/);
   assert.match(page, /The transcript text itself looks like/);
 });
+
+test('direct MP4 export runs before the recording path for mp4 projects', () => {
+  assert.match(page, /async function doExportWebCodecs\(\)/);
+  assert.match(page, /if \(exportAttempt === 0 && project\.format === 'mp4'\)/);
+  assert.match(page, /await webCodecsExportAvailable\(\)/);
+  assert.match(page, /avc1\.42E028/);
+  assert.match(page, /mp4a\.40\.2/);
+  assert.match(page, /MediaStreamTrackProcessor/);
+  assert.match(html, /<script src="web\/wc-muxer\.js" defer><\/script>/);
+});
+
+test('position displays follow the kept timeline after deletes', () => {
+  assert.match(page, /function keptPositionNow\(\)/);
+  assert.match(page, /keptPositionAt\(rs, video\.currentTime\)/);
+  assert.match(page, /Current position \$\{formatTimeVerbose\(kp\.pos\)\} of \$\{formatTimeVerbose\(kp\.total\)\}/);
+  assert.match(page, /Total: \$\{formatTime\(kpNow\.total\)\}/);
+});

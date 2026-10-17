@@ -135,3 +135,15 @@ test('transcript script check proves the real caption language',()=>{
   assert.equal(captionScriptMismatch(cues(hi),'mr'),'');
   assert.equal(captionScriptMismatch([],'te'),'');
 });
+test('kept position maps player time onto the kept timeline',()=>{
+  const {keptPositionAt} = require('../web/core');
+  const rs = [{start:0,end:60},{start:120,end:162}]; // 60 kept + 42 kept = 102s kept
+  assert.equal(keptPositionAt(rs,30),30);
+  assert.equal(keptPositionAt(rs,60),60);
+  assert.equal(keptPositionAt(rs,90),60); // inside a deleted part: capped at kept-so-far
+  assert.equal(keptPositionAt(rs,120),60);
+  assert.equal(keptPositionAt(rs,141),81);
+  assert.equal(keptPositionAt(rs,162),102);
+  assert.equal(keptPositionAt(rs,200),102);
+  assert.equal(keptPositionAt([],5),5); // invalid input falls back to the raw time
+});
