@@ -126,6 +126,28 @@
       return total > 0 ? total : (Number(p.duration) || 0);
     } catch { return Number(p.duration) || 0; }
   }
+  // Ripple navigation: move deltaKept seconds along kept video, jumping
+  // over deleted parts, clamped to the kept range. Returns the player time
+  // (original timeline) to seek to. Unedited projects behave exactly like
+  // plain currentTime += delta clamped to the trim window.
+  function keptSeekAt(rs, time, delta) {
+    try {
+      const t = Number(time), d = Number(delta);
+      if (!Array.isArray(rs) || !rs.length || !Number.isFinite(t) || !Number.isFinite(d)) return time;
+      const sorted = [...rs].filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
+        .sort((a, b) => a.start - b.start);
+      if (!sorted.length) return time;
+      const total = sorted.reduce((s, r) => s + (r.end - r.start), 0);
+      const target = Math.max(0, Math.min(total, keptPositionAt(sorted, t) + d));
+      let acc = 0;
+      for (const r of sorted) {
+        const len = r.end - r.start;
+        if (target <= acc + len) return Math.min(r.end, r.start + (target - acc));
+        acc += len;
+      }
+      return sorted[sorted.length - 1].end;
+    } catch { return time; }
+  }
   // Position on the kept timeline: maps a player time to seconds of kept
   // video before it (deleted parts contribute nothing). Display only.
   function keptPositionAt(rs, time) {
@@ -308,7 +330,7 @@
   }
   const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
   const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS };
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

@@ -147,3 +147,19 @@ test('kept position maps player time onto the kept timeline',()=>{
   assert.equal(keptPositionAt(rs,200),102);
   assert.equal(keptPositionAt([],5),5); // invalid input falls back to the raw time
 });
+test('kept seeking jumps over deleted parts and clamps to kept ends',()=>{
+  const {keptSeekAt} = require('../web/core');
+  const rs = [{start:0,end:60},{start:120,end:162}]; // 102s kept
+  assert.equal(keptSeekAt(rs,30,5),35);
+  assert.equal(keptSeekAt(rs,58,5),123); // 5 kept seconds jump the 60s deleted gap
+  assert.equal(keptSeekAt(rs,130,-15),55); // backward over the gap
+  assert.equal(keptSeekAt(rs,160,10),162); // clamps to kept end, not trim end
+  assert.equal(keptSeekAt(rs,5,-10),0);
+  assert.equal(keptSeekAt(rs,90,5),125); // starting inside a deleted span
+  const one = [{start:10,end:50}]; // unedited: identical to plain clamped seeking
+  assert.equal(keptSeekAt(one,20,-5),15);
+  assert.equal(keptSeekAt(one,12,-5),10);
+  assert.equal(keptSeekAt(one,48,5),50);
+  assert.equal(keptSeekAt([],5,5),5); // invalid input returns the time untouched
+  assert.equal(keptSeekAt(rs,30,NaN),30);
+});
