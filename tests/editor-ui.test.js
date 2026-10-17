@@ -181,3 +181,21 @@ test('export verifies length, retries short phone recordings, clears stale files
   assert.match(page, /btnDoExport'\)\.addEventListener\('click', \(\)=>doExport\(0\)\)/);
   assert.doesNotMatch(page, /addEventListener\('click', doExport\)/);
 });
+
+test('timeline clips survive phone playback blocks and keep ducking taps on export', () => {
+  assert.match(page, /function playClipElement/);
+  assert.match(page, /clipPlayBlocked/);
+  assert.match(page, /The phone blocked background sounds/);
+  assert.match(page, /function wireExportAudio/);
+  assert.match(page, /wireExportAudio\(dest\)/);
+  assert.match(page, /wireExportAudio\(audioContext\.destination\)/);
+  assert.match(page, /VoiceCutTestAudio/);
+});
+
+test('caption languages cover the required list and transcript script is verified', () => {
+  for (const v of ['or', 'es', 'de', 'zh', 'ja', 'ga', 'mt']) {
+    assert.match(html, new RegExp(`<option value="${v}">[^<]+<\\/option>`));
+  }
+  assert.match(page, /captionScriptMismatch/);
+  assert.match(page, /The transcript text itself looks like/);
+});

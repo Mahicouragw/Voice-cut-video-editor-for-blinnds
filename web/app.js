@@ -319,9 +319,14 @@
       const cover=cues.length?` covering ${formatTimeVerbose(cues[0].start)} to ${formatTimeVerbose(cues[cues.length-1].end)} of ${formatTimeVerbose(project.duration)} video`:'';
       let langNote='';
       const chosen=$('#captionLanguage').value,detected=String(result.language||'').toLowerCase();
+      const names={en:'English',hi:'Hindi',te:'Telugu',ta:'Tamil',kn:'Kannada',ml:'Malayalam',mr:'Marathi',bn:'Bengali',ur:'Urdu',or:'Oriya',es:'Spanish',de:'German',zh:'Chinese',ja:'Japanese',ga:'Irish',mt:'Maltese'};
       if(chosen&&detected&&detected!=='unknown'&&detected!=='und'&&chosen.slice(0,2)!==detected.slice(0,2)){
-        const names={en:'English',hi:'Hindi',te:'Telugu',ta:'Tamil',kn:'Kannada',ml:'Malayalam',mr:'Marathi',bn:'Bengali',ur:'Urdu'};
         langNote=` Warning: you chose ${names[chosen]||chosen} but the transcript was detected as ${names[detected.slice(0,2)]||result.language}. Wrong-language transcripts look like nonsense. Change Spoken language and regenerate.`;
+      }
+      const scriptFound=VoiceCutCore.captionScriptMismatch(cues,chosen);
+      if(scriptFound){
+        const scriptName=scriptFound==='latin'?'English':scriptFound==='dev'?'Hindi or Marathi':names[scriptFound]||scriptFound;
+        langNote+=` The transcript text itself looks like ${scriptName} instead of ${names[chosen]||chosen}. If the words are in the wrong language, check the Spoken language and regenerate.`;
       }
       let sparseNote='';
       const span=cues.length?cues[cues.length-1].end-cues[0].start:0;
@@ -1031,6 +1036,7 @@
     src.start(0);
     return off.startRendering();
   }
+  window.VoiceCutTestAudio = { renderVoiceFilter };
   async function previewVoiceFilter() {
     const filter = $('#voiceFilterSelect').value;
     const statusEl = $('#voiceFilterStatus');
@@ -1155,6 +1161,18 @@
       return tapSpeaking(voiceClipTap);
     } catch(e) { return false; }
   }
+  let clipPlayBlocked = false;
+  // Phones can block sounds that start by themselves (timeline clips during
+  // preview or export). Say so plainly once, then retry on the next tap.
+  function playClipElement(audioEl) {
+    if (!audioEl.paused) return;
+    audioEl.play().then(()=>{ clipPlayBlocked = false; }).catch((e)=>{
+      if (e && e.name === 'NotAllowedError' && !clipPlayBlocked) {
+        clipPlayBlocked = true;
+        announce('The phone blocked background sounds. Tap anywhere, then press Play to hear them.');
+      }
+    });
+  }
   function syncAudioPlayback(forExport = false) {
     if (isExporting && !forExport) return;
     // FIX: Ensure video element muted state matches project setting to prevent double audio
@@ -1225,7 +1243,7 @@
       if (shouldPlay) {
         const desiredAudioTime = (currentTime - clip.startTime) + clip.trimStart;
         if (Math.abs(audioEl.currentTime - desiredAudioTime) > 0.5) audioEl.currentTime = desiredAudioTime;
-        if (audioEl.paused) audioEl.play().catch(()=>{});
+        playClipElement(audioEl);
       } else {
         if (!audioEl.paused) audioEl.pause();
       }
@@ -1753,6 +1771,20 @@
     tail.connect(presence);presence.connect(compressor);
     return {input:highpass,output:compressor};
   }
+  // Export (and the return to preview) rewires gains without dropping the
+  // speech taps ducking listens to: bare disconnect() would deafen ducking.
+  function wireExportAudio(destNode) {
+    const graph = ensureOriginalGraph();
+    graph.disconnect(); graph.connect(destNode);
+    if (liveVoiceTap) { try { graph.connect(liveVoiceTap.analyser); } catch(e){} }
+    for (const clip of project.clips) if (!audioNodes.has(clip.id)) createAudioNodeForClip(clip);
+    for (const entry of audioNodes) {
+      entry[1].gain.disconnect(); entry[1].gain.connect(destNode);
+      const clip = project.clips.find(c=>c.id===entry[0]);
+      if (clip && clip.type==='voiceover' && voiceClipTap) { try { entry[1].gain.connect(voiceClipTap.analyser); } catch(e){} }
+    }
+    return graph;
+  }
   function ensureOriginalGraph() {
     ensureAudioContext();
     if (!originalSource) {
@@ -1864,12 +1896,9 @@
       $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
       announce(audioOnly ? 'Export started. This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. Keep this tab visible. Export runs in real time.');
       await ensureAudioContext().resume();
-      const gain = ensureOriginalGraph();
       const dest = audioContext.createMediaStreamDestination();
-      gain.disconnect(); gain.connect(dest);
+      const gain = wireExportAudio(dest);
       gain.gain.value = 1;
-      for (const clip of project.clips) if (!audioNodes.has(clip.id)) createAudioNodeForClip(clip);
-      for (const node of audioNodes.values()) { node.gain.disconnect(); node.gain.connect(dest); }
       const height = Number(project.resolution);
       exportCanvas.height = height;
       exportCanvas.width = portrait?Math.round(height*9/16/2)*2:Math.round(height*16/9/2)*2;
@@ -1923,8 +1952,8 @@
         cancelAnimationFrame(raf); clearTimeout(timeout);
         document.removeEventListener('visibilitychange', visibility);
         video.pause();
-        for (const node of audioNodes.values()) { node.element.pause(); node.gain.disconnect(); node.gain.connect(audioContext.destination); }
-        gain.disconnect(); gain.connect(audioContext.destination);
+        for (const node of audioNodes.values()) node.element.pause();
+        wireExportAudio(audioContext.destination);
         stream.getTracks().forEach(t => t.stop());
         isExporting = false; lockExportControls(false); $('#btnDoExport').disabled = false; $('#btnCancelExport').disabled = true;
         exportCleanup = null;
@@ -3611,6 +3640,11 @@
     video.addEventListener('play', ()=>{ $('#btnPlay').setAttribute('aria-pressed','true'); });
     video.addEventListener('pause', ()=>{ $('#btnPlay').setAttribute('aria-pressed','false'); syncAudioPlayback(); });
 
+    // A tap re-allows blocked timeline sounds on phones that need a gesture.
+    for (const gesture of ['pointerdown','keydown']) document.addEventListener(gesture, ()=>{
+      try { ensureAudioContext().resume(); } catch(e) {}
+      if (clipPlayBlocked) { clipPlayBlocked = false; syncAudioPlayback(); }
+    }, {passive:true});
     // Keyboard shortcuts
     document.addEventListener('keydown', (e)=>{
       if(isExporting){if(e.key==='Escape')cancelExport();return;}

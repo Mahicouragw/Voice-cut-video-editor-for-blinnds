@@ -102,7 +102,9 @@ class _EditorPageState extends State<EditorPage> {
           javaScriptEnabled: true,
           // Hybrid composition keeps TalkBack focus inside the page.
           useHybridComposition: true,
-          mediaPlaybackRequiresUserGesture: true,
+          // The editor starts clip playback from the timeline, not from taps:
+          // programmatic playback must be allowed or clips stay silent.
+          mediaPlaybackRequiresUserGesture: false,
           useShouldOverrideUrlLoading: true,
           supportZoom: true,
           allowFileAccessFromFileURLs: false,

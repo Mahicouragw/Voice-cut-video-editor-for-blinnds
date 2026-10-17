@@ -250,9 +250,50 @@
     if (voiceActive) return vol * (1 - level);
     return Math.min(1.5, vol * (1 + level));
   }
+  // Transcript script check: proves which language the transcript really is.
+  // Distinct scripts (Telugu, Tamil, Devanagari...) identify themselves;
+  // kana marks Japanese even among shared Kanji. Latin-script languages
+  // share letters, so Latin alone never contradicts a Latin choice.
+  const CAPTION_SCRIPT_RANGES = [
+    ['te', '\\u0C00-\\u0C7F'], ['ta', '\\u0B80-\\u0BFF'], ['dev', '\\u0900-\\u097F'],
+    ['kn', '\\u0C80-\\u0CFF'], ['ml', '\\u0D00-\\u0D7F'], ['bn', '\\u0980-\\u09FF'],
+    ['ur', '\\u0600-\\u06FF'], ['or', '\\u0B00-\\u0B7F'], ['zh', '\\u4E00-\\u9FFF'],
+  ];
+  function detectCaptionScript(text) {
+    const s = String(text || '');
+    const count = (range) => (s.match(new RegExp('[' + range + ']', 'g')) || []).length;
+    if (count('\\u3040-\\u30FF') >= 2) return 'ja';
+    let best = '', bestCount = 0;
+    for (const [code, range] of CAPTION_SCRIPT_RANGES) {
+      const n = count(range);
+      if (n > bestCount) { bestCount = n; best = code; }
+    }
+    return bestCount >= 3 ? best : '';
+  }
+  function captionScriptGroup(code) {
+    const raw = String(code || '').toLowerCase();
+    if (raw === 'dev') return 'dev';
+    const c = raw.slice(0, 2);
+    if (c === 'hi' || c === 'mr') return 'dev';
+    if (c === 'en' || c === 'es' || c === 'de' || c === 'ga' || c === 'mt' || c === 'la') return 'latin';
+    return c || '';
+  }
+  // Returns the found script when the transcript contradicts the chosen
+  // language ('latin' when a distinct script was chosen but none appears),
+  // or '' when they agree, or the text is too short to judge.
+  function captionScriptMismatch(cues, chosen) {
+    const want = captionScriptGroup(chosen);
+    if (!want) return '';
+    const text = (cues || []).map(c => c.text).join(' ');
+    if (text.split(/\s+/).filter(Boolean).length < 3) return '';
+    const found = detectCaptionScript(text);
+    if (want === 'latin') return found || '';
+    if (found && captionScriptGroup(found) === want) return '';
+    return found || 'latin';
+  }
   const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
   const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS };
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);
