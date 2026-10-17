@@ -724,6 +724,13 @@ const path = require('node:path');
     const output=path.join(dir,'export-mp4delete.mp4');await download.saveAs(output);
     const dur=Number(execFileSync('ffprobe',['-v','error','-show_entries','format=duration','-of','csv=p=0',output],{encoding:'utf8'}).trim());
     assert.ok(Math.abs(dur-2)<1,'MP4 export after delete must keep ~2s, got '+dur);
+    const streams=JSON.parse(execFileSync('ffprobe',['-v','error','-show_entries','stream=codec_type,codec_name','-of','json',output],{encoding:'utf8'})).streams;
+    const vcode=streams.find(s=>s.codec_type==='video').codec_name, acode=streams.find(s=>s.codec_type==='audio').codec_name;
+    assert.equal(vcode,'h264','MP4 video track must be H.264 for Instagram, got '+vcode);
+    assert.ok(['aac','opus'].includes(acode),'MP4 audio track must be AAC (Opus on AAC-less desktops), got '+acode);
+    const raw=fs.readFileSync(output);
+    assert.ok(raw.indexOf('moov')>-1&&raw.indexOf('moov')<raw.indexOf('mdat'),'movie header must come before media data');
+    execFileSync('ffmpeg',['-v','error','-i',output,'-f','null','-']);
   }
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
@@ -778,6 +785,6 @@ const path = require('node:path');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 delete length, voice filter dsp, clip export audio');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, voice filter dsp, clip export audio');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

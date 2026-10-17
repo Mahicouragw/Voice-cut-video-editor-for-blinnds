@@ -126,6 +126,21 @@
       return total > 0 ? total : (Number(p.duration) || 0);
     } catch { return Number(p.duration) || 0; }
   }
+  // Position on the kept timeline: maps a player time to seconds of kept
+  // video before it (deleted parts contribute nothing). Display only.
+  function keptPositionAt(rs, time) {
+    try {
+      const t = Number(time);
+      if (!Array.isArray(rs) || !rs.length || !Number.isFinite(t)) return Math.max(0, t || 0);
+      let kept = 0;
+      for (const r of rs) {
+        if (t >= r.end) kept += Math.max(0, r.end - r.start);
+        else if (t > r.start) { kept += t - r.start; break; }
+        else break;
+      }
+      return Math.max(0, kept);
+    } catch { return Math.max(0, Number(time) || 0); }
+  }
   // Nominal [start,end] chunk windows for long-audio processing.
   function splitChunks(duration, chunkSeconds) {
     const total = Number(duration), len = Number(chunkSeconds);
@@ -293,7 +308,7 @@
   }
   const VIDEO_FILTERS = { normal:'', bright:'brightness(1.25)', warm:'sepia(0.35) saturate(1.4)', cool:'brightness(1.05) contrast(1.08) saturate(1.2) hue-rotate(-12deg)', bw:'grayscale(1)', vintage:'sepia(0.5) contrast(1.1) brightness(0.95)', vivid:'saturate(1.8) contrast(1.15)', overflow:'brightness(1.15) saturate(1.35) contrast(1.05)' };
   const VOICE_FILTERS = { none:1, high:1.335, low:0.749, chipmunk:1.782, alien:1.5, robot:0.9 };
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS };
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);
