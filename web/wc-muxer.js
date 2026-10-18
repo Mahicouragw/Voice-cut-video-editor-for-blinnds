@@ -54,7 +54,11 @@
   const KEY_FLAGS = 0x02000000;   // sample is a sync sample, no dependencies
   const NONKEY_FLAGS = 0x01010000; // depends on others (P frame)
   const AUDIO_FLAGS = 0x02000000;
-  const VIDEO_TIMESCALE = 90000;
+  // Millisecond video timeline: every duration field in the file (movie and
+  // both tracks) shares the millisecond unit, so a reader that mixes up
+  // timescales still lands on the right length. Timescales are arbitrary in
+  // legal MP4; 1ms precision is plenty for video presentation timestamps.
+  const VIDEO_TIMESCALE = 1000;
 
   function ftypBox() {
     // Brands match ffmpeg's fragmented MP4 (major iso5 + iso6/mp41) plus
@@ -269,11 +273,12 @@
       this.sequence = 0;
       this.videoCfg = null;
       this.audioCfg = null;
-      this.videoDecodeStart = 0; // decode ticks at start of pending video run
-      this.audioDecodeStart = 0;
+      this.videoFirstPtsUs = null; // track-absolute decode grid origin (µs)
+      this.audioFirstPtsUs = null;
       this.videoNextDts = 0;
       this.audioNextDts = 0;
-      this.writeAudioPts = 0; // samples written (audio timescale ticks)
+      this.videoFragStart = 0;
+      this.audioFragStart = 0;
     }
     setVideoConfig(width, height, avcC) {
       this.videoCfg = { width, height, avcC: avcC instanceof Uint8Array ? avcC : new Uint8Array(avcC) };
@@ -321,37 +326,68 @@
         this._maybeHeader();
         if (!this.headerDone) throw new Error('Cannot finish: missing audio or video codec config.');
       }
-      const vsamples = this.video.splice(0, this.video.length);
-      const asamples = this.audio.splice(0, this.audio.length);
+      // Non-final flushes hold back one sample per track: the held stamp is
+      // the exact endpoint of the last emitted length, so batch boundaries
+      // stay position-exact instead of re-rounded.
+      const takeBatch = (queue) => {
+        if (isLast || queue.length < 2) return { emit: queue.splice(0, queue.length), nextPtsUs: null };
+        const emit = queue.splice(0, queue.length - 1);
+        return { emit, nextPtsUs: queue[0].ptsUs };
+      };
+      const vbatch = takeBatch(this.video);
+      const abatch = takeBatch(this.audio);
+      const vsamples = vbatch.emit;
+      const asamples = abatch.emit;
       if (!vsamples.length && !asamples.length) return;
       this.sequence += 1;
       const parts = [fullBox('mfhd', 0, 0, u32(this.sequence))];
       const mdatParts = [];
       let videoBytes = 0;
+      // Position-rounded chaining on a track-absolute grid: each decode
+      // stamp is the rounded position since the track's first stamp, each
+      // sample length the gap to the next stamp. Every stamp rounds once
+      // against the same origin, so batch boundaries are exact (no
+      // re-rounded fractions) and error never accumulates at any
+      // timescale. Only the true final sample of each track uses the
+      // caller-chained tail length (the exporter's nominal frame/block
+      // length, as before).
+      const chainBatch = (samples, timescale, firstPtsUs, nextPtsUs) => {
+        const pos = samples.map((s) => this._ticks(s.ptsUs - firstPtsUs, timescale));
+        return samples.map((s, i) => {
+          let duration;
+          if (i + 1 < samples.length) duration = Math.max(1, pos[i + 1] - pos[i]);
+          else if (nextPtsUs != null) duration = Math.max(1, this._ticks(nextPtsUs - firstPtsUs, timescale) - pos[i]);
+          else duration = this._ticks(s.durationUs, timescale) || 1;
+          return { dts: pos[i], duration };
+        });
+      };
       const vTrunSamples = [];
       if (vsamples.length) {
+        if (this.videoFirstPtsUs == null) this.videoFirstPtsUs = vsamples[0].ptsUs;
+        const chain = chainBatch(vsamples, VIDEO_TIMESCALE, this.videoFirstPtsUs, vbatch.nextPtsUs);
         for (let i = 0; i < vsamples.length; i++) {
           const s = vsamples[i];
-          const dur = this._ticks(s.durationUs, VIDEO_TIMESCALE) || 1;
-          const cts = this._ticks(s.ptsUs, VIDEO_TIMESCALE) - (this.videoNextDts);
+          const cts = this._ticks(s.ptsUs, VIDEO_TIMESCALE) - chain[i].dts;
           vTrunSamples.push({
-            duration: dur, size: s.data.length,
+            duration: chain[i].duration, size: s.data.length,
             flags: s.key ? KEY_FLAGS : NONKEY_FLAGS,
             ctsOffset: Math.max(0, cts) >>> 0,
           });
-          this.videoNextDts += dur;
           videoBytes += s.data.length;
           mdatParts.push(s.data);
         }
+        this.videoNextDts = chain[chain.length - 1].dts + vTrunSamples[vTrunSamples.length - 1].duration;
       }
       const aTrunSamples = [];
       if (asamples.length) {
-        for (const s of asamples) {
-          const dur = this._ticks(s.durationUs, this.audioCfg.sampleRate) || 1;
-          aTrunSamples.push({ duration: dur, size: s.data.length, flags: AUDIO_FLAGS, ctsOffset: 0 });
-          this.audioNextDts += dur;
+        if (this.audioFirstPtsUs == null) this.audioFirstPtsUs = asamples[0].ptsUs;
+        const chain = chainBatch(asamples, this.audioCfg.sampleRate, this.audioFirstPtsUs, abatch.nextPtsUs);
+        for (let i = 0; i < asamples.length; i++) {
+          const s = asamples[i];
+          aTrunSamples.push({ duration: chain[i].duration, size: s.data.length, flags: AUDIO_FLAGS, ctsOffset: 0 });
           mdatParts.push(s.data);
         }
+        this.audioNextDts = chain[chain.length - 1].dts + aTrunSamples[aTrunSamples.length - 1].duration;
       }
       // Two-pass: build trafs with placeholder offsets to measure moof, then patch.
       const buildTrafs = (vOff, aOff) => {
