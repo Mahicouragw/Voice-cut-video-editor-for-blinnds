@@ -136,7 +136,7 @@ test('fragment durations chain: tfdt advances by previous durations', () => {
     assert.equal(videoTfdts[i], videoTfdts[i - 1] + videoDur[i - 1], `video tfdt chains at fragment ${i}`);
   }
   const totalVideo = videoDur.reduce((n, d) => n + d, 0);
-  assert.ok(Math.abs(totalVideo - 90000) <= 30, `30 frames at 30fps must span ~90000 ticks, got ${totalVideo}`);
+  assert.ok(Math.abs(totalVideo - 1000) <= 2, `30 frames at 30fps must span ~1000 ms-ticks, got ${totalVideo}`);
 });
 
 test('key frames flagged sync, inter frames flagged dependent', () => {
@@ -224,16 +224,16 @@ test('header patch writes the real muxed durations into moov', () => {
   assert.equal(traks.length, 2);
   const tkhd1 = child(traks[0] + 8, traks[0] + u32at(moov, traks[0]), 'tkhd');
   assert.equal(u32at(moov, tkhd1 + 20), 1, 'video track id intact');
-  assert.equal(u32at(moov, tkhd1 + 28), 90000, 'video tkhd duration');
+  assert.equal(u32at(moov, tkhd1 + 28), 1000, 'video tkhd duration');
   const mdia1 = child(traks[0] + 8, traks[0] + u32at(moov, traks[0]), 'mdia');
   const mdhd1 = child(mdia1 + 8, mdia1 + u32at(moov, mdia1), 'mdhd');
-  assert.equal(u32at(moov, mdhd1 + 20), 90000, 'video mdhd timescale untouched');
-  assert.equal(u32at(moov, mdhd1 + 24), 90000, 'video mdhd duration');
+  assert.equal(u32at(moov, mdhd1 + 20), 1000, 'video mdhd timescale untouched');
+  assert.equal(u32at(moov, mdhd1 + 24), 1000, 'video mdhd duration');
   const tkhd2 = child(traks[1] + 8, traks[1] + u32at(moov, traks[1]), 'tkhd');
-  assert.equal(u32at(moov, tkhd2 + 28), 48128, 'audio tkhd duration');
+  assert.equal(u32at(moov, tkhd2 + 28), 48127, 'audio tkhd duration');
   const mdia2 = child(traks[1] + 8, traks[1] + u32at(moov, traks[1]), 'mdia');
   const mdhd2 = child(mdia2 + 8, mdia2 + u32at(moov, mdia2), 'mdhd');
-  assert.equal(u32at(moov, mdhd2 + 24), 48128, 'audio mdhd duration');
+  assert.equal(u32at(moov, mdhd2 + 24), 48127, 'audio mdhd duration');
 });
 
 test('header patch handles v1 boxes and ignores non-moov input', () => {
@@ -327,7 +327,7 @@ for (const secs of [3, 4, 30]) {
 test('142s VFR soak: chained durations stay exact, no assumed fps', () => {
   const r = runScenario({ videoGaps: gaps(4260, 33333, 500), audioGaps: gaps(6658, 21333) });
   assert.ok(Math.abs(r.total.movie - 142000) < 250, `movie ${r.total.movie}ms`);
-  assert.ok(Math.abs(r.total.tracks[1] / 90 - 142000) < 250, 'video track ms');
+  assert.ok(Math.abs(r.total.tracks[1] - 142000) < 250, 'video track ms');
   assert.ok(Math.abs(r.total.tracks[2] / 48 - 142000) < 250, 'audio track ms');
   assert.ok(Math.abs(r.videoEndUs - r.audioEndUs) < 250000, 'A/V ends within 250ms');
   const tops = topBoxes(r.bytes).map((b) => b.type);
@@ -340,7 +340,7 @@ test('trimmed window: durations measure the window, not the source', () => {
   // 9-minute source trimmed to 142s: stamps restart at the trim point.
   const r = runScenario({ videoGaps: gaps(3408, 41667, 800), audioGaps: gaps(6658, 21333), videoStartUs: 41000, audioStartUs: 3000 });
   assert.ok(Math.abs(r.total.movie - 142000) < 250, `movie ${r.total.movie}ms`);
-  assert.ok(r.total.tracks[1] < 200 * 90000, 'video track must not carry source-position ticks');
+  assert.ok(r.total.tracks[1] < 200 * 1000, 'video track must not carry source-position ticks');
 });
 
 test('mixed frame rate mid-export does not skew the timeline', () => {
@@ -367,4 +367,64 @@ test('late audio start does not corrupt the chains', () => {
 test('cancelled export finalizes only fed samples (no invented tail)', () => {
   const r = runScenario({ videoGaps: gaps(1500, 33333, 500), audioGaps: gaps(2344, 21333) });
   assert.ok(r.total.movie > 40000 && r.total.movie < 60000, `movie ${r.total.movie}ms ~ fed 50s`);
+});
+
+test('video track uses the millisecond timescale (all durations share one unit)', () => {
+  const buf = buildFile('aac');
+  const tops = topBoxes(buf);
+  const moov = tops.find((b) => b.type === 'moov');
+  const view = buf.subarray(moov.start, moov.start + moov.size);
+  const mdhdAt = [];
+  const scan = (start, end) => {
+    let o = start;
+    while (o + 8 <= end) {
+      const size = u32at(view, o);
+      const type = String.fromCharCode(view[o + 4], view[o + 5], view[o + 6], view[o + 7]);
+      if (type === 'mdhd') mdhdAt.push(o);
+      if (['moov', 'trak', 'mdia'].includes(type)) scan(o + 8, o + size);
+      o += size;
+    }
+  };
+  scan(8, view.length);
+  assert.equal(mdhdAt.length, 2);
+  assert.equal(u32at(view, mdhdAt[0] + 20), 1000, 'video mdhd timescale is milliseconds');
+  assert.equal(u32at(view, mdhdAt[1] + 20), 48000, 'audio mdhd timescale stays the sample rate');
+});
+
+test('millisecond video ticks equal milliseconds: header matches packet sum', () => {
+  const r = runScenario({ videoGaps: gaps(4260, 33333, 500), audioGaps: gaps(6658, 21333) });
+  assert.ok(Math.abs(r.total.tracks[1] - r.total.movie) < 60,
+    `video ticks ${r.total.tracks[1]} must read as ms near movie ${r.total.movie}ms`);
+});
+
+test('fragment boundaries stay exact (no re-rounding across flushes)', () => {
+  const mux = new WCMuxer({ fragmentUs: 100000 }); // ~33 boundaries over 3.3s
+  mux.setVideoConfig(320, 180, AVCC);
+  mux.setAudioConfig({ codec: 'aac', sampleRate: 48000, channels: 2, bitrate: 128000, asc: ASC });
+  mux.takeBoxes();
+  for (let f = 0; f < 100; f++) mux.addVideoSample(f * 33000, 33000, f === 0, VID);
+  for (let a = 0; a < 154; a++) mux.addAudioSample(a * 21400, 21400, AUD);
+  mux.finish();
+  const total = mux.totalDurations();
+  assert.equal(total.tracks[1], 3300, `video must span exactly 3300ms, got ${total.tracks[1]}`);
+});
+
+test('video presentation offsets stay near the first-frame latency', () => {
+  const r = runScenario({ videoGaps: gaps(900, 33333, 500), audioGaps: gaps(1407, 21333) });
+  const truns = findTruns(r.bytes);
+  const videoCts = [];
+  // First trun of each fragment pair belongs to the video track.
+  const tops = topBoxes(r.bytes);
+  for (const t of truns) {
+    const idx = tops.filter((b) => b.type === 'moof' && b.start <= t.at).length - 1;
+    if (!videoCts[idx]) videoCts[idx] = [];
+    if (t === truns.filter((u) => tops.filter((b) => b.type === 'moof' && b.start <= u.at).length - 1 === idx)[0]) {
+      videoCts[idx].push(...t.samples.map((s) => s.cts));
+    }
+  }
+  const flat = videoCts.flat();
+  assert.ok(flat.length > 800, 'most samples are video');
+  const mean = flat.reduce((a, b) => a + b, 0) / flat.length;
+  assert.ok(mean > 28 && mean < 38, `mean video cts ~33ms, got ${mean}`);
+  assert.ok(Math.max(...flat) - Math.min(...flat) <= 4, 'cts must not drift across fragments');
 });
