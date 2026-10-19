@@ -163,3 +163,27 @@ test('kept seeking jumps over deleted parts and clamps to kept ends',()=>{
   assert.equal(keptSeekAt([],5,5),5); // invalid input returns the time untouched
   assert.equal(keptSeekAt(rs,30,NaN),30);
 });
+test('speed ranges shrink kept time and survive round trips',()=>{
+  const {speedRangesOf,speedAt,keptRangeLen,keptRangesDuration,keptPositionAt,keptSeekAt,retainedDuration,addSpeedRange}=require('../web/core');
+  const p={duration:600,trimStart:0,trimEnd:600,segments:[{start:0,end:600}],speedRanges:[{start:120,end:240,rate:2},{start:360,end:480,rate:2}]};
+  assert.equal(speedRangesOf(p).length,2);
+  assert.equal(speedRangesOf({}).length,0);
+  assert.equal(speedAt(p,130),2); assert.equal(speedAt(p,10),1); assert.equal(speedAt(p,240),1);
+  assert.equal(keptRangeLen({start:0,end:600},speedRangesOf(p)),480);
+  assert.equal(keptRangesDuration([{start:0,end:600}],speedRangesOf(p)),480);
+  assert.equal(retainedDuration(p),480);
+  assert.equal(keptPositionAt([{start:0,end:600}],600,speedRangesOf(p)),480);
+  assert.equal(keptPositionAt([{start:0,end:600}],130,speedRangesOf(p)),125);
+  assert.equal(keptSeekAt([{start:0,end:600}],0,90,speedRangesOf(p)),90);
+  assert.equal(keptSeekAt([{start:0,end:600}],0,150,speedRangesOf(p)),180);
+  assert.equal(keptSeekAt([{start:0,end:600}],600,-60,speedRangesOf(p)),540);
+  // old two-arg calls behave exactly as before
+  assert.equal(keptPositionAt([{start:0,end:600}],130),130);
+  assert.equal(keptSeekAt([{start:0,end:600}],0,90),90);
+  const added=addSpeedRange({duration:600,speedRanges:[]},60,120,2);
+  assert.equal(added.length,1); assert.equal(added[0].rate,2);
+  assert.throws(()=>addSpeedRange(p,100,130,2),/overlap/);
+  assert.throws(()=>addSpeedRange(p,100,100,2),/valid range/);
+  assert.throws(()=>addSpeedRange(p,100,200,0),/valid speed/);
+  assert.throws(()=>addSpeedRange(p,100,700,2),/valid range/);
+});

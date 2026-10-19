@@ -212,7 +212,7 @@ test('direct MP4 export runs before the recording path for mp4 projects', () => 
 
 test('position displays follow the kept timeline after deletes', () => {
   assert.match(page, /function keptPositionNow\(\)/);
-  assert.match(page, /keptPositionAt\(rs, video\.currentTime\)/);
+  assert.match(page, /keptPositionAt\(rs, video\.currentTime, VoiceCutCore\.speedRangesOf\(project\)\)/);
   assert.match(page, /Current position \$\{formatTimeVerbose\(kp\.pos\)\} of \$\{formatTimeVerbose\(kp\.total\)\}/);
   assert.match(page, /Total: \$\{formatTime\(kpNow\.total\)\}/);
 });

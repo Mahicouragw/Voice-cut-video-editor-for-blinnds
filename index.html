@@ -337,6 +337,21 @@
           <button id="btnDeleteRange" class="danger" aria-label="Delete typed time range, button">Delete This Range</button>
         </div>
         <div class="flex gap-8 wrap items-center" style="grid-column:1/-1;">
+          <label for="speedRangeStart">Speed from</label>
+          <input id="speedRangeStart" type="text" value="00:00" aria-label="Speed range start time, text input" style="width:90px;">
+          <label for="speedRangeEnd">to</label>
+          <input id="speedRangeEnd" type="text" value="00:00" aria-label="Speed range end time, text input" style="width:90px;">
+          <label for="speedRangeRate" class="sr-only">Speed for this range</label>
+          <select id="speedRangeRate" aria-label="Speed for this range, select">
+            <option value="0.5">0.5x</option>
+            <option value="1">1x (normal)</option>
+            <option value="1.5">1.5x</option>
+            <option value="2" selected>2x</option>
+          </select>
+          <button id="btnApplySpeedRange" aria-label="Apply speed to typed time range, button">Apply Speed</button>
+        </div>
+        <div id="speedRangesList" style="grid-column:1/-1;"></div>
+        <div class="flex gap-8 wrap items-center" style="grid-column:1/-1;">
           <button id="btnMarkStart" aria-label="Select current position as start time, button">Select as Start Time</button>
           <button id="btnMarkEnd" aria-label="Select current position as end time, button">Select as End Time</button>
           <button id="btnClearMarks" aria-label="Clear marked start and end times, button">Clear Marks</button>
