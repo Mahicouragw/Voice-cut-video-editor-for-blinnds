@@ -3869,22 +3869,39 @@
     });
     $('#btnApplySpeedRange').addEventListener('click', ()=>{
       try{
-        const ss=parseTime($('#speedRangeStart').value), se=parseTime($('#speedRangeEnd').value);
+        let ss=parseTime($('#speedRangeStart').value), se=parseTime($('#speedRangeEnd').value);
         const rate=parseFloat($('#speedRangeRate').value);
         if (!Number.isFinite(ss) || !Number.isFinite(se)) throw new Error('Type a valid start and end time.');
+        let swapped=false;
+        if (ss>se) { const t=ss; ss=se; se=t; swapped=true; }
+        const swapNote=swapped?'Start was after end, so I swapped them. ':'';
         if (rate===1) {
           const before=project.speedRanges.length;
           project.speedRanges=project.speedRanges.filter(s=>!(ss<s.end-0.001&&se>s.start+0.001));
           const removed=before-project.speedRanges.length;
           pushHistory(); renderAll();
-          announce(removed?`Removed ${removed} speed change${removed===1?'':'s'}. Back to normal speed.`:'That part already plays at normal speed.');
+          announce(swapNote+(removed?`Removed ${removed} speed change${removed===1?'':'s'}. Back to normal speed.`:'That part already plays at normal speed.'));
           return;
         }
         const pieces=VoiceCutCore.addSpeedRange(project,ss,se,rate);
         project.speedRanges=pieces.map(s=>s.id?{...s}:{...s,id:uid()});
         pushHistory(); renderAll();
-        announce(`Speed ${rate}x applied from ${formatTimeVerbose(ss)} to ${formatTimeVerbose(se)}. Timeline is now ${formatTimeVerbose(VoiceCutCore.retainedDuration(project))}.`);
+        announce(swapNote+`Speed ${rate}x applied from ${formatTimeVerbose(ss)} to ${formatTimeVerbose(se)}. Timeline is now ${formatTimeVerbose(VoiceCutCore.retainedDuration(project))}.`);
       }catch(e){ announce(e.message,true); }
+    });
+    $('#btnSpeedMarkStart').addEventListener('click', ()=>{
+      if (!project.videoFile && !project.duration) { announce('Upload a video first.', true); return; }
+      const pos=Math.round(video.currentTime*100)/100;
+      $('#speedRangeStart').value=formatTime(pos);
+      announce(`Speed start set to ${formatTimeVerbose(pos)}. Now play to where the fast part ends and press Speed End Here.`);
+    });
+    $('#btnSpeedMarkEnd').addEventListener('click', ()=>{
+      if (!project.videoFile && !project.duration) { announce('Upload a video first.', true); return; }
+      const pos=Math.round(video.currentTime*100)/100;
+      $('#speedRangeEnd').value=formatTime(pos);
+      const ss=parseTime($('#speedRangeStart').value);
+      const warn=Number.isFinite(ss)&&pos<ss-0.001?' That is before the start. I will fix the order when you press Apply Speed.':' Pick a speed and press Apply Speed.';
+      announce(`Speed end set to ${formatTimeVerbose(pos)}.${warn}`);
     });
     $('#speedRangesList').addEventListener('click', (e)=>{
       const b=e.target.closest?e.target.closest('[data-delete-speed]'):null;

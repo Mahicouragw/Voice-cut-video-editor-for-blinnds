@@ -231,3 +231,12 @@ test('skip and frame buttons move on the kept timeline', () => {
   assert.match(page, /Previous frame\. Position \$\{formatTimeVerbose\(keptPositionNow\(\)\.pos\)\}/);
   assert.match(page, /Next frame\. Position \$\{formatTimeVerbose\(keptPositionNow\(\)\.pos\)\}/);
 });
+
+test('speed range has position buttons and forgives swapped times', () => {
+  assert.match(html, /id="btnSpeedMarkStart" aria-label="Set speed range start to the current video position, button"/);
+  assert.match(html, /id="btnSpeedMarkEnd" aria-label="Set speed range end to the current video position, button"/);
+  assert.match(page, /\$\('#btnSpeedMarkStart'\)\.addEventListener\('click'/);
+  assert.match(page, /\$\('#btnSpeedMarkEnd'\)\.addEventListener\('click'/);
+  assert.match(page, /if \(ss>se\) \{ const t=ss; ss=se; se=t; swapped=true; \}/);
+  assert.match(page, /Start was after end, so I swapped them\./);
+});
