@@ -23,9 +23,9 @@
     captions: [],
     captionSettings: {preview:true,burnIn:true},
     segments: [], // {id, start, end, label}
-    originalAudio: { volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'medium' },
+    originalAudio: { volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'off' },
     clips: [], // {id, name, type: 'music'|'voiceover', file, url, startTime, trimStart, trimEnd, duration, volume, muted, fadeIn, fadeOut, noiseReduction, trackIndex}
-    ducking: { enabled: true, level: 30, silenceWait: 0 },
+    ducking: { enabled: false, level: 30, silenceWait: 0 },
     playbackSpeed: 1,
     skipAmount: 5,
     resolution: '1080',
@@ -197,6 +197,14 @@
       pauseAllAudio();
       currentRequest?.abort(); mediaEpoch++;
       project = saved; captionDefaults();
+      // One-time migration: projects saved with untouched automatic
+      // processing (old pristine defaults) go back to the pure original.
+      let autoProcessingMigrated = false;
+      if (VoiceCutCore.needsAutoProcessingMigration(project)) {
+        VoiceCutCore.applyAutoProcessingMigration(project);
+        autoProcessingMigrated = true;
+        autoSave();
+      }
       applyPrefsToProject(false);
       project.videoUrl = project.videoFile ? URL.createObjectURL(project.videoFile) : null;
       project.clips.forEach(c => { c.url = c.file ? URL.createObjectURL(c.file) : null; c.originalUrl = c.originalFile ? URL.createObjectURL(c.originalFile) : null; });
@@ -211,14 +219,14 @@
       $('#section-video').scrollIntoView();
       // Put the screen-reader cursor on Play so focus is never lost on open.
       $('#btnPlay')?.focus({preventScroll:true});
-      announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}.`);
+      announce(`Project opened: ${project.name}. Duration ${formatTimeVerbose(retainedAndTotal(project).kept)}.` + (autoProcessingMigrated ? ' Automatic sound changes are now off, so it sounds like your original. Turn on noise reduction or voice ducking anytime from Audio.' : ''));
     } catch(e) { announce('Cannot open project: ' + e.message, true); }
   }
   function resetProjectState() {
     pauseAllAudio();
     currentRequest?.abort(); mediaEpoch++;
     clearTimeout(autoSaveTimeout); dirty = false;
-    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
     applyPrefsToProject(true);
     selectedClipId = null;
     video.src = '';
@@ -1245,13 +1253,11 @@
       if (clip.fadeOut>0 && timeInClip > clipDur - clip.fadeOut) fadeVol = Math.min(fadeVol, (clipDur - timeInClip)/clip.fadeOut);
       // Apply fade as multiplier
       const finalVol = clip.muted ? 0 : effectiveVolume * Math.max(0,fadeVol);
+      // Smooth gain moves so ducking, fades and mutes glide instead of
+      // clicking: 50ms follows every change without dulling any of them.
       node.gain.gain.cancelScheduledValues(audioContext.currentTime);
-      node.gain.gain.value = finalVol;
+      node.gain.gain.setTargetAtTime(finalVol, audioContext.currentTime, 0.05);
       audioEl.playbackRate = project.playbackSpeed;
-      // Don't ramp too often for fade, set directly
-      // Use gain node for volume, but we already used for ducking, so combine
-      // For simplicity, set gain to finalVol
-      // Actually we already set gain for ducking, so adjust
 
       if (shouldPlay) {
         const desiredAudioTime = (currentTime - clip.startTime) + clip.trimStart;
@@ -4102,7 +4108,7 @@
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
         await VoiceCutStorage.remove(project.id);
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'medium'}, clips:[], videoFilter:'normal', ducking:{enabled:true, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.removeEventListener('error', videoLoadError);
         video.src='';
