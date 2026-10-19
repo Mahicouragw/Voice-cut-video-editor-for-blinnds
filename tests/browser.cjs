@@ -154,6 +154,23 @@ const path = require('node:path');
     assert.ok(changed.outLen > changed.inLen, 'robot filter slows audio, lengthening it');
     assert.ok(changed.meanDiff > 0.05, 'robot filter must audibly change audio, got '+changed.meanDiff);
   }
+  // Echo really repeats into a tail, not just relabeling volume.
+  {
+    const echo = await page.evaluate(async ()=>{
+      const sr = 44100, len = sr;
+      const ctx = new OfflineAudioContext(1, len, sr);
+      const buf = ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for (let i=0;i<len;i++) d[i]=Math.sin(2*Math.PI*440*i/sr)*0.5;
+      const out = await window.VoiceCutTestAudio.renderVoiceFilter(buf, 'echo');
+      const o = out.getChannelData(0);
+      let tail=0, tn=0;
+      for (let i=len;i<o.length;i+=7) { tail+=Math.abs(o[i]); tn++; }
+      return {inLen:len,outLen:o.length,tailMean:tail/Math.max(1,tn)};
+    });
+    assert.ok(echo.outLen >= echo.inLen + 44100, 'echo must append a ~1.5s tail, got '+echo.outLen);
+    assert.ok(echo.tailMean > 0.01, 'echo tail must carry audible repeats, got '+echo.tailMean);
+  }
   // Voice Focus noise-reduction level applies live without errors.
   await showPanel('cleanup');
   await page.locator('#globalNoiseReduction').selectOption('voicefocus');
@@ -789,7 +806,28 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // Recording offers a voice effect that bakes into the voice-over.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await showPanel('audio');await showSub('voiceover');
+  await page.locator('#btnRecordVO').click();
+  await page.locator('#btnStartRecording').click();
+  await page.waitForFunction(()=>!document.querySelector('#btnStopRecordingDialog').disabled,{},{timeout:30000});
+  await page.waitForTimeout(1500);
+  await page.locator('#btnStopRecordingDialog').click();
+  await page.locator('#recordReview:not(.hidden)').waitFor({timeout:30000});
+  await page.locator('#recordEffectSelect').selectOption('echo');
+  await page.locator('#btnPreviewRecordEffect').click();
+  await page.waitForFunction(()=>document.querySelector('#recordEffectStatus').textContent.includes('Apply to keep it'),{},{timeout:30000});
+  await page.locator('#btnApplyRecord').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('with Echo'),{},{timeout:30000});
+  await page.waitForFunction(()=>!document.querySelector('#recordDialog').open,{},{timeout:30000});
+  await page.waitForFunction(()=>document.querySelector('#timelineContainer').textContent.includes('Voiceover_'),{},{timeout:30000});
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -31,7 +31,7 @@ test('video and voice filter tables cover the promised looks', () => {
     assert.ok(name in VIDEO_FILTERS, name);
   }
   assert.equal(VIDEO_FILTERS.normal, '');
-  assert.deepEqual(Object.keys(VOICE_FILTERS).sort(), ['alien', 'chipmunk', 'high', 'low', 'none', 'robot']);
+  assert.deepEqual(Object.keys(VOICE_FILTERS).sort(), ['alien', 'chipmunk', 'echo', 'high', 'low', 'none', 'robot']);
   assert.ok(VOICE_FILTERS.chipmunk > VOICE_FILTERS.high && VOICE_FILTERS.high > 1 && VOICE_FILTERS.low < 1);
 });
 
