@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS} = require('../web/core');
+const {computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration} = require('../web/core');
 
 test('voice curve marks speech active and silence quiet', () => {
   const sr = 8000, len = sr * 4, samples = new Float32Array(len);
@@ -55,4 +55,23 @@ test('recording failures speak plain words', () => {
   assert.match(recordErrorHint('AbortError'), /interrupted/);
   assert.equal(recordErrorHint('TypeError'), '');
   assert.equal(recordErrorHint(''), '');
+});
+
+test('pristine old processing defaults migrate to off exactly once', () => {
+  const pristine = () => ({ originalAudio: { noiseReduction: 'medium' }, ducking: { enabled: true, level: 30, silenceWait: 0 } });
+  assert.equal(needsAutoProcessingMigration(pristine()), true);
+  assert.equal(needsAutoProcessingMigration(null), false);
+  assert.equal(needsAutoProcessingMigration({}), false);
+  assert.equal(needsAutoProcessingMigration({ originalAudio: {}, ducking: null }), false);
+  // Anything the user actually touched stays untouched.
+  assert.equal(needsAutoProcessingMigration({ originalAudio: { noiseReduction: 'light' }, ducking: { enabled: true, level: 30, silenceWait: 0 } }), false);
+  assert.equal(needsAutoProcessingMigration({ originalAudio: { noiseReduction: 'medium' }, ducking: { enabled: false, level: 30, silenceWait: 0 } }), false);
+  assert.equal(needsAutoProcessingMigration({ originalAudio: { noiseReduction: 'medium' }, ducking: { enabled: true, level: 50, silenceWait: 0 } }), false);
+  assert.equal(needsAutoProcessingMigration({ originalAudio: { noiseReduction: 'medium' }, ducking: { enabled: true, level: 30, silenceWait: 5 } }), false);
+  const p = pristine();
+  applyAutoProcessingMigration(p);
+  assert.equal(p.originalAudio.noiseReduction, 'off');
+  assert.equal(p.ducking.enabled, false);
+  assert.equal(p.autoProcessingMigrated, true);
+  assert.equal(needsAutoProcessingMigration(p), false, 'migration must not run twice');
 });
