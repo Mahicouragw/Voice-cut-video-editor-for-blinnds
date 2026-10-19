@@ -240,3 +240,8 @@ test('speed range has position buttons and forgives swapped times', () => {
   assert.match(page, /if \(ss>se\) \{ const t=ss; ss=se; se=t; swapped=true; \}/);
   assert.match(page, /Start was after end, so I swapped them\./);
 });
+
+test('export only completes a range the playhead truly reached', () => {
+  const hits = page.match(/if \(video\.currentTime < range\.end - 0\.6\) throw new Error\('Video playback stopped too early\. Please try exporting again\.'\);/g) || [];
+  assert.equal(hits.length, 2, 'both export pumps must guard the ended flag, got ' + hits.length);
+});

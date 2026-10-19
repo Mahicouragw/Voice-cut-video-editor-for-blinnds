@@ -2273,6 +2273,11 @@
             clockStart(1); // holds run at wall speed, like the recording path
           }
           if (video.currentTime >= range.end - 0.015 || video.ended) {
+            // A loaded browser can report the video ended while the playhead
+            // is nowhere near the range end (stall/EOS glitch). Believe the
+            // playhead, not the flag: fail loudly instead of handing back a
+            // cut-short file with an "Export complete" smile.
+            if (video.currentTime < range.end - 0.6) throw new Error('Video playback stopped too early. Please try exporting again.');
             completed += range.end - range.start;
             rangeIndex++;
             if (rangeIndex === ranges.length) { await finishExport(); return; }
@@ -2570,6 +2575,9 @@
             freezeHoldUntil = holdStart + freeze.hold*1000;
           }
           if (video.currentTime >= range.end - 0.015 || video.ended) {
+            // Same guard as the direct path: a stall/EOS glitch must fail
+            // loudly, never deliver a cut-short recording as "complete".
+            if (video.currentTime < range.end - 0.6) throw new Error('Video playback stopped too early. Please try exporting again.');
             completed += VoiceCutCore.keptRangeLen(range, VoiceCutCore.speedRangesOf(project));
             rangeIndex++;
             if (rangeIndex === ranges.length) { recorder.stop(); return; }
