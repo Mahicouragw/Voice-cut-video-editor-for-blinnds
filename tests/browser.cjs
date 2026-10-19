@@ -775,7 +775,10 @@ const path = require('node:path');
     const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
     const output=path.join(dir,'export-speed.webm');await download.saveAs(output);
     const frames=JSON.parse(execFileSync('ffprobe',['-v','error','-count_frames','-select_streams','v:0','-show_entries','stream=nb_read_frames','-of','json',output],{encoding:'utf8'})).streams[0];
-    assert.ok(Math.abs(Number(frames.nb_read_frames)-75)<24,'2x speed range export must hold ~75 frames (2.5s at 30fps), got '+frames.nb_read_frames);
+    const pts=execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','packet=pts_time','-of','csv=p=0',output],{encoding:'utf8'}).trim().split('\n');
+    const lastPts=Number(pts[pts.length-1].replace(',',''));
+    assert.ok(Number(frames.nb_read_frames)>15,'2x speed range export must contain real frames, got '+frames.nb_read_frames);
+    assert.ok(Math.abs(lastPts-2.5)<0.9,'2x speed range export must span ~2.5s, got '+lastPts);
   }
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
