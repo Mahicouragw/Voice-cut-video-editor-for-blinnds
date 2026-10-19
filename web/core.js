@@ -122,42 +122,110 @@
   function retainedDuration(p) {
     try {
       const rs = ranges(p);
-      const total = rs.reduce((s, r) => s + Math.max(0, r.end - r.start), 0);
+      const total = keptRangesDuration(rs, speedRangesOf(p));
       return total > 0 ? total : (Number(p.duration) || 0);
     } catch { return Number(p.duration) || 0; }
+  }
+  // Per-range playback speed (2.32): [{start,end,rate}] in original video
+  // time. Sped parts contribute len/rate kept seconds, so the timeline,
+  // seeks, captions and exports all shrink or stretch together.
+  function speedRangesOf(p) {
+    if (!p || !Array.isArray(p.speedRanges)) return [];
+    return p.speedRanges
+      .filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end) && Number.isFinite(s.rate) && s.end > s.start && s.rate > 0)
+      .map(s => ({ start: s.start, end: s.end, rate: s.rate, id: s.id }))
+      .sort((a, b) => a.start - b.start);
+  }
+  function speedAt(p, t) {
+    const ts = Number(t);
+    if (!Number.isFinite(ts)) return 1;
+    for (const s of speedRangesOf(p)) { if (ts >= s.start && ts < s.end) return s.rate; }
+    return 1;
+  }
+  function keptRangeLen(range, speeds) {
+    if (!range || !(range.end > range.start)) return 0;
+    const spd = Array.isArray(speeds) ? speeds : [];
+    const pts = [range.start];
+    for (const s of spd) {
+      if (s.end > range.start && s.start < range.end) pts.push(Math.min(range.end, Math.max(range.start, s.start)), Math.min(range.end, Math.max(range.start, s.end)));
+    }
+    pts.push(range.end);
+    pts.sort((a, b) => a - b);
+    let kept = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      if (b <= a) continue;
+      const mid = (a + b) / 2;
+      let rate = 1;
+      for (const s of spd) { if (mid >= s.start && mid < s.end) { rate = s.rate; break; } }
+      kept += (b - a) / rate;
+    }
+    return kept;
+  }
+  function keptRangesDuration(ranges, speeds) {
+    const spd = Array.isArray(speeds) ? speeds : [];
+    return (ranges || []).reduce((s, r) => s + keptRangeLen(r, spd), 0);
+  }
+  function addSpeedRange(p, start, end, rate) {
+    const s = Number(start), e = Number(end), r = Number(rate);
+    if (!Number.isFinite(s) || !Number.isFinite(e) || s < 0 || e - s < 0.05 || e > (Number(p.duration) || 0) + 0.01)
+      throw new Error('Type a valid range inside the video, at least 0.05 seconds long.');
+    if (!Number.isFinite(r) || r <= 0)
+      throw new Error('Choose a valid speed.');
+    const existing = speedRangesOf(p);
+    for (const o of existing) {
+      if (s < o.end - 0.001 && e > o.start + 0.001)
+        throw new Error('That overlaps a speed range you already set. Delete it first or pick another part.');
+    }
+    return [...existing, { start: s, end: e, rate: r }].sort((a, b) => a.start - b.start);
   }
   // Ripple navigation: move deltaKept seconds along kept video, jumping
   // over deleted parts, clamped to the kept range. Returns the player time
   // (original timeline) to seek to. Unedited projects behave exactly like
   // plain currentTime += delta clamped to the trim window.
-  function keptSeekAt(rs, time, delta) {
+  function keptSeekAt(rs, time, delta, speeds) {
     try {
       const t = Number(time), d = Number(delta);
       if (!Array.isArray(rs) || !rs.length || !Number.isFinite(t) || !Number.isFinite(d)) return time;
+      const spd = Array.isArray(speeds) ? speeds : [];
       const sorted = [...rs].filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
         .sort((a, b) => a.start - b.start);
       if (!sorted.length) return time;
-      const total = sorted.reduce((s, r) => s + (r.end - r.start), 0);
-      const target = Math.max(0, Math.min(total, keptPositionAt(sorted, t) + d));
+      const total = keptRangesDuration(sorted, spd);
+      const target = Math.max(0, Math.min(total, keptPositionAt(sorted, t, spd) + d));
       let acc = 0;
       for (const r of sorted) {
-        const len = r.end - r.start;
-        if (target <= acc + len) return Math.min(r.end, r.start + (target - acc));
-        acc += len;
+        const pts = [r.start];
+        for (const s of spd) {
+          if (s.end > r.start && s.start < r.end) pts.push(Math.min(r.end, Math.max(r.start, s.start)), Math.min(r.end, Math.max(r.start, s.end)));
+        }
+        pts.push(r.end);
+        pts.sort((a, b) => a - b);
+        for (let i = 0; i + 1 < pts.length; i++) {
+          const a = pts[i], b = pts[i + 1];
+          if (b <= a) continue;
+          const mid = (a + b) / 2;
+          let rate = 1;
+          for (const s of spd) { if (mid >= s.start && mid < s.end) { rate = s.rate; break; } }
+          const klen = (b - a) / rate;
+          if (target <= acc + klen) return Math.min(b, a + (target - acc) * rate);
+          acc += klen;
+        }
       }
       return sorted[sorted.length - 1].end;
     } catch { return time; }
   }
   // Position on the kept timeline: maps a player time to seconds of kept
   // video before it (deleted parts contribute nothing). Display only.
-  function keptPositionAt(rs, time) {
+  function keptPositionAt(rs, time, speeds) {
     try {
       const t = Number(time);
       if (!Array.isArray(rs) || !rs.length || !Number.isFinite(t)) return Math.max(0, t || 0);
+      const spd = Array.isArray(speeds) ? speeds : [];
       let kept = 0;
       for (const r of rs) {
-        if (t >= r.end) kept += Math.max(0, r.end - r.start);
-        else if (t > r.start) { kept += t - r.start; break; }
+        if (t >= r.end) kept += keptRangeLen(r, spd);
+        else if (t > r.start) { kept += keptRangeLen({ start: r.start, end: t }, spd); break; }
         else break;
       }
       return Math.max(0, kept);
@@ -348,7 +416,7 @@
     p.autoProcessingMigrated = true;
     return p;
   }
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration };
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

@@ -24,3 +24,9 @@ test('invalid times, NaN, empty text and unbounded lists rejected',()=>{
 test('active cues are half-open and do not mutate project data',()=>{
  const cues=[{start:0,end:1,text:'A'},{start:1,end:2,text:'B'}];assert.equal(C.active(cues,1),'B');C.forExport(cues,[{start:0,end:2}],2);assert.equal(cues[1].start,1);
 });
+test('forExport maps cues through speed ranges',()=>{
+ const out=C.forExport([{start:130,end:140,text:'Hi'}],[{start:0,end:600}],1,[{start:120,end:240,rate:2}]);
+ assert.equal(out.length,1);assert.equal(out[0].start,125);assert.equal(out[0].end,130);
+ const plain=C.forExport([{start:1,end:9,text:'Hello'}],[{start:2,end:4},{start:6,end:10}],2);
+ assert.equal(plain.length,2); // unchanged when no speed ranges are passed
+});

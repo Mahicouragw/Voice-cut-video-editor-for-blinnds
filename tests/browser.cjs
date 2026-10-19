@@ -757,6 +757,29 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // A 2x speed range shortens the timeline, the preview rate and the export.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await page.locator('#speedRangeStart').fill('00:01');await page.locator('#speedRangeEnd').fill('00:02');await page.locator('#btnApplySpeedRange').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Timeline is now'),{},{timeout:30000});
+  assert.match(await page.locator('#speedRangesList').textContent(),/2x/);
+  await page.locator('#btnPlay').click();
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').playbackRate===2,{},{timeout:15000});
+  await page.evaluate(()=>document.querySelector('#mainVideo').pause());
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('webm');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-speed.webm');await download.saveAs(output);
+    const frames=JSON.parse(execFileSync('ffprobe',['-v','error','-count_frames','-select_streams','v:0','-show_entries','stream=nb_read_frames','-of','json',output],{encoding:'utf8'})).streams[0];
+    assert.ok(Math.abs(Number(frames.nb_read_frames)-75)<24,'2x speed range export must hold ~75 frames (2.5s at 30fps), got '+frames.nb_read_frames);
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   // A recorded voice-over is audible in the export, not just on the timeline.
   await page.goto('http://127.0.0.1:3099');
   await page.setInputFiles('#fileVideo',videoPath);
@@ -854,6 +877,6 @@ const path = require('node:path');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

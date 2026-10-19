@@ -28,15 +28,25 @@
     return validate(cues,duration);
   }
   function active(cues,time) { return (cues || []).filter(c=>time>=c.start && time<c.end).map(c=>c.text).join('\n'); }
-  function forExport(cues,ranges,speed=1) {
+  function forExport(cues,ranges,speed=1,speeds=[]) {
     if (!Number.isFinite(speed) || speed<=0) throw new Error('Invalid playback speed.');
+    const spd=Array.isArray(speeds)?speeds.filter(s=>s&&Number.isFinite(s.start)&&Number.isFinite(s.end)&&Number.isFinite(s.rate)&&s.end>s.start&&s.rate>0):[];
+    const rateAt=t=>{ for (const s of spd) { if (t>=s.start&&t<s.end) return s.rate; } return 1; };
     let offset=0; const output=[];
     for (const range of ranges) {
-      for (const cue of validate(cues)) {
-        const start=Math.max(cue.start,range.start), end=Math.min(cue.end,range.end);
-        if (end>start) output.push({text:cue.text,start:(offset+start-range.start)/speed,end:(offset+end-range.start)/speed});
+      const pts=[range.start];
+      for (const s of spd) { if (s.end>range.start&&s.start<range.end) pts.push(Math.min(range.end,Math.max(range.start,s.start)),Math.min(range.end,Math.max(range.start,s.end))); }
+      pts.push(range.end); pts.sort((a,b)=>a-b);
+      for (let i=0;i+1<pts.length;i++) {
+        const a=pts[i],b=pts[i+1];
+        if (b<=a) continue;
+        const rate=rateAt((a+b)/2);
+        for (const cue of validate(cues)) {
+          const start=Math.max(cue.start,a), end=Math.min(cue.end,b);
+          if (end>start) output.push({text:cue.text,start:(offset+(start-a)/rate)/speed,end:(offset+(end-a)/rate)/speed});
+        }
+        offset+=(b-a)/rate;
       }
-      offset+=range.end-range.start;
     }
     return output.sort((a,b)=>a.start-b.start);
   }

@@ -23,6 +23,7 @@
     captions: [],
     captionSettings: {preview:true,burnIn:true},
     segments: [], // {id, start, end, label}
+    speedRanges: [], // {id, start, end, rate} in original video time
     originalAudio: { volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'off' },
     clips: [], // {id, name, type: 'music'|'voiceover', file, url, startTime, trimStart, trimEnd, duration, volume, muted, fadeIn, fadeOut, noiseReduction, trackIndex}
     ducking: { enabled: false, level: 30, silenceWait: 0 },
@@ -226,7 +227,7 @@
     pauseAllAudio();
     currentRequest?.abort(); mediaEpoch++;
     clearTimeout(autoSaveTimeout); dirty = false;
-    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], speedRanges:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
     applyPrefsToProject(true);
     selectedClipId = null;
     video.src = '';
@@ -240,6 +241,7 @@
     project.crop ||= {preset:'original',x:0,y:0,w:100,h:100};
     project.rotation ||= 0;
     project.freezes ||= [];
+    project.speedRanges ||= [];
   }
   function renderCaptions() {
     captionDefaults();
@@ -369,7 +371,7 @@
   }
   async function downloadSubtitles(format) {
     try{
-      const cues=VoiceCutCaptions.forExport(project.captions,VoiceCutCore.ranges(project),project.playbackSpeed);
+      const cues=VoiceCutCaptions.forExport(project.captions,VoiceCutCore.ranges(project),project.playbackSpeed,VoiceCutCore.speedRangesOf(project));
       if(!cues.length)throw new Error('No captions fall within the retained video segments.');
       const text=VoiceCutCaptions.serialize(cues,format);
       if(window.flutter_inappwebview){await window.flutter_inappwebview.callHandler('shareSubtitles',text,format);}
@@ -530,7 +532,7 @@
   }
   function renderAll() {
     captionDefaults();
-    renderCaptions();renderEdit();renderMarkStatus();
+    renderCaptions();renderEdit();renderMarkStatus();renderSpeedRanges();
     $('#projectNameInput').value = project.name;
     $('#skipAmountSelect').value = project.skipAmount;
     $('#playbackSpeedSelect').value = project.playbackSpeed;
@@ -1196,6 +1198,14 @@
   }
   function syncAudioPlayback(forExport = false) {
     if (isExporting && !forExport) return;
+    // Per-range speed: the video (and its own sound) follows the speed
+    // range under the playhead in preview and in both export pumps, while
+    // overlay clips keep the global rate. The global preview speed still
+    // multiplies in, and still cancels out of the WebCodecs file as before.
+    if (video && Number.isFinite(video.currentTime)) {
+      const wantRate = project.playbackSpeed * VoiceCutCore.speedAt(project, video.currentTime);
+      if (video.playbackRate !== wantRate) video.playbackRate = wantRate;
+    }
     // FIX: Ensure video element muted state matches project setting to prevent double audio
     if (video) {
       if (project.originalAudio.enhanced || project.originalAudio.muted) {
@@ -1335,7 +1345,7 @@
   function keptPositionNow() {
     try {
       const rs = VoiceCutCore.ranges(project);
-      return { pos: VoiceCutCore.keptPositionAt(rs, video.currentTime), total: VoiceCutCore.retainedDuration(project) };
+      return { pos: VoiceCutCore.keptPositionAt(rs, video.currentTime, VoiceCutCore.speedRangesOf(project)), total: VoiceCutCore.retainedDuration(project) };
     } catch (e) { return { pos: video.currentTime, total: project.duration }; }
   }
   // Ripple navigation like other editors: skip and frame buttons move on
@@ -1343,7 +1353,7 @@
   // exactly as before.
   function keptSeekNow(delta) {
     try {
-      return VoiceCutCore.keptSeekAt(VoiceCutCore.ranges(project), video.currentTime, delta);
+      return VoiceCutCore.keptSeekAt(VoiceCutCore.ranges(project), video.currentTime, delta, VoiceCutCore.speedRangesOf(project));
     } catch (e) {
       return Math.max(project.trimStart, Math.min(project.trimEnd || project.duration, video.currentTime + delta));
     }
@@ -1415,6 +1425,14 @@
     else if (ms!==null && me===null) el.textContent = `Start marked at ${formatTimeVerbose(ms)}. Play to where the part ends and press Select as End Time.`;
     else if (ms===null) el.textContent = `End marked at ${formatTimeVerbose(me)}. Press Select as Start Time to mark where the part starts.`;
     else el.textContent = `Marked part: ${formatTimeVerbose(ms)} to ${formatTimeVerbose(me)}, length ${formatTimeVerbose(me-ms)}. Choose Delete Marked Part, Split at Marks, or Keep Only Marked Part.`;
+  }
+  function renderSpeedRanges() {
+    captionDefaults();
+    const box = $('#speedRangesList');
+    if (!box) return;
+    const list = [...project.speedRanges].sort((a, b) => a.start - b.start);
+    if (!list.length) { box.innerHTML = '<p style="font-size:14px;margin:4px 0;">No speed changes yet. Type a start and end time above and press Apply.</p>'; return; }
+    box.innerHTML = list.map(s => `<div class="flex gap-8 wrap items-center" style="grid-column:1/-1;"><span>${formatTime(s.start)} to ${formatTime(s.end)} at ${s.rate}x</span><button data-delete-speed="${s.id}" aria-label="Delete speed ${s.rate}x from ${formatTimeVerbose(s.start)} to ${formatTimeVerbose(s.end)}, button">Delete</button></div>`).join('');
   }
   function markStartPoint() {
     if (!project.videoFile && !project.duration) { announce('Upload a video first.', true); return; }
@@ -1969,7 +1987,7 @@
     exportedVideoEl.removeAttribute('src');
     for (const id of ['exportedVideo', 'btnPlayExported', 'btnDownloadExported', 'btnShareExported']) $('#' + id).classList.add('hidden');
     const ranges = VoiceCutCore.ranges(project);
-    const duration = ranges.reduce((sum, r) => sum + r.end - r.start, 0);
+    const duration = VoiceCutCore.keptRangesDuration(ranges, VoiceCutCore.speedRangesOf(project));
     const freezes = [...(project.freezes || [])].filter(f => Number.isFinite(f.at) && Number.isFinite(f.hold)).sort((a, b) => a.at - b.at);
     const exportDuration = duration + freezes.reduce((sum, f) => sum + f.hold, 0);
     if (!(video.videoWidth > 0 && video.videoHeight > 0) || video.readyState < 2) {
@@ -2386,7 +2404,7 @@
       const mimeCandidates = wanted.filter(value => { try { return MediaRecorder.isTypeSupported(value); } catch(e) { return false; } });
       if (!mimeCandidates.length) throw new Error(project.format.toUpperCase() + ' recording is unavailable in this browser. Choose another format.');
       const mime = mimeCandidates[Math.min(exportAttempt, mimeCandidates.length - 1)];
-      const duration = ranges.reduce((sum,r) => sum+r.end-r.start,0);
+      const duration = VoiceCutCore.keptRangesDuration(ranges, VoiceCutCore.speedRangesOf(project));
       const freezes = [...(project.freezes||[])].filter(f=>Number.isFinite(f.at)&&Number.isFinite(f.hold)).sort((a,b)=>a.at-b.at);
       const exportDuration = duration + freezes.reduce((sum,f)=>sum+f.hold,0);
       const rotation = ((Number(project.rotation)%360)+360)%360;
@@ -2552,7 +2570,7 @@
             freezeHoldUntil = holdStart + freeze.hold*1000;
           }
           if (video.currentTime >= range.end - 0.015 || video.ended) {
-            completed += range.end-range.start;
+            completed += VoiceCutCore.keptRangeLen(range, VoiceCutCore.speedRangesOf(project));
             rangeIndex++;
             if (rangeIndex === ranges.length) { recorder.stop(); return; }
             recorder.pause(); video.pause();
@@ -2565,7 +2583,7 @@
           drawFrame();
           if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx,VoiceCutCaptions.active(project.captions,video.currentTime),exportCanvas.width,exportCanvas.height);
           syncAudioPlayback(true);
-          reportProgress(completed+holdsDone+video.currentTime-ranges[rangeIndex].start);
+          reportProgress(completed+holdsDone+VoiceCutCore.keptPositionAt([ranges[rangeIndex]],video.currentTime,VoiceCutCore.speedRangesOf(project)));
           raf = requestAnimationFrame(frame);
         } catch(e) { cancelExport(); announce('Export failed: '+e.message,true); }
       }
@@ -3849,6 +3867,33 @@
         announce(`Deleted ${formatTimeVerbose(ds)} to ${formatTimeVerbose(de)}. Export will skip it.`);
       }catch(e){ announce(e.message,true); }
     });
+    $('#btnApplySpeedRange').addEventListener('click', ()=>{
+      try{
+        const ss=parseTime($('#speedRangeStart').value), se=parseTime($('#speedRangeEnd').value);
+        const rate=parseFloat($('#speedRangeRate').value);
+        if (!Number.isFinite(ss) || !Number.isFinite(se)) throw new Error('Type a valid start and end time.');
+        if (rate===1) {
+          const before=project.speedRanges.length;
+          project.speedRanges=project.speedRanges.filter(s=>!(ss<s.end-0.001&&se>s.start+0.001));
+          const removed=before-project.speedRanges.length;
+          pushHistory(); renderAll();
+          announce(removed?`Removed ${removed} speed change${removed===1?'':'s'}. Back to normal speed.`:'That part already plays at normal speed.');
+          return;
+        }
+        const pieces=VoiceCutCore.addSpeedRange(project,ss,se,rate);
+        project.speedRanges=pieces.map(s=>s.id?{...s}:{...s,id:uid()});
+        pushHistory(); renderAll();
+        announce(`Speed ${rate}x applied from ${formatTimeVerbose(ss)} to ${formatTimeVerbose(se)}. Timeline is now ${formatTimeVerbose(VoiceCutCore.retainedDuration(project))}.`);
+      }catch(e){ announce(e.message,true); }
+    });
+    $('#speedRangesList').addEventListener('click', (e)=>{
+      const b=e.target.closest?e.target.closest('[data-delete-speed]'):null;
+      if (!b) return;
+      const id=b.getAttribute('data-delete-speed');
+      project.speedRanges=project.speedRanges.filter(s=>String(s.id)!==id);
+      pushHistory(); renderAll();
+      announce('Speed change deleted. Timeline updated.');
+    });
     $('#btnKeepSection').addEventListener('click', ()=>{
       if (!selectedClipId) { announce('No section selected.'); return; }
       const seg = project.segments.find(s=>s.id===selectedClipId);
@@ -4108,7 +4153,7 @@
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
         await VoiceCutStorage.remove(project.id);
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], speedRanges:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.removeEventListener('error', videoLoadError);
         video.src='';
