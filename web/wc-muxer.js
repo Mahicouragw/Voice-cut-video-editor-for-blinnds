@@ -59,6 +59,13 @@
   // timescales still lands on the right length. Timescales are arbitrary in
   // legal MP4; 1ms precision is plenty for video presentation timestamps.
   const VIDEO_TIMESCALE = 1000;
+  // Millisecond audio timeline, same reasoning: every duration field in
+  // the file (movie and both tracks) shares the millisecond unit, no
+  // matter which track a reader looks at. The real sample rate is still
+  // declared in the audio sample entry where decoders read it; only the
+  // timestamp grid is milliseconds. Position-rounded chaining keeps the
+  // total exact (21.333ms blocks land as 21/21/22 gaps on the grid).
+  const AUDIO_TIMESCALE = 1000;
 
   function ftypBox() {
     // Brands match ffmpeg's fragmented MP4 (major iso5 + iso6/mp41) plus
@@ -172,7 +179,7 @@
       mvhdBox(),
       trakBox(1, true, VIDEO_TIMESCALE, opts.width, opts.height,
         avc1Entry(opts.width, opts.height, opts.avcC)),
-      trakBox(2, false, opts.audioSampleRate, 0, 0, audioEntry),
+      trakBox(2, false, AUDIO_TIMESCALE, 0, 0, audioEntry),
       box('mvex', trexBox(1), trexBox(2)));
   }
 
@@ -381,7 +388,7 @@
       const aTrunSamples = [];
       if (asamples.length) {
         if (this.audioFirstPtsUs == null) this.audioFirstPtsUs = asamples[0].ptsUs;
-        const chain = chainBatch(asamples, this.audioCfg.sampleRate, this.audioFirstPtsUs, abatch.nextPtsUs);
+        const chain = chainBatch(asamples, AUDIO_TIMESCALE, this.audioFirstPtsUs, abatch.nextPtsUs);
         for (let i = 0; i < asamples.length; i++) {
           const s = asamples[i];
           aTrunSamples.push({ duration: chain[i].duration, size: s.data.length, flags: AUDIO_FLAGS, ctsOffset: 0 });
@@ -412,8 +419,8 @@
     // (1000) units, tracks in their own timescale units. Call after finish().
     totalDurations() {
       const vSec = this.videoNextDts / VIDEO_TIMESCALE;
-      const aSec = this.audioCfg && this.audioCfg.sampleRate
-        ? this.audioNextDts / this.audioCfg.sampleRate : 0;
+      const aSec = this.audioCfg && AUDIO_TIMESCALE
+        ? this.audioNextDts / AUDIO_TIMESCALE : 0;
       return {
         movie: Math.max(0, Math.round(Math.max(vSec, aSec) * 1000)),
         tracks: {
@@ -424,7 +431,7 @@
     }
   }
 
-  const api = { WCMuxer, VIDEO_TIMESCALE, KEY_FLAGS, NONKEY_FLAGS, patchMoovDurations };
+  const api = { WCMuxer, VIDEO_TIMESCALE, AUDIO_TIMESCALE, KEY_FLAGS, NONKEY_FLAGS, patchMoovDurations };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VoiceCutMuxer = api;
 })(typeof self !== 'undefined' ? self : this);

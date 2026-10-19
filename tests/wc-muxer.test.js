@@ -213,7 +213,7 @@ test('header patch writes the real muxed durations into moov', () => {
   };
   const mvhd = child(8, moov.length, 'mvhd');
   assert.equal(u32at(moov, mvhd + 20), 1000, 'mvhd timescale untouched');
-  assert.equal(u32at(moov, mvhd + 24), 1003, 'mvhd carries the real length in ms');
+  assert.equal(u32at(moov, mvhd + 24), 1002, 'mvhd carries the real length in ms');
   const traks = [];
   let o = 8;
   while (o + 8 <= moov.length) {
@@ -230,10 +230,10 @@ test('header patch writes the real muxed durations into moov', () => {
   assert.equal(u32at(moov, mdhd1 + 20), 1000, 'video mdhd timescale untouched');
   assert.equal(u32at(moov, mdhd1 + 24), 1000, 'video mdhd duration');
   const tkhd2 = child(traks[1] + 8, traks[1] + u32at(moov, traks[1]), 'tkhd');
-  assert.equal(u32at(moov, tkhd2 + 28), 48127, 'audio tkhd duration');
+  assert.equal(u32at(moov, tkhd2 + 28), 1002, 'audio tkhd duration');
   const mdia2 = child(traks[1] + 8, traks[1] + u32at(moov, traks[1]), 'mdia');
   const mdhd2 = child(mdia2 + 8, mdia2 + u32at(moov, mdia2), 'mdhd');
-  assert.equal(u32at(moov, mdhd2 + 24), 48127, 'audio mdhd duration');
+  assert.equal(u32at(moov, mdhd2 + 24), 1002, 'audio mdhd duration');
 });
 
 test('header patch handles v1 boxes and ignores non-moov input', () => {
@@ -328,7 +328,7 @@ test('142s VFR soak: chained durations stay exact, no assumed fps', () => {
   const r = runScenario({ videoGaps: gaps(4260, 33333, 500), audioGaps: gaps(6658, 21333) });
   assert.ok(Math.abs(r.total.movie - 142000) < 250, `movie ${r.total.movie}ms`);
   assert.ok(Math.abs(r.total.tracks[1] - 142000) < 250, 'video track ms');
-  assert.ok(Math.abs(r.total.tracks[2] / 48 - 142000) < 250, 'audio track ms');
+  assert.ok(Math.abs(r.total.tracks[2] - 142000) < 250, 'audio track ms');
   assert.ok(Math.abs(r.videoEndUs - r.audioEndUs) < 250000, 'A/V ends within 250ms');
   const tops = topBoxes(r.bytes).map((b) => b.type);
   assert.equal(tops[0], 'ftyp');
@@ -388,7 +388,7 @@ test('video track uses the millisecond timescale (all durations share one unit)'
   scan(8, view.length);
   assert.equal(mdhdAt.length, 2);
   assert.equal(u32at(view, mdhdAt[0] + 20), 1000, 'video mdhd timescale is milliseconds');
-  assert.equal(u32at(view, mdhdAt[1] + 20), 48000, 'audio mdhd timescale stays the sample rate');
+  assert.equal(u32at(view, mdhdAt[1] + 20), 1000, 'audio mdhd timescale is milliseconds');
 });
 
 test('millisecond video ticks equal milliseconds: header matches packet sum', () => {
@@ -427,4 +427,14 @@ test('video presentation offsets stay near the first-frame latency', () => {
   const mean = flat.reduce((a, b) => a + b, 0) / flat.length;
   assert.ok(mean > 28 && mean < 38, `mean video cts ~33ms, got ${mean}`);
   assert.ok(Math.max(...flat) - Math.min(...flat) <= 4, 'cts must not drift across fragments');
+});
+
+test('audio ticks read as milliseconds too (every track shares one unit)', () => {
+  const r = runScenario({ videoGaps: gaps(4260, 33333, 500), audioGaps: gaps(6658, 21333) });
+  assert.ok(Math.abs(r.total.tracks[2] - r.total.movie) < 60,
+    `audio ticks ${r.total.tracks[2]} must read as ms near movie ${r.total.movie}ms`);
+  // 21.333ms blocks land as 21/21/22 gaps on the millisecond grid: exact total.
+  const truns = findTruns(r.bytes);
+  const durs = truns.flatMap((t) => t.samples.map((s) => s.duration));
+  assert.ok(durs.every((d) => d >= 21 && d <= 34), 'all sample lengths are sane ms values');
 });
