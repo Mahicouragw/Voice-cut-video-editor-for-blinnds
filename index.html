@@ -478,6 +478,7 @@
           <option value="chipmunk">Chipmunk</option>
           <option value="alien">Alien</option>
           <option value="robot">Robot</option>
+          <option value="echo">Echo</option>
         </select>
         <button id="btnPreviewVoiceFilter" aria-label="Preview voice changer on the voice-over, button">Preview Voice</button>
       </div>
@@ -894,6 +895,20 @@
       <p style="color:var(--text2); text-align:center;">Microphone will capture your voice. Video playback pauses to prevent echo. Recording starts after microphone permission is granted.</p>
       <div id="recordReview" class="hidden mt-16" style="text-align:center;">
         <audio id="recordPreview" controls style="width:100%;" aria-label="Recorded voice preview"></audio>
+        <div class="flex gap-8 wrap items-center" style="justify-content:center; margin-top:8px;">
+          <label for="recordEffectSelect">Voice effect</label>
+          <select id="recordEffectSelect" aria-label="Voice effect for this recording, select">
+            <option value="none">No effect</option>
+            <option value="high">High voice</option>
+            <option value="low">Low voice</option>
+            <option value="chipmunk">Chipmunk</option>
+            <option value="alien">Alien</option>
+            <option value="robot">Robot</option>
+            <option value="echo">Echo</option>
+          </select>
+          <button id="btnPreviewRecordEffect" aria-label="Preview the chosen effect on this recording, button">Preview Effect</button>
+        </div>
+        <p id="recordEffectStatus" role="status" style="font-size:14px;"></p>
         <div class="flex gap-8 wrap" style="justify-content:center; margin-top:8px;">
           <button id="btnApplyRecord" class="primary" aria-label="Apply recording as voice-over, button">Play Voice, then Apply</button>
           <button id="btnDiscardRecord" aria-label="Discard recording, button">Discard</button>

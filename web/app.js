@@ -1010,7 +1010,9 @@
   }
   async function renderVoiceFilter(buffer, filter) {
     const rate = VoiceCutCore.VOICE_FILTERS[filter] || 1;
-    const sr = buffer.sampleRate, len = Math.max(1, Math.ceil(buffer.length / rate));
+    const sr = buffer.sampleRate;
+    const tail = filter === 'echo' ? Math.ceil(sr * 1.5) : 0; // room for the repeats to fade
+    const len = Math.max(1, Math.ceil(buffer.length / rate)) + tail;
     const off = new OfflineAudioContext(buffer.numberOfChannels, len, sr);
     const src = off.createBufferSource();
     src.buffer = buffer; src.playbackRate.value = rate;
@@ -1032,7 +1034,18 @@
     } else if (filter==='robot') {
       ringMod(45, 0.5);
     }
-    head.connect(off.destination);
+    if (filter === 'echo') {
+      // Real echo: one 280ms delay loop with decaying feedback plus the dry voice.
+      const dry = off.createGain(); dry.gain.value = 0.85;
+      const delay = off.createDelay(1.0); delay.delayTime.value = 0.28;
+      const fb = off.createGain(); fb.gain.value = 0.38;
+      const wet = off.createGain(); wet.gain.value = 0.45;
+      head.connect(dry); dry.connect(off.destination);
+      head.connect(delay); delay.connect(fb); fb.connect(delay);
+      delay.connect(wet); wet.connect(off.destination);
+    } else {
+      head.connect(off.destination);
+    }
     src.start(0);
     return off.startRendering();
   }
@@ -1494,6 +1507,8 @@
   function openRecordDialog() {
     $('#recordDialog').showModal();
     $('#recordPosition').value = formatTime(video.currentTime);
+    $('#recordEffectSelect').value = 'none';
+    $('#recordEffectStatus').textContent = '';
   }
   let recordingStream = null;
   let pendingRecording = null;
@@ -1591,14 +1606,58 @@
   }
   function closeRecordDialog() { if ($('#recordDialog').open) $('#recordDialog').close(); }
   function clearRecordPreview() {
+    if (pendingRecording && pendingRecording.effect && pendingRecording.effect.url) {
+      try { URL.revokeObjectURL(pendingRecording.effect.url); } catch(e) {}
+    }
     pendingRecording = null;
     $('#recordReview').classList.add('hidden');
     $('#recordPreview').pause(); $('#recordPreview').removeAttribute('src');
     if (recordPreviewUrl) { URL.revokeObjectURL(recordPreviewUrl); recordPreviewUrl = null; }
   }
-  function applyPendingRecording() {
+  async function previewRecordEffect() {
+    const statusEl = $('#recordEffectStatus');
+    if (!pendingRecording) { const m='Record something first.'; statusEl.textContent=m; announce(m,true); return; }
+    const sel = $('#recordEffectSelect');
+    const filter = sel.value;
+    const label = sel.selectedOptions[0].textContent;
+    try {
+      if (!filter || filter === 'none') {
+        if (pendingRecording.effect && pendingRecording.effect.url) { URL.revokeObjectURL(pendingRecording.effect.url); pendingRecording.effect = null; }
+        $('#recordPreview').src = recordPreviewUrl;
+        statusEl.textContent = 'Previewing the original recording.'; announce('Previewing the original recording.');
+        return;
+      }
+      statusEl.textContent = 'Adding ' + label + '…'; announce('Adding ' + label + '.');
+      const decoded = await decodeAudioFile(pendingRecording.blob);
+      const changed = await renderVoiceFilter(decoded, filter);
+      const blob = audioBufferToWavBlob(changed);
+      if (pendingRecording.effect && pendingRecording.effect.url) URL.revokeObjectURL(pendingRecording.effect.url);
+      const url = URL.createObjectURL(blob);
+      pendingRecording.effect = { filter, blob, url };
+      $('#recordPreview').src = url;
+      try { await $('#recordPreview').play(); } catch(e) {}
+      statusEl.textContent = 'Previewing with ' + label + '. Apply to keep it.';
+      announce('Previewing with ' + label + '. Apply to keep it.');
+    } catch(e) { const m='Effect preview stopped: ' + e.message; statusEl.textContent=m; announce(m,true); }
+  }
+  async function applyPendingRecording() {
     if (!pendingRecording) { closeRecordDialog(); return; }
     const {blob, position} = pendingRecording;
+    const sel = $('#recordEffectSelect');
+    const filter = sel ? sel.value : 'none';
+    if (filter && filter !== 'none') {
+      const label = sel.selectedOptions[0].textContent;
+      announce('Applying voice-over with ' + label + '.');
+      try {
+        const cached = pendingRecording.effect;
+        const effected = (cached && cached.filter === filter) ? cached.blob
+          : audioBufferToWavBlob(await renderVoiceFilter(await decodeAudioFile(blob), filter));
+        addAudioFile(new File([effected],`Voiceover_${Date.now()}_${filter}.wav`,{type:'audio/wav'}),'voiceover',position);
+        clearRecordPreview(); closeRecordDialog();
+        announce('Voice-over applied with ' + label + '.');
+        return;
+      } catch(e) { announce('The ' + label + ' effect failed. Applying the plain recording instead.', true); }
+    }
     const extension = blob.type.includes('mp4') ? 'm4a' : 'webm';
     addAudioFile(new File([blob],`Voiceover_${Date.now()}.${extension}`,{type:blob.type}),'voiceover',position);
     clearRecordPreview(); closeRecordDialog();
@@ -3704,6 +3763,7 @@
     $('#btnStartRecording').addEventListener('click', startRecording);
     $('#btnStopRecordingDialog').addEventListener('click', stopRecording);
     $('#btnApplyRecord').addEventListener('click', applyPendingRecording);
+    $('#btnPreviewRecordEffect').addEventListener('click', previewRecordEffect);
     $('#btnDiscardRecord').addEventListener('click', ()=>discardPendingRecording(false));
     $('#btnStartVideoRecording').addEventListener('click', startVideoRecording);
     $('#btnStopVideoRecording').addEventListener('click', stopVideoRecording);
