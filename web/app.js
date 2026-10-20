@@ -1149,23 +1149,27 @@
   let liveVoiceTap = null; // {analyser, data, floor, hang}
   let voiceClipTap = null; // shared speech tap fed by voice-over clip gains
   let duckSilenceStart = null; // video time when the current silence began
+  let duckSmHotSince = 0, duckSmSpokeUntil = 0; // wall-clock ducking smoother
   function makeTap(sourceNode) {
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.4;
     sourceNode.connect(analyser);
-    return {analyser, data:new Float32Array(analyser.fftSize), floor:1e-4, hang:0};
+    return {analyser, data:new Float32Array(analyser.fftSize), floor:1e-4, loud:false};
   }
-  // Speech reads well above the room floor; short pauses inside speech keep
-  // counting as voice. Music never feeds these taps, so ducking cannot echo.
+  // Speech reads well above the room floor. Two thresholds (hysteresis) so
+  // sound hovering at the edge cannot flutter the answer; timing (attack
+  // and hangover) lives in one wall-clock smoother in syncAudioPlayback so
+  // preview and export behave identically. Music never feeds these taps,
+  // so ducking cannot echo.
   function tapSpeaking(tap) {
     tap.analyser.getFloatTimeDomainData(tap.data);
     let e = 0;
     for (let i = 0; i < tap.data.length; i += 2) e += tap.data[i] * tap.data[i];
     e /= tap.data.length / 2;
     if (e < tap.floor) tap.floor = e; else tap.floor += (e - tap.floor) * 0.01;
-    const speaking = e > Math.max(1e-5, tap.floor * 8);
-    tap.hang = speaking ? 6 : Math.max(0, tap.hang - 1);
-    return speaking || tap.hang > 0;
+    if (!tap.loud && e > Math.max(1e-5, tap.floor * 8)) tap.loud = true;
+    else if (tap.loud && e < Math.max(1e-5, tap.floor * 3)) tap.loud = false;
+    return tap.loud;
   }
   // Live speech check for big videos that skip the precomputed voice map:
   // watches the video's own sound as it plays.
@@ -1229,12 +1233,22 @@
     // so ducking listens to its speech instead of treating it as always on.
     const enhancedAudible = project.clips.some(c=>c.isEnhancedOriginal && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
     const enhancedSpeaking = enhancedAudible && (voiceCurve ? VoiceCutCore.voiceActiveAt(voiceCurve, currentTime) : liveVoiceClipActive());
-    const voiceActive = voiceoverActive || originalSpeaking || enhancedSpeaking;
+    const rawVoice = voiceoverActive || originalSpeaking || enhancedSpeaking;
+    // One wall-clock smoother for every voice signal (timeline, precomputed
+    // map, live taps): sound must persist 150ms to dip the music, so single
+    // transients never duck, and the dip holds 400ms past the last sound so
+    // the music glides instead of fluttering. Preview and export share this
+    // clock, so what you hear while editing is what the file gets.
+    const nowMs = performance.now();
+    if (rawVoice) {
+      if (!duckSmHotSince) duckSmHotSince = nowMs;
+      if (nowMs - duckSmHotSince >= 150) duckSmSpokeUntil = nowMs + 400;
+    } else duckSmHotSince = 0;
     // Silence wait: the music stays dipped until quiet lasts the chosen time.
-    let duckVoice = voiceActive;
+    let duckVoice = nowMs <= duckSmSpokeUntil;
     const silenceWait = Math.max(0, Number(project.ducking.silenceWait) || 0);
     if (silenceWait > 0) {
-      if (voiceActive) duckSilenceStart = null;
+      if (duckVoice) duckSilenceStart = null;
       else {
         if (duckSilenceStart === null || currentTime < duckSilenceStart - 0.5) duckSilenceStart = currentTime;
         if (currentTime - duckSilenceStart < silenceWait) duckVoice = true;

@@ -245,3 +245,23 @@ test('export only completes a range the playhead truly reached', () => {
   const hits = page.match(/if \(video\.currentTime < range\.end - 0\.6\) throw new Error\('Video playback stopped too early\. Please try exporting again\.'\);/g) || [];
   assert.equal(hits.length, 2, 'both export pumps must guard the ended flag, got ' + hits.length);
 });
+
+test('ducking moves only music clips, never original/voiceover/sfx', () => {
+  assert.match(page, /if \(clip\.type==='music' && project\.ducking\.enabled\)/);
+  const callers = page.match(/duckedGain\(/g) || [];
+  assert.equal(callers.length, 1, 'duckedGain must be applied at exactly one site, got ' + callers.length);
+  const origWrites = page.match(/originalGain\.gain/g) || [];
+  assert.equal(origWrites.length, 0, 'original stem gain must never be written, got ' + origWrites.length);
+  const volWrites = page.match(/video\.volume = [^\n]*/g) || [];
+  assert.ok(volWrites.length > 0, 'expected original volume writes to exist');
+  const bad = volWrites.filter(l => /\b(duck|duckVoice|voiceActive|originalSpeaking|enhancedSpeaking|duckedGain)\b/.test(l));
+  assert.equal(bad.length, 0, 'original element volume must never follow voice/ducking: ' + bad.join(' | '));
+});
+
+test('ducking detector is hysteresis plus a wall-clock smoother', () => {
+  assert.match(page, /function tapSpeaking\(tap\)/);
+  assert.match(page, /tap\.floor \* 8/);
+  assert.match(page, /tap\.floor \* 3/);
+  assert.match(page, /nowMs - duckSmHotSince >= 150/);
+  assert.match(page, /duckSmSpokeUntil = nowMs \+ 400/);
+});
