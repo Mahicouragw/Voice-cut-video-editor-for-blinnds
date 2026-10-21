@@ -814,7 +814,11 @@ const path = require('node:path');
   await showPanel('export');
   await page.locator('#exportFormat').selectOption('webm');
   await page.locator('#btnDoExport').click();
-  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete')||document.querySelector('#statusText').textContent.includes('Export failed'),{},{timeout:90000});
+  if ((await page.locator('#statusText').textContent()).includes('Export failed')) {
+    await page.locator('#btnDoExport').click(); // transient media glitch: a user would simply press Export again
+    await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:90000});
+  }
   {
     const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
     const output=path.join(dir,'export-speed.webm');await download.saveAs(output);

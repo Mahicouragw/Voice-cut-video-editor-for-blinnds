@@ -2119,7 +2119,7 @@
     let venc = null, aenc = null, reader = null, audioTrack = null;
     let audioCodec = null, audioSampleRate = 0, audioChannels = 0;
     let pendingVideo = null; // duration chaining: each output's length is the gap to the next stamp
-    let raf = 0, timeout = 0, completed = 0, rangeIndex = 0, lastAnnouncement = -1;
+    let raf = 0, timeout = 0, completed = 0, rangeIndex = 0, lastAnnouncement = -1, lastCt = null, lastCtWall = 0;
     let freezeIndex = 0, holdsDone = 0, freezeHoldUntil = 0, frozenTime = 0, currentHold = 0, holdStart = 0;
     let lastEmitUs = -frameIntervalUs, requestKey = true, audioDone = false, finished = false;
     let doneResolve = null;
@@ -2284,6 +2284,7 @@
         carry = []; carryFrames = 0;
       })();
       await seekTo(ranges[0].start);
+      lastCt = null;
       if (exportCancelled) { exportCleanup?.(); await audioPump.catch(() => {}); return; }
       video.playbackRate = project.playbackSpeed;
       timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
@@ -2306,6 +2307,18 @@
             clockStart(project.playbackSpeed);
             await video.play();
           }
+          // Media-clock continuity: a strained decoder can teleport the
+          // playhead (or rewind it) mid-range. No real playback rate moves
+          // further than 4x wall time, so anything beyond that fails
+          // loudly instead of silently truncating the file.
+          {
+            const ctNow = video.currentTime, wallNow = performance.now();
+            if (lastCt !== null) {
+              const dtWall = Math.max(0, (wallNow - lastCtWall) / 1000);
+              if (ctNow - lastCt > 4 * dtWall + 0.75 || lastCt - ctNow > 0.75) throw new Error('Video playback jumped during export. Please try again.');
+            }
+            lastCt = ctNow; lastCtWall = wallNow;
+          }
           const freeze = freezes[freezeIndex];
           if (freeze && video.currentTime >= freeze.at && video.currentTime < range.end) {
             freezeIndex++;
@@ -2327,6 +2340,7 @@
             clockPause(); video.pause();
             for (const node of audioNodes.values()) node.element.pause();
             await seekTo(ranges[rangeIndex].start);
+            lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
             requestKey = true;
@@ -2528,7 +2542,7 @@
       };
       const canvasStream = exportCanvas.captureStream(Number(project.fps));
       const stream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-      let raf, timeout, completed = 0, rangeIndex = 0, lastAnnouncement = -1;
+      let raf, timeout, completed = 0, rangeIndex = 0, lastAnnouncement = -1, lastCt = null, lastCtWall = 0;
       let freezeIndex = 0, holdsDone = 0, freezeHoldUntil = 0, frozenTime = 0, currentHold = 0, holdStart = 0;
       const reportProgress = (elapsed) => {
         const percent = Math.min(99, Math.round(100*elapsed/exportDuration));
@@ -2586,6 +2600,7 @@
         notifyComplete('Export complete','Your video export is ready. Preview, then download.');
       };
       await seekTo(ranges[0].start);
+      lastCt = null;
       if (exportCancelled) { exportCleanup?.(); return; }
       video.playbackRate = project.playbackSpeed;
       recorder.start(250);
@@ -2609,6 +2624,16 @@
             holdsDone += currentHold; freezeHoldUntil = 0;
             await video.play();
           }
+          // Same continuity guard as the direct path: teleporting playheads
+          // fail loudly instead of delivering a cut-short recording.
+          {
+            const ctNow = video.currentTime, wallNow = performance.now();
+            if (lastCt !== null) {
+              const dtWall = Math.max(0, (wallNow - lastCtWall) / 1000);
+              if (ctNow - lastCt > 4 * dtWall + 0.75 || lastCt - ctNow > 0.75) throw new Error('Video playback jumped during export. Please try again.');
+            }
+            lastCt = ctNow; lastCtWall = wallNow;
+          }
           const freeze = freezes[freezeIndex];
           if (freeze && video.currentTime >= freeze.at && video.currentTime < range.end) {
             freezeIndex++;
@@ -2627,6 +2652,7 @@
             recorder.pause(); video.pause();
             for (const node of audioNodes.values()) node.element.pause();
             await seekTo(ranges[rangeIndex].start);
+            lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
             recorder.resume(); await video.play();

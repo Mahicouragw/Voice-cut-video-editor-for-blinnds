@@ -273,3 +273,10 @@ test('new clips start with noise reduction off; exports report audio settings', 
   assert.match(page, /window\.VoiceCutDebug\.lastExport = snap/);
   assert.match(page, /Noise reduction \$\{nr\}\. Ducking \$\{dk\}\./);
 });
+
+test('export pumps fail loudly on teleporting playheads', () => {
+  const hits = page.match(/Video playback jumped during export\. Please try again\./g) || [];
+  assert.equal(hits.length, 2, 'both export pumps must guard playhead continuity, got ' + hits.length);
+  const resets = page.match(/lastCt = null;/g) || [];
+  assert.equal(resets.length, 4, 'continuity tracking must reset after every export seek, got ' + resets.length);
+});
