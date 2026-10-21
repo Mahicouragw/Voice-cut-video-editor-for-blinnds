@@ -39,7 +39,7 @@ test('editor hides upload and processing mechanics from users', () => {
 test('uploaded music keeps its original sound (full volume, no effects)', () => {
   assert.doesNotMatch(page, /type==='music' \? 60/);
   assert.match(page, /volume: 100,/);
-  assert.match(page, /noiseReduction: \(type==='music'\|\|type==='sfx'\) \? 'off'/);
+  assert.match(page, /noiseReduction: 'off',/);
 });
 
 test('simple editor has one home screen with panel tabs', () => {
@@ -264,4 +264,19 @@ test('ducking detector is hysteresis plus a wall-clock smoother', () => {
   assert.match(page, /tap\.floor \* 3/);
   assert.match(page, /nowMs - duckSmHotSince >= 150/);
   assert.match(page, /duckSmSpokeUntil = nowMs \+ 400/);
+});
+
+test('new clips start with noise reduction off; exports report audio settings', () => {
+  assert.match(page, /noiseReduction: 'off',/);
+  assert.ok(!/type==='music'\|\|type==='sfx'\) \? 'off' : 'medium'/.test(page), 'voice-over clips must not force noise reduction on');
+  assert.match(page, /function exportAudioSnapshot\(path\)/);
+  assert.match(page, /window\.VoiceCutDebug\.lastExport = snap/);
+  assert.match(page, /Noise reduction \$\{nr\}\. Ducking \$\{dk\}\./);
+});
+
+test('export pumps fail loudly on teleporting playheads', () => {
+  const hits = page.match(/Video playback jumped during export\. Please try again\./g) || [];
+  assert.equal(hits.length, 2, 'both export pumps must guard playhead continuity, got ' + hits.length);
+  const resets = page.match(/lastCt = null;/g) || [];
+  assert.equal(resets.length, 4, 'continuity tracking must reset after every export seek, got ' + resets.length);
 });

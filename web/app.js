@@ -986,7 +986,7 @@
         muted: false,
         fadeIn: 0,
         fadeOut: 0,
-        noiseReduction: (type==='music'||type==='sfx') ? 'off' : 'medium',
+        noiseReduction: 'off',
         trackIndex: nextTrackIndex
       };
       // A new song stops the previous one: earlier music ends where this starts.
@@ -1994,6 +1994,35 @@
       return !!opus.supported;
     } catch (e) { return false; }
   }
+  // Export audio diagnostics: one snapshot of every setting that can touch
+  // sound, spoken briefly for TalkBack users and kept in full on
+  // window.VoiceCutDebug.lastExport plus the console for bug reports.
+  function exportAudioSnapshot(path) {
+    let keptRanges = [];
+    try { keptRanges = (VoiceCutCore.ranges(project) || []).map(r => [Math.round(r.start * 100) / 100, Math.round(r.end * 100) / 100]); } catch (e) {}
+    const snap = {
+      path,
+      format: project.format,
+      noiseReduction: project.originalAudio?.noiseReduction || 'off',
+      enhancedOriginal: !!project.originalAudio?.enhanced,
+      ducking: project.ducking?.enabled ? `on@${project.ducking.level}%` : 'off',
+      clips: (project.clips || []).map(c => ({ type: c.type, volume: c.volume, muted: !!c.muted, nr: c.noiseReduction || 'off', enhanced: !!c.isEnhancedOriginal })),
+      ranges: keptRanges,
+      speedRanges: (project.speedRanges || []).length,
+      playbackSpeed: project.playbackSpeed,
+      fps: project.fps,
+    };
+    try { window.VoiceCutDebug = window.VoiceCutDebug || {}; window.VoiceCutDebug.lastExport = snap; } catch (e) {}
+    try { console.log('[VoiceCut export audio]', JSON.stringify(snap)); } catch (e) {}
+    return snap;
+  }
+  function exportAudioWords(snap) {
+    const nr = snap.noiseReduction === 'off' ? 'off' : snap.noiseReduction + (snap.enhancedOriginal ? ', enhanced' : '');
+    const dk = snap.ducking === 'off' ? 'off' : 'on at ' + project.ducking.level + ' percent';
+    const types = snap.clips.map(c => c.type === 'sfx' ? 'sound effect' : c.type === 'music' ? 'music' : 'voice-over');
+    const tr = !types.length ? 'no extra tracks' : types.length + ' extra track' + (types.length === 1 ? '' : 's') + ': ' + types.join(', ');
+    return `Noise reduction ${nr}. Ducking ${dk}. ${tr}.`;
+  }
   async function doExportWebCodecs() {
     const failover = (why) => { throw new Error(why || 'WebCodecs export failed.'); };
     // Clear any older file behind the Save button before starting.
@@ -2028,7 +2057,7 @@
     $('#exportProgressContainer').classList.remove('hidden');
     $('#exportProgressContainer').removeAttribute('aria-hidden');
     $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-    announce('Export started. Keep this tab visible. Export runs in real time.');
+    announce('Export started. ' + exportAudioWords(exportAudioSnapshot('direct')) + ' Keep this tab visible. Export runs in real time.');
     await ensureAudioContext().resume();
     const dest = audioContext.createMediaStreamDestination();
     const gain = wireExportAudio(dest);
@@ -2090,7 +2119,7 @@
     let venc = null, aenc = null, reader = null, audioTrack = null;
     let audioCodec = null, audioSampleRate = 0, audioChannels = 0;
     let pendingVideo = null; // duration chaining: each output's length is the gap to the next stamp
-    let raf = 0, timeout = 0, completed = 0, rangeIndex = 0, lastAnnouncement = -1;
+    let raf = 0, timeout = 0, completed = 0, rangeIndex = 0, lastAnnouncement = -1, lastCt = null, lastCtWall = 0;
     let freezeIndex = 0, holdsDone = 0, freezeHoldUntil = 0, frozenTime = 0, currentHold = 0, holdStart = 0;
     let lastEmitUs = -frameIntervalUs, requestKey = true, audioDone = false, finished = false;
     let doneResolve = null;
@@ -2255,6 +2284,7 @@
         carry = []; carryFrames = 0;
       })();
       await seekTo(ranges[0].start);
+      lastCt = null;
       if (exportCancelled) { exportCleanup?.(); await audioPump.catch(() => {}); return; }
       video.playbackRate = project.playbackSpeed;
       timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
@@ -2277,6 +2307,18 @@
             clockStart(project.playbackSpeed);
             await video.play();
           }
+          // Media-clock continuity: a strained decoder can teleport the
+          // playhead (or rewind it) mid-range. No real playback rate moves
+          // further than 4x wall time, so anything beyond that fails
+          // loudly instead of silently truncating the file.
+          {
+            const ctNow = video.currentTime, wallNow = performance.now();
+            if (lastCt !== null) {
+              const dtWall = Math.max(0, (wallNow - lastCtWall) / 1000);
+              if (ctNow - lastCt > 4 * dtWall + 0.75 || lastCt - ctNow > 0.75) throw new Error('Video playback jumped during export. Please try again.');
+            }
+            lastCt = ctNow; lastCtWall = wallNow;
+          }
           const freeze = freezes[freezeIndex];
           if (freeze && video.currentTime >= freeze.at && video.currentTime < range.end) {
             freezeIndex++;
@@ -2298,6 +2340,7 @@
             clockPause(); video.pause();
             for (const node of audioNodes.values()) node.element.pause();
             await seekTo(ranges[rangeIndex].start);
+            lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
             requestKey = true;
@@ -2455,7 +2498,7 @@
       $('#exportProgressContainer').classList.remove('hidden');
       $('#exportProgressContainer').removeAttribute('aria-hidden');
       $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-      announce(audioOnly ? 'Export started. This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. Keep this tab visible. Export runs in real time.');
+      announce(audioOnly ? 'Export started. ' + exportAudioWords(exportAudioSnapshot('recording')) + ' This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. ' + exportAudioWords(exportAudioSnapshot('recording')) + ' Keep this tab visible. Export runs in real time.');
       await ensureAudioContext().resume();
       const dest = audioContext.createMediaStreamDestination();
       const gain = wireExportAudio(dest);
@@ -2499,7 +2542,7 @@
       };
       const canvasStream = exportCanvas.captureStream(Number(project.fps));
       const stream = new MediaStream([...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-      let raf, timeout, completed = 0, rangeIndex = 0, lastAnnouncement = -1;
+      let raf, timeout, completed = 0, rangeIndex = 0, lastAnnouncement = -1, lastCt = null, lastCtWall = 0;
       let freezeIndex = 0, holdsDone = 0, freezeHoldUntil = 0, frozenTime = 0, currentHold = 0, holdStart = 0;
       const reportProgress = (elapsed) => {
         const percent = Math.min(99, Math.round(100*elapsed/exportDuration));
@@ -2557,6 +2600,7 @@
         notifyComplete('Export complete','Your video export is ready. Preview, then download.');
       };
       await seekTo(ranges[0].start);
+      lastCt = null;
       if (exportCancelled) { exportCleanup?.(); return; }
       video.playbackRate = project.playbackSpeed;
       recorder.start(250);
@@ -2580,6 +2624,16 @@
             holdsDone += currentHold; freezeHoldUntil = 0;
             await video.play();
           }
+          // Same continuity guard as the direct path: teleporting playheads
+          // fail loudly instead of delivering a cut-short recording.
+          {
+            const ctNow = video.currentTime, wallNow = performance.now();
+            if (lastCt !== null) {
+              const dtWall = Math.max(0, (wallNow - lastCtWall) / 1000);
+              if (ctNow - lastCt > 4 * dtWall + 0.75 || lastCt - ctNow > 0.75) throw new Error('Video playback jumped during export. Please try again.');
+            }
+            lastCt = ctNow; lastCtWall = wallNow;
+          }
           const freeze = freezes[freezeIndex];
           if (freeze && video.currentTime >= freeze.at && video.currentTime < range.end) {
             freezeIndex++;
@@ -2598,6 +2652,7 @@
             recorder.pause(); video.pause();
             for (const node of audioNodes.values()) node.element.pause();
             await seekTo(ranges[rangeIndex].start);
+            lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
             recorder.resume(); await video.play();
@@ -4006,8 +4061,8 @@
     $('#origVolDec').addEventListener('click', ()=>{ project.originalAudio.volume=Math.max(0,project.originalAudio.volume-5); $('#origVolumeSlider').value=project.originalAudio.volume; $('#origVolumeNumber').value=project.originalAudio.volume; pushHistory(); renderAll(); announce(`Original audio volume ${project.originalAudio.volume} percent.`); });
     $('#origVolInc').addEventListener('click', ()=>{ project.originalAudio.volume=Math.min(100,project.originalAudio.volume+5); $('#origVolumeSlider').value=project.originalAudio.volume; $('#origVolumeNumber').value=project.originalAudio.volume; pushHistory(); renderAll(); announce(`Original audio volume ${project.originalAudio.volume} percent.`); });
     $('#btnMuteOrig').addEventListener('click', ()=>{ project.originalAudio.muted=!project.originalAudio.muted; pushHistory(); renderAll(); announce(project.originalAudio.muted?'Original audio muted.':'Original audio unmuted.'); });
-    $('#origNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
-    $('#globalNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; $('#origNoiseReduction').value=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
+    $('#origNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=(e.target.value==='off'?'Noise reduction off. Original sound untouched.':`Noise reduction enabled. ${e.target.value} strength.`); });
+    $('#globalNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; $('#origNoiseReduction').value=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=(e.target.value==='off'?'Noise reduction off. Original sound untouched.':`Noise reduction enabled. ${e.target.value} strength.`); });
     $('#btnOrigFadeIn').addEventListener('click', ()=>{ project.originalAudio.fadeIn = project.originalAudio.fadeIn?0:2; pushHistory(); renderAll(); announce(`Original audio fade in ${project.originalAudio.fadeIn} seconds.`); });
     $('#btnOrigFadeOut').addEventListener('click', ()=>{ project.originalAudio.fadeOut = project.originalAudio.fadeOut?0:2; pushHistory(); renderAll(); announce(`Original audio fade out ${project.originalAudio.fadeOut} seconds.`); });
     $('#btnOrigAIEnhance').addEventListener('click', ()=>{
