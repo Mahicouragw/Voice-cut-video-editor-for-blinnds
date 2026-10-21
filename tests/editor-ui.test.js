@@ -39,7 +39,7 @@ test('editor hides upload and processing mechanics from users', () => {
 test('uploaded music keeps its original sound (full volume, no effects)', () => {
   assert.doesNotMatch(page, /type==='music' \? 60/);
   assert.match(page, /volume: 100,/);
-  assert.match(page, /noiseReduction: \(type==='music'\|\|type==='sfx'\) \? 'off'/);
+  assert.match(page, /noiseReduction: 'off',/);
 });
 
 test('simple editor has one home screen with panel tabs', () => {
@@ -264,4 +264,12 @@ test('ducking detector is hysteresis plus a wall-clock smoother', () => {
   assert.match(page, /tap\.floor \* 3/);
   assert.match(page, /nowMs - duckSmHotSince >= 150/);
   assert.match(page, /duckSmSpokeUntil = nowMs \+ 400/);
+});
+
+test('new clips start with noise reduction off; exports report audio settings', () => {
+  assert.match(page, /noiseReduction: 'off',/);
+  assert.ok(!/type==='music'\|\|type==='sfx'\) \? 'off' : 'medium'/.test(page), 'voice-over clips must not force noise reduction on');
+  assert.match(page, /function exportAudioSnapshot\(path\)/);
+  assert.match(page, /window\.VoiceCutDebug\.lastExport = snap/);
+  assert.match(page, /Noise reduction \$\{nr\}\. Ducking \$\{dk\}\./);
 });

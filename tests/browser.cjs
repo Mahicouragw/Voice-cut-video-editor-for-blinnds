@@ -11,6 +11,8 @@ const path = require('node:path');
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=560','-ac','2','-ar','48000','-y',bigPath]);
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=3','-f','lavfi','-i','anullsrc=r=44100:cl=stereo:d=5','-f','lavfi','-i','sine=frequency=880:duration=4','-filter_complex','[0:a][1:a][2:a]concat=n=3:v=0:a=1','-y',gappyPath]);
  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=3','-ac','2','-ar','44100','-c:a','aac','-y',audioOnlyPath]);
+ const tonePath=path.join(dir,'tones.mp4');
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:duration=3','-f','lavfi','-i','sine=frequency=880:duration=3','-f','lavfi','-i','color=c=red:s=320x180:r=24:d=6','-filter_complex','[0:a][1:a]concat=n=2:v=0:a=1,volume=0.5,aformat=sample_fmts=fltp:channel_layouts=stereo[a]','-map','2:v','-map','[a]','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','48000','-shortest','-y',tonePath]);
  const server=spawn(process.execPath,['scripts/serve.js'],{env:{...process.env,PORT:'3099'},stdio:['ignore','pipe','inherit']});
  await new Promise((resolve,reject)=>{server.stdout.on('data',data=>{if(data.toString().includes('preview on port'))resolve();});server.on('error',reject);server.on('exit',code=>{if(code)reject(new Error('Server failed'));});});
  const browser=await chromium.launch({args:['--autoplay-policy=no-user-gesture-required','--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream']}).catch(error=>{server.kill();throw error;});
@@ -21,6 +23,23 @@ const path = require('node:path');
   const showPanel = (name) => page.locator('#tab-'+name).click();
   const showSub = (which) => page.locator(which==='music'?'#subMusic':which==='sfx'?'#subSfx':'#subVoiceover').click();
   const meanVolume = (file) => { const r=spawnSync('ffmpeg',['-v','info','-i',file,'-map','0:a','-af','volumedetect','-f','null','-'],{encoding:'utf8'}); const m=String(r.stderr||'').match(/mean_volume:\s*([-\d.]+|n\/a)/); return m?m[1]:'n/a'; };
+  const audioFidelity = (file) => {
+    const sr=48000;
+    const raw=execFileSync('ffmpeg',['-v','error','-i',file,'-map','0:a:0','-ac','1','-ar',String(sr),'-f','f32le','-'],{maxBuffer:64*1024*1024});
+    const pcm=new Float32Array(raw.buffer,raw.byteOffset,Math.floor(raw.length/4));
+    const win=Math.floor(sr*0.1), edge=Math.floor(sr*0.3);
+    let mn=1e9, mx=-1e9;
+    for (let o=edge;o+win<=pcm.length-edge;o+=win) {
+      let s=0; for (let i=o;i<o+win;i++) s+=pcm[i]*pcm[i];
+      const d=10*Math.log10(Math.max(1e-12,s/win));
+      if (d<mn) mn=d; if (d>mx) mx=d;
+    }
+    const tone=(sec,freq)=>{ const a=Math.floor(sec*sr), b=Math.min(pcm.length,a+sr), n=b-a;
+      const k=Math.round(freq*n/sr), cw=Math.cos(2*Math.PI*k/n);
+      let s0=0,s1=0,s2=0; for (let i=a;i<b;i++){ s0=pcm[i]+2*cw*s1-s2; s2=s1; s1=s0; }
+      return s1*s1+s2*s2-2*cw*s1*s2; };
+    return { flat:mx-mn, tone, dur:pcm.length/sr };
+  };
   // HOME shell: nav only, editor hidden, no server/credential fields anywhere.
   await page.goto('http://127.0.0.1:3099');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Welcome to VoiceCut'));
@@ -808,6 +827,47 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // Exported sound keeps the source level and content: flat RMS, right tones.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',tonePath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 5,{},{timeout:30000});
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('mp4');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:120000});
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-fidelity.mp4');await download.saveAs(output);
+    const f=audioFidelity(output);
+    assert.ok(f.flat<2,'untouched export must keep a flat level, RMS spread '+f.flat.toFixed(2)+'dB');
+    assert.ok(f.tone(1,440)>f.tone(1,880)*4,'first half must stay 440Hz');
+    assert.ok(f.tone(4,880)>f.tone(4,440)*4,'second half must stay 880Hz');
+    assert.ok(Math.abs(f.dur-6)<0.4,'untouched export must keep ~6s, got '+f.dur.toFixed(2));
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  // Deleting the head keeps the tail's sound intact (del 0-3 of 6, webm path).
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',tonePath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 5,{},{timeout:30000});
+  await page.locator('#delRangeStart').fill('00:00');await page.locator('#delRangeEnd').fill('00:03');await page.locator('#btnDeleteRange').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Deleted'),{},{timeout:30000});
+  await showPanel('export');
+  await page.locator('#exportFormat').selectOption('webm');
+  await page.locator('#btnDoExport').click();
+  await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:120000});
+  {
+    const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
+    const output=path.join(dir,'export-fidelity-del.webm');await download.saveAs(output);
+    const f=audioFidelity(output);
+    assert.ok(Math.abs(f.dur-3)<0.4,'delete-head export must keep ~3s, got '+f.dur.toFixed(2));
+    assert.ok(f.tone(1,880)>f.tone(1,440)*4,'remaining audio must be the 880Hz tail');
+    assert.ok(f.flat<2,'delete-head export must keep a flat level, RMS spread '+f.flat.toFixed(2)+'dB');
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   // A recorded voice-over is audible in the export, not just on the timeline.
   await page.goto('http://127.0.0.1:3099');
   await page.setInputFiles('#fileVideo',videoPath);
@@ -905,6 +965,6 @@ const path = require('node:path');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

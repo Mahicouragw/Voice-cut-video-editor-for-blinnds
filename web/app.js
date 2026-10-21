@@ -986,7 +986,7 @@
         muted: false,
         fadeIn: 0,
         fadeOut: 0,
-        noiseReduction: (type==='music'||type==='sfx') ? 'off' : 'medium',
+        noiseReduction: 'off',
         trackIndex: nextTrackIndex
       };
       // A new song stops the previous one: earlier music ends where this starts.
@@ -1994,6 +1994,35 @@
       return !!opus.supported;
     } catch (e) { return false; }
   }
+  // Export audio diagnostics: one snapshot of every setting that can touch
+  // sound, spoken briefly for TalkBack users and kept in full on
+  // window.VoiceCutDebug.lastExport plus the console for bug reports.
+  function exportAudioSnapshot(path) {
+    let keptRanges = [];
+    try { keptRanges = (VoiceCutCore.ranges(project) || []).map(r => [Math.round(r.start * 100) / 100, Math.round(r.end * 100) / 100]); } catch (e) {}
+    const snap = {
+      path,
+      format: project.format,
+      noiseReduction: project.originalAudio?.noiseReduction || 'off',
+      enhancedOriginal: !!project.originalAudio?.enhanced,
+      ducking: project.ducking?.enabled ? `on@${project.ducking.level}%` : 'off',
+      clips: (project.clips || []).map(c => ({ type: c.type, volume: c.volume, muted: !!c.muted, nr: c.noiseReduction || 'off', enhanced: !!c.isEnhancedOriginal })),
+      ranges: keptRanges,
+      speedRanges: (project.speedRanges || []).length,
+      playbackSpeed: project.playbackSpeed,
+      fps: project.fps,
+    };
+    try { window.VoiceCutDebug = window.VoiceCutDebug || {}; window.VoiceCutDebug.lastExport = snap; } catch (e) {}
+    try { console.log('[VoiceCut export audio]', JSON.stringify(snap)); } catch (e) {}
+    return snap;
+  }
+  function exportAudioWords(snap) {
+    const nr = snap.noiseReduction === 'off' ? 'off' : snap.noiseReduction + (snap.enhancedOriginal ? ', enhanced' : '');
+    const dk = snap.ducking === 'off' ? 'off' : 'on at ' + project.ducking.level + ' percent';
+    const types = snap.clips.map(c => c.type === 'sfx' ? 'sound effect' : c.type === 'music' ? 'music' : 'voice-over');
+    const tr = !types.length ? 'no extra tracks' : types.length + ' extra track' + (types.length === 1 ? '' : 's') + ': ' + types.join(', ');
+    return `Noise reduction ${nr}. Ducking ${dk}. ${tr}.`;
+  }
   async function doExportWebCodecs() {
     const failover = (why) => { throw new Error(why || 'WebCodecs export failed.'); };
     // Clear any older file behind the Save button before starting.
@@ -2028,7 +2057,7 @@
     $('#exportProgressContainer').classList.remove('hidden');
     $('#exportProgressContainer').removeAttribute('aria-hidden');
     $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-    announce('Export started. Keep this tab visible. Export runs in real time.');
+    announce('Export started. ' + exportAudioWords(exportAudioSnapshot('direct')) + ' Keep this tab visible. Export runs in real time.');
     await ensureAudioContext().resume();
     const dest = audioContext.createMediaStreamDestination();
     const gain = wireExportAudio(dest);
@@ -2455,7 +2484,7 @@
       $('#exportProgressContainer').classList.remove('hidden');
       $('#exportProgressContainer').removeAttribute('aria-hidden');
       $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-      announce(audioOnly ? 'Export started. This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. Keep this tab visible. Export runs in real time.');
+      announce(audioOnly ? 'Export started. ' + exportAudioWords(exportAudioSnapshot('recording')) + ' This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. ' + exportAudioWords(exportAudioSnapshot('recording')) + ' Keep this tab visible. Export runs in real time.');
       await ensureAudioContext().resume();
       const dest = audioContext.createMediaStreamDestination();
       const gain = wireExportAudio(dest);
@@ -4006,8 +4035,8 @@
     $('#origVolDec').addEventListener('click', ()=>{ project.originalAudio.volume=Math.max(0,project.originalAudio.volume-5); $('#origVolumeSlider').value=project.originalAudio.volume; $('#origVolumeNumber').value=project.originalAudio.volume; pushHistory(); renderAll(); announce(`Original audio volume ${project.originalAudio.volume} percent.`); });
     $('#origVolInc').addEventListener('click', ()=>{ project.originalAudio.volume=Math.min(100,project.originalAudio.volume+5); $('#origVolumeSlider').value=project.originalAudio.volume; $('#origVolumeNumber').value=project.originalAudio.volume; pushHistory(); renderAll(); announce(`Original audio volume ${project.originalAudio.volume} percent.`); });
     $('#btnMuteOrig').addEventListener('click', ()=>{ project.originalAudio.muted=!project.originalAudio.muted; pushHistory(); renderAll(); announce(project.originalAudio.muted?'Original audio muted.':'Original audio unmuted.'); });
-    $('#origNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
-    $('#globalNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; $('#origNoiseReduction').value=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=`Noise reduction enabled. ${e.target.value} strength.`; });
+    $('#origNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=(e.target.value==='off'?'Noise reduction off. Original sound untouched.':`Noise reduction enabled. ${e.target.value} strength.`); });
+    $('#globalNoiseReduction').addEventListener('change', (e)=>{ project.originalAudio.noiseReduction=e.target.value; $('#origNoiseReduction').value=e.target.value; applyOriginalNR(); pushHistory(); renderAll(); announce(`Noise reduction set to ${e.target.value}.`); $('#noiseReductionStatus').textContent=(e.target.value==='off'?'Noise reduction off. Original sound untouched.':`Noise reduction enabled. ${e.target.value} strength.`); });
     $('#btnOrigFadeIn').addEventListener('click', ()=>{ project.originalAudio.fadeIn = project.originalAudio.fadeIn?0:2; pushHistory(); renderAll(); announce(`Original audio fade in ${project.originalAudio.fadeIn} seconds.`); });
     $('#btnOrigFadeOut').addEventListener('click', ()=>{ project.originalAudio.fadeOut = project.originalAudio.fadeOut?0:2; pushHistory(); renderAll(); announce(`Original audio fade out ${project.originalAudio.fadeOut} seconds.`); });
     $('#btnOrigAIEnhance').addEventListener('click', ()=>{
