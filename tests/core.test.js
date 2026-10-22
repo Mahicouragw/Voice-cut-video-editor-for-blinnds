@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch} = require('../web/core');
+const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch,audioBlockTimestamp} = require('../web/core');
 test('15-minute boundary',()=>{assert.equal(expired(0,TTL_MS-1),false);assert.equal(expired(0,TTL_MS),true);});
 test('deleted segments omitted and trim intersects retained segments',()=>assert.deepEqual(ranges({trimStart:2,trimEnd:9,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),[{start:2,end:4},{start:6,end:9}]));
 test('invalid trim rejected',()=>assert.throws(()=>ranges({trimStart:5,trimEnd:2,duration:10,segments:[]})));
@@ -186,4 +186,13 @@ test('speed ranges shrink kept time and survive round trips',()=>{
   assert.throws(()=>addSpeedRange(p,100,100,2),/valid range/);
   assert.throws(()=>addSpeedRange(p,100,200,0),/valid speed/);
   assert.throws(()=>addSpeedRange(p,100,700,2),/valid range/);
+});
+
+test('2.37 audio stamps derive from content, not encode wall-clock',()=>{
+  const sr=48000,base=1000000;
+  const steady=[0,1,2,3,4].map(i=>audioBlockTimestamp(base,i*1024,sr,i?audioBlockTimestamp(base,(i-1)*1024,sr,i>1?audioBlockTimestamp(base,(i-2)*1024,sr,-1):-1):-1));
+  for(let i=1;i<steady.length;i++){const gap=steady[i]-steady[i-1];assert.ok(gap>20000&&gap<23000,'block gap '+gap+'us stays one block wide');}
+  const burst=audioBlockTimestamp(base,5*1024,sr,steady[4]);
+  assert.ok(burst-steady[4]>=21333&&burst-steady[4]<=21334,'a burst-encoded block keeps its content slot, never the encode instant');
+  assert.equal(audioBlockTimestamp(base,0,sr,9999999),10000000,'stamps stay strictly increasing');
 });

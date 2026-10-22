@@ -2209,14 +2209,24 @@
       aenc.configure({ codec: audioCodec, sampleRate: audioSampleRate, numberOfChannels: audioChannels, bitrate: 128000 });
       drainMuxer();
       // Audio pump: re-stamp captured sound onto the export clock, dropping
-      // anything captured while the clock is paused (seeks).
+      // anything captured while the clock is paused (seeks). Timestamps are
+      // content-derived (kept-frame count), so event-loop stalls that bunch
+      // encodes together still stamp spread-out times (2.37).
       const BLOCK = 1024;
+      const exportRate = project.playbackSpeed || 1;
       let carry = [];
       let carryFrames = 0;
       let lastAudioTs = -1;
+      let audioBaseUs = -1;
+      let nextBlockKept = 0;
+      let audioStallEvents = 0;
+      let lastQuantumWall = 0;
       const feedQuantum = (qd) => {
         if (!qd || clockRunning === false) { try { qd?.close(); } catch (e) {} return; }
         try {
+        const nowWall = performance.now();
+        if (lastQuantumWall && nowWall - lastQuantumWall > 50) audioStallEvents++;
+        lastQuantumWall = nowWall;
         const n = qd.numberOfFrames;
         const planes = [];
         for (let c = 0; c < audioChannels; c++) {
@@ -2225,7 +2235,9 @@
           planes.push(plane);
         }
         try { qd.close(); } catch (e) {}
-        carry.push({ n, planes });
+        if (audioBaseUs < 0) audioBaseUs = clockNowUs();
+        const inHold = freezeHoldUntil && performance.now() < freezeHoldUntil;
+        carry.push({ n, planes, rate: inHold ? 1 : exportRate });
         carryFrames += n;
         while (carryFrames >= BLOCK && isExporting && !exportCancelled) {
           const out = new Float32Array(BLOCK * audioChannels);
@@ -2240,9 +2252,11 @@
             need -= take;
             if (head.off >= head.n) qp++;
           }
+          const blockRate = (carry[0] && carry[0].rate) || exportRate;
           carry = carry.slice(qp);
           carryFrames -= BLOCK;
-          const ts = Math.max(lastAudioTs + 1, clockNowUs());
+          const ts = VoiceCutCore.audioBlockTimestamp(audioBaseUs, nextBlockKept, audioSampleRate, lastAudioTs);
+          nextBlockKept += BLOCK * blockRate;
           lastAudioTs = ts;
           try {
             aenc.encode(new AudioData({
@@ -2272,7 +2286,9 @@
             }
             qp += head.n - (head.off || 0);
           }
-          const ts = Math.max(lastAudioTs + 1, clockNowUs());
+          const tailRate = (carry[0] && carry[0].rate) || exportRate;
+          const ts = VoiceCutCore.audioBlockTimestamp(audioBaseUs < 0 ? clockNowUs() : audioBaseUs, nextBlockKept, audioSampleRate, lastAudioTs);
+          nextBlockKept += BLOCK * tailRate;
           lastAudioTs = ts;
           try {
             aenc.encode(new AudioData({
@@ -2414,6 +2430,7 @@
         $('#exportStatus').textContent = 'Export complete.' + lengthWords + ' Preview, then download.';
         announce('Export complete.' + lengthWords + ' Preview, then download.', true);
         notifyComplete('Export complete', 'Your video export is ready. Preview, then download.');
+        try { console.log('[VoiceCut export audio] stallEvents=' + audioStallEvents); if (window.VoiceCutDebug && window.VoiceCutDebug.lastExport) window.VoiceCutDebug.lastExport.stallEvents = audioStallEvents; } catch (e) {}
         exportCleanup?.();
       }
       raf = requestAnimationFrame(frame);
@@ -2562,7 +2579,7 @@
         isExporting = false; lockExportControls(false); $('#btnDoExport').disabled = false; $('#btnCancelExport').disabled = true;
         exportCleanup = null;
       };
-      recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 6000000});
+      recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 6000000, audioBitsPerSecond: 128000});
       exportRecorder = recorder;
       const chunks = [];
       let lastChunkAt = 0;
