@@ -280,3 +280,10 @@ test('export pumps fail loudly on teleporting playheads', () => {
   const resets = page.match(/lastCt = null;/g) || [];
   assert.equal(resets.length, 4, 'continuity tracking must reset after every export seek, got ' + resets.length);
 });
+
+test('2.37 direct-path audio stamps are content-derived with stall telemetry',()=>{
+  const src = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  assert.equal((src.match(/audioBlockTimestamp\(audioBaseUs/g)||[]).length,2,'both audio encode sites stamp from content time');
+  assert.match(src,/audioStallEvents\+\+/,'quantum gaps over 50ms are counted');
+  assert.match(src,/stallEvents=/,'stall count is logged for bug reports');
+});

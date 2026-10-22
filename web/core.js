@@ -416,7 +416,16 @@
     p.autoProcessingMigrated = true;
     return p;
   }
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange };
+  // 2.37: direct-path audio timestamps come from the CONTENT (kept-frame
+  // count), never the encode wall-clock. Stamping at encode time collapses
+  // under event-loop stalls: a burst of blocks encoded together gets
+  // near-identical stamps, so the muxer writes ~0-duration samples the
+  // player drops or overlaps — heard as pumping on loaded phones.
+  function audioBlockTimestamp(baseUs, keptFrames, sampleRate, lastTs) {
+    const ts = baseUs + Math.round((keptFrames * 1000000) / sampleRate);
+    return Math.max(lastTs + 1, ts);
+  }
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

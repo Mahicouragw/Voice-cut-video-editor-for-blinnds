@@ -842,6 +842,7 @@ const path = require('node:path');
   {
     const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
     const output=path.join(dir,'export-fidelity.mp4');await download.saveAs(output);
+    console.log('fidelity mp4 audio:',execFileSync('ffprobe',['-v','error','-select_streams','a:0','-show_entries','stream=codec_name,sample_rate,channels','-of','csv=p=0',output],{encoding:'utf8'}).trim());
     const f=audioFidelity(output);
     assert.ok(f.flat<2,'untouched export must keep a flat level, RMS spread '+f.flat.toFixed(2)+'dB');
     assert.ok(f.tone(1,440)>f.tone(1,880)*4,'first half must stay 440Hz');
@@ -864,6 +865,7 @@ const path = require('node:path');
   {
     const downloadPromise=page.waitForEvent('download');await showPanel('export');await page.locator('#btnDownloadExported').click();const download=await downloadPromise;
     const output=path.join(dir,'export-fidelity-del.webm');await download.saveAs(output);
+    console.log('fidelity webm audio:',execFileSync('ffprobe',['-v','error','-select_streams','a:0','-show_entries','stream=codec_name,sample_rate,channels','-of','csv=p=0',output],{encoding:'utf8'}).trim());
     const f=audioFidelity(output);
     assert.ok(Math.abs(f.dur-3)<0.4,'delete-head export must keep ~3s, got '+f.dur.toFixed(2));
     assert.ok(f.tone(1,880)>f.tone(1,440)*4,'remaining audio must be the 880Hz tail');
