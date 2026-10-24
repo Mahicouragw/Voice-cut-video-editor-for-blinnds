@@ -287,3 +287,20 @@ test('2.37 direct-path audio stamps are content-derived with stall telemetry',()
   assert.match(src,/audioStallEvents\+\+/,'quantum gaps over 50ms are counted');
   assert.match(src,/stallEvents=/,'stall count is logged for bug reports');
 });
+
+test('2.38 home screen offers merge videos with ordered multi-pick',()=>{
+  const html = fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  assert.match(html,/id="homeMergeVideo"/,'merge button lives on the home screen');
+  assert.match(html,/id="fileMergeVideos"[^>]*multiple/,'merge picker accepts several clips');
+  assert.match(html,/id="mergeFileList"/,'picked clips are listed in order');
+  assert.match(html,/id="btnStartMerge"/,'merge starts on user confirmation');
+  assert.match(html,/web\/merge\.js/,'merge engine is loaded');
+});
+test('2.38 every time control gets stepper buttons',()=>{
+  const src = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  assert.match(src,/function addTimeSteppers/,'stepper installer exists');
+  for (const id of ['delRangeStart','delRangeEnd','speedRangeStart','speedRangeEnd','trimStartInput','trimEndInput','freezeSeconds','captionStart','captionEnd','duckingSilenceWait','silenceSeconds','skipAmountSelect','fadeInSelect','fadeOutSelect']) {
+    assert.ok(src.includes("'" + id + "'"),'steppers cover '+id);
+  }
+  assert.match(src,/mergeMp4Files/,'merge engine is used');
+});

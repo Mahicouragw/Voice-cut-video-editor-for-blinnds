@@ -902,6 +902,143 @@
     }, {once:true});
     video.addEventListener('error', videoLoadError, {once:true});
   }
+
+  // ---- Merge videos (home screen): join clips in picked order, gapless ----
+  let mergeFiles = [], mergeCancelled = false, mergeRunning = false;
+  function showMergePanel(fs) {
+    mergeFiles = fs; mergeCancelled = false;
+    const list = $('#mergeFileList'); list.innerHTML = '';
+    fs.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.textContent = 'Clip ' + (i + 1) + ': ' + (f.name || 'clip') + ', ' + (f.size > 1048576 ? (Math.round(f.size / 104857.6) / 10) + ' MB' : Math.max(1, Math.round(f.size / 1024)) + ' KB');
+      list.appendChild(li);
+    });
+    $('#mergePanel').classList.remove('hidden');
+    $('#mergeProgress').style.display = 'none'; $('#mergeProgress').value = 0;
+    $('#mergeStatus').textContent = '';
+    $('#btnStartMerge').disabled = false; $('#btnCancelMerge').disabled = false;
+    announce('Picked ' + fs.length + ' clips. They will join in this order. ' + fs.map((f, i) => (i + 1) + ': ' + (f.name || 'clip')).join('. ') + '. Press Merge these clips to start, or Cancel.', true);
+    $('#mergeHeading').focus();
+  }
+  async function startMerge() {
+    if (mergeRunning || !mergeFiles.length) return;
+    if (!window.VoiceCutMerge || !window.VoiceCutMerge.mergeMp4Files) { announce('Merging did not load. Reload the app and try again.', true); return; }
+    mergeRunning = true; mergeCancelled = false;
+    $('#btnStartMerge').disabled = true;
+    $('#mergeProgress').style.display = 'block';
+    let lastPct = -1;
+    try {
+      const res = await window.VoiceCutMerge.mergeMp4Files(mergeFiles, {
+        isCancelled: () => mergeCancelled,
+        onProgress: (frac, label) => {
+          const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+          $('#mergeProgress').value = pct;
+          $('#mergeStatus').textContent = label + '. ' + pct + ' percent.';
+          if (pct >= lastPct + 15 || pct === 100) { lastPct = pct; announce(label + '. ' + pct + ' percent.'); }
+        },
+      });
+      if (res.single) { announce('One clip picked. Opening it.', true); loadVideoFile(res.file); }
+      else {
+        try { window.VoiceCutDebug = window.VoiceCutDebug || {}; window.VoiceCutDebug.lastMergeBlob = res.file; } catch (e) {}
+        try { console.log('[VoiceCut merge] ' + JSON.stringify({ clips: res.count, durationSec: Math.round(res.durationSec * 100) / 100, mixedSizes: res.mixedSizes, bytes: res.file.size })); } catch (e) {}
+        announce('Merged ' + res.count + ' clips into one video, ' + formatTimeVerbose(res.durationSec) + '.' + (res.mixedSizes ? ' Clips had different sizes, so smaller clips have black bars.' : ''), true);
+        loadVideoFile(res.file);
+      }
+    } catch (e) {
+      if (e && e.cancelled) announce('Merge cancelled.', true);
+      else announce(e && e.message ? e.message : 'Merging failed.', true);
+    } finally {
+      mergeRunning = false; mergeFiles = [];
+      $('#mergePanel').classList.add('hidden');
+      $('#mergeProgress').style.display = 'none';
+      $('#btnStartMerge').disabled = false;
+    }
+  }
+  function cancelMerge() {
+    if (mergeRunning) { mergeCancelled = true; $('#mergeStatus').textContent = 'Cancelling.'; $('#btnCancelMerge').disabled = true; }
+    else { mergeFiles = []; $('#mergePanel').classList.add('hidden'); announce('Merge cancelled.', true); }
+  }
+
+  // ---- Time steppers: every time control gets -/+ buttons ----
+  function stepperControlName(el) {
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    if (aria) return aria.split(',')[0].trim();
+    if (el.id) { const lab = document.querySelector('label[for="' + el.id + '"]'); if (lab) return lab.textContent.trim(); }
+    return 'Time';
+  }
+  function stepperFire(el) {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function stepperTimeWord(sec) {
+    if (sec >= 60) { const m = Math.round(sec / 60); return m + (m === 1 ? ' minute' : ' minutes'); }
+    return sec + (sec === 1 ? ' second' : ' seconds');
+  }
+  function addTimeSteppers() {
+    const timeTargets = [
+      { id: 'delRangeStart', steps: [60, 1] }, { id: 'delRangeEnd', steps: [60, 1] },
+      { id: 'speedRangeStart', steps: [60, 1] }, { id: 'speedRangeEnd', steps: [60, 1] },
+      { id: 'trimStartInput', steps: [60, 1] }, { id: 'trimEndInput', steps: [60, 1] },
+      { id: 'freezeSeconds', steps: [1] },
+      { id: 'captionStart', steps: [1, 0.1] }, { id: 'captionEnd', steps: [1, 0.1] },
+    ];
+    const selectTargets = ['duckingSilenceWait', 'silenceSeconds', 'skipAmountSelect', 'fadeInSelect', 'fadeOutSelect'];
+    const mkBtn = (text, label, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'vc-stepper-btn';
+      b.textContent = text; b.setAttribute('aria-label', label);
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const stepLabel = (st) => st >= 60 ? (st / 60) + 'm' : st + 's';
+    for (const t of timeTargets) {
+      const el = document.getElementById(t.id);
+      if (!el || (el.nextElementSibling && el.nextElementSibling.classList.contains('vc-stepper'))) continue;
+      const name = stepperControlName(el);
+      const group = document.createElement('span');
+      group.className = 'vc-stepper'; group.setAttribute('role', 'group'); group.setAttribute('aria-label', name + ' adjust');
+      const adjust = (delta) => () => {
+        if (el.type === 'number') {
+          const cur = parseFloat(el.value) || 0;
+          let next = cur + delta;
+          if (el.min !== '') next = Math.max(parseFloat(el.min), next);
+          if (el.max !== '') next = Math.min(parseFloat(el.max), next);
+          const step = el.step && el.step !== 'any' ? parseFloat(el.step) : 1;
+          const prec = (String(step).split('.')[1] || '').length;
+          next = Math.round(next * Math.pow(10, prec)) / Math.pow(10, prec);
+          el.value = next;
+          stepperFire(el);
+          announce(name + ' ' + next);
+        } else {
+          const cur = parseTime(el.value) || 0;
+          const next = Math.max(0, cur + delta);
+          const long = ((el.value.match(/:/g) || []).length >= 2) || next >= 3600;
+          el.value = long ? formatTime(next) : formatTime(next).slice(3);
+          stepperFire(el);
+          announce(name + ' ' + formatTimeVerbose(next));
+        }
+      };
+      for (const st of t.steps) group.appendChild(mkBtn('\u2212' + stepLabel(st), name + ', decrease by ' + stepperTimeWord(st), adjust(-st)));
+      for (const st of t.steps.slice().reverse()) group.appendChild(mkBtn('+' + stepLabel(st), name + ', increase by ' + stepperTimeWord(st), adjust(st)));
+      el.after(group);
+    }
+    for (const id of selectTargets) {
+      const el = document.getElementById(id);
+      if (!el || (el.nextElementSibling && el.nextElementSibling.classList.contains('vc-stepper'))) continue;
+      const name = stepperControlName(el);
+      const group = document.createElement('span');
+      group.className = 'vc-stepper'; group.setAttribute('role', 'group'); group.setAttribute('aria-label', name + ' adjust');
+      const move = (dir) => () => {
+        const next = Math.min(el.options.length - 1, Math.max(0, el.selectedIndex + dir));
+        el.selectedIndex = next;
+        stepperFire(el);
+        announce(name + ' ' + (el.options[next] ? el.options[next].text : ''));
+      };
+      group.appendChild(mkBtn('\u2212', name + ', previous choice', move(-1)));
+      group.appendChild(mkBtn('+', name + ', next choice', move(1)));
+      el.after(group);
+    }
+  }
   function loadVideoFile(file) {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024 * 1024) { announce('Use a video under 2 GB. Larger files can exhaust device memory.',true); return; }
@@ -3845,9 +3982,14 @@
 
   // Event Listeners
   function initEvents() {
+    addTimeSteppers();
     // Home buttons
     $('#btnReloadApp').addEventListener('click', reloadApplication);
     $('#homeUploadVideo').addEventListener('click', ()=>$('#fileVideo').click());
+    $('#homeMergeVideo').addEventListener('click', ()=>$('#fileMergeVideos').click());
+    $('#fileMergeVideos').addEventListener('change', (e)=>{ const fs=[...e.target.files]; e.target.value=''; if(fs.length) showMergePanel(fs); });
+    $('#btnStartMerge').addEventListener('click', startMerge);
+    $('#btnCancelMerge').addEventListener('click', cancelMerge);
     $('#homeRecordVideo').addEventListener('click', openVideoRecordDialog);
     $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
     $('#homeLibrary').addEventListener('click', ()=>{ location.hash='#/library'; });
