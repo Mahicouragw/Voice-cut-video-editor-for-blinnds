@@ -49,6 +49,10 @@
         <span class="icon" aria-hidden="true">🎬</span>
         <span><strong>Upload Video</strong><br><small style="font-weight:400; color:var(--text2)">MP4, MOV, WebM supported</small></span>
       </button>
+      <button id="homeMergeVideo" aria-label="Merge Videos, button. Join several video clips into one, in the order you pick them">
+        <span class="icon" aria-hidden="true">🔗</span>
+        <span><strong>Merge Videos</strong><br><small style="font-weight:400; color:var(--text2)">Join clips in order</small></span>
+      </button>
       <button id="homeRecordVideo" aria-label="Record Video, button. Record a new video with the camera">
         <span class="icon" aria-hidden="true">📹</span>
         <span><strong>Record Video</strong><br><small style="font-weight:400; color:var(--text2)">Use camera</small></span>
@@ -65,6 +69,18 @@
         <span class="icon" aria-hidden="true">♿</span>
         <span><strong>Help and Accessibility</strong><br><small style="font-weight:400; color:var(--text2)">Guides & shortcuts</small></span>
       </button>
+    </div>
+
+    <div class="card hidden" id="mergePanel" role="region" aria-labelledby="mergeHeading">
+      <h2 id="mergeHeading" tabindex="-1">Merge videos</h2>
+      <p id="mergeIntro">Clips join in the order picked, with no gaps between them.</p>
+      <ol id="mergeFileList"></ol>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="btnStartMerge" class="primary">Merge these clips</button>
+        <button id="btnCancelMerge">Cancel</button>
+      </div>
+      <progress id="mergeProgress" max="100" value="0" style="width:100%; display:none; margin-top:8px;" aria-label="Merge progress"></progress>
+      <p id="mergeStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
     </div>
 
     <div class="card" role="region" aria-labelledby="homeRecentHeading">
@@ -1009,6 +1025,7 @@
 
   <input type="file" id="fileVideo" accept="video/*,.mp4,.mov,.webm,.mkv" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileVideoReconnect" accept="video/*,.mp4,.mov,.webm,.mkv" class="sr-only" tabindex="-1" aria-hidden="true">
+  <input type="file" id="fileMergeVideos" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" multiple class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileAudio" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileVoiceover" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" class="sr-only" tabindex="-1" aria-hidden="true">
 
@@ -1028,6 +1045,7 @@
 <script src="web/nr2.js" defer></script>
 <script src="web/storage.js" defer></script>
 <script src="web/wc-muxer.js" defer></script>
+<script src="web/merge.js" defer></script>
 <script src="web/app.js" defer></script>
 </body>
 </html>
