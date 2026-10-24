@@ -304,3 +304,10 @@ test('2.38 every time control gets stepper buttons',()=>{
   }
   assert.match(src,/mergeMp4Files/,'merge engine is used');
 });
+
+test('2.39 uploads and merges allocate track numbers from freed gaps',()=>{
+  const app = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  const core = fs.readFileSync(path.join(__dirname,'../web/core.js'),'utf8');
+  assert.equal((app.match(/VoiceCutCore\.nextTrackIndex\(/g)||[]).length,2,'uploads and merges both allocate gap-free numbers');
+  assert.match(core,/function nextTrackIndex/,'allocator lives in core');
+});

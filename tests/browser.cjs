@@ -1044,7 +1044,29 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+
+  // Music re-upload after delete: track numbers stay unique, no leftovers.
+  await page.goto('http://127.0.0.1:3099');
+  await page.setInputFiles('#fileVideo',videoPath);
+  await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+  await page.setInputFiles('#fileAudio',audioPath);
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Track 1 added'),{},{timeout:30000});
+  await page.setInputFiles('#fileAudio',audioPath);
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Track 2 added'),{},{timeout:30000});
+  await showPanel('clips');
+  await page.locator('.clip [data-action="delete"]').first().click();
+  await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('deleted.'),{},{timeout:30000});
+  await page.setInputFiles('#fileAudio',audioPath);
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent.includes('Track 1 added'),{},{timeout:30000});
+  {
+    const tracks = await page.evaluate(()=>[...document.querySelectorAll('#timelineContainer .clip')].map(el=>el.getAttribute('aria-label')).filter(l=>l&&l.includes('Music Track')).map(l=>l.match(/Track (\d+)/)[1]));
+    assert.deepEqual(tracks.sort(),['1','2'],'timeline must show distinct track numbers, got '+tracks.join(','));
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity, merge videos, time steppers');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity, merge videos, time steppers, music re-upload track numbers');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
