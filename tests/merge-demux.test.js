@@ -1,16 +1,13 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {execFileSync} = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const {demuxMp4, parseAsc} = require('../web/merge');
 
-const dir = path.join(__dirname, '..', 'artifacts', 'merge-demux');
-fs.mkdirSync(dir, {recursive: true});
-const f1 = path.join(dir, 'clip1.mp4');
-const f2 = path.join(dir, 'clip2.mp4');
-if (!fs.existsSync(f1)) execFileSync('ffmpeg', ['-v','error','-f','lavfi','-i','color=c=blue:s=320x180:r=24:d=2','-f','lavfi','-i','sine=frequency=440:duration=2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','48000','-ac','2','-shortest','-y',f1]);
-if (!fs.existsSync(f2)) execFileSync('ffmpeg', ['-v','error','-f','lavfi','-i','color=c=red:s=640x360:r=30:d=2','-f','lavfi','-i','sine=frequency=880:duration=2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','44100','-ac','1','-shortest','-y',f2]);
+// Committed fixtures (no ffmpeg needed): clip1 is 320x180 24fps + 48kHz
+// stereo AAC; clip2 is 640x360 30fps + 44.1kHz mono AAC, both 2 seconds.
+const f1 = path.join(__dirname, 'fixtures', 'merge-demux-clip1.mp4');
+const f2 = path.join(__dirname, 'fixtures', 'merge-demux-clip2.mp4');
 
 test('AAC config bytes decode to object type, rate and channels', () => {
   assert.deepEqual(parseAsc(new Uint8Array([0x11, 0x90])), {objectType: 2, sampleRate: 48000, channels: 2});
