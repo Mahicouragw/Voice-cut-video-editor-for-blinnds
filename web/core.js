@@ -425,7 +425,15 @@
     const ts = baseUs + Math.round((keptFrames * 1000000) / sampleRate);
     return Math.max(lastTs + 1, ts);
   }
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp };
+  // 2.39: track numbers survive deletes. Smallest positive int not in
+  // use, so removing Track 1 of {1,2} frees 1 instead of duplicating 2.
+  function nextTrackIndex(used) {
+    const set = new Set((used || []).filter(n => Number.isInteger(n) && n > 0));
+    let n = 1;
+    while (set.has(n)) n++;
+    return n;
+  }
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, nextTrackIndex };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

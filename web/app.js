@@ -1096,17 +1096,8 @@
           Object.defineProperty(audio, 'duration', {value: decoded.duration});
         } catch { announce('Could not determine recording duration. Try importing another audio format.',true); return; }
       }
-      const existingOfType = project.clips.filter(c=>c.type===type).length;
-      const trackIndex = type==='music' ? Math.floor(existingOfType/1)+1 : Math.floor(existingOfType/1)+1;
-      // Determine next track index: if music, count distinct trackIndex
-      let nextTrackIndex = 1;
-      if (type==='music') {
-        const musicTracks = new Set(project.clips.filter(c=>c.type==='music').map(c=>c.trackIndex));
-        nextTrackIndex = musicTracks.size + 1;
-      } else {
-        const typeTracks = new Set(project.clips.filter(c=>c.type===type).map(c=>c.trackIndex));
-        nextTrackIndex = typeTracks.size + 1;
-      }
+      // Freed track numbers are reused (2.39): deleting Track 1 frees 1.
+      const nextTrackIndex = VoiceCutCore.nextTrackIndex(project.clips.filter(c=>c.type===type).map(c=>c.trackIndex));
       const clip = {
         id: uid(),
         name: file.name.replace(/\.[^/.]+$/,''),
@@ -3257,7 +3248,7 @@
       const ids = new Set(parts.map(c=>c.id));
       project.clips = project.clips.filter(c=>!ids.has(c.id));
       for (const id of ids) { const node = audioNodes.get(id); if (node) { try { node.element.pause(); } catch(e){} audioNodes.delete(id); } }
-      const clip = {id: uid(), name: 'Merged audio', type: 'music', file: new File([blob], 'merged-audio.wav', {type:'audio/wav'}), url: URL.createObjectURL(blob), startTime: 0, trimStart: 0, trimEnd: 0, duration: mixed.duration, volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'off', trackIndex: 1};
+      const clip = {id: uid(), name: 'Merged audio', type: 'music', file: new File([blob], 'merged-audio.wav', {type:'audio/wav'}), url: URL.createObjectURL(blob), startTime: 0, trimStart: 0, trimEnd: 0, duration: mixed.duration, volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'off', trackIndex: VoiceCutCore.nextTrackIndex(project.clips.filter(c=>c.type==='music').map(c=>c.trackIndex))};
       project.clips.push(clip);
       createAudioNodeForClip(clip);
       selectedClipId = clip.id;
