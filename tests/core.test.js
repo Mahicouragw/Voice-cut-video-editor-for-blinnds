@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch,audioBlockTimestamp,nextTrackIndex} = require('../web/core');
+const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch,audioBlockTimestamp,nextTrackIndex,exportShapeSize,exportShapeCover} = require('../web/core');
 test('15-minute boundary',()=>{assert.equal(expired(0,TTL_MS-1),false);assert.equal(expired(0,TTL_MS),true);});
 test('deleted segments omitted and trim intersects retained segments',()=>assert.deepEqual(ranges({trimStart:2,trimEnd:9,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),[{start:2,end:4},{start:6,end:9}]));
 test('invalid trim rejected',()=>assert.throws(()=>ranges({trimStart:5,trimEnd:2,duration:10,segments:[]})));
@@ -204,4 +204,18 @@ test('2.39 track numbers fill freed gaps',()=>{
   assert.equal(nextTrackIndex([1,3]),2);
   assert.equal(nextTrackIndex([99]),1);
   assert.equal(nextTrackIndex([0,-2,'x']),1);
+});
+
+test('2.40 export shapes size the canvas',()=>{
+  assert.deepEqual(exportShapeSize('original','1080',0),{width:1920,height:1080});
+  assert.deepEqual(exportShapeSize('original','1080',90),{width:608,height:1080});
+  assert.deepEqual(exportShapeSize('portrait','1080',0),{width:1080,height:1920});
+  assert.deepEqual(exportShapeSize('landscape','720',90),{width:1280,height:720});
+  assert.deepEqual(exportShapeSize('square','720',0),{width:720,height:720});
+  assert.deepEqual(exportShapeSize('portrait','2160',0),{width:2160,height:3840});
+  for (const sh of ['original','portrait','landscape','square'])
+    for (const r of ['720','1080','1440','2160'])
+      for (const rot of [0,90]) assert.equal(exportShapeSize(sh,r,rot).width%2,0,sh+' '+r+' '+rot+' stays even');
+  assert.equal(exportShapeCover('original'),false);
+  assert.equal(exportShapeCover('portrait')&&exportShapeCover('landscape')&&exportShapeCover('square'),true);
 });
