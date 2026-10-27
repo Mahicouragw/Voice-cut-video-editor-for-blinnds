@@ -227,7 +227,7 @@
     pauseAllAudio();
     currentRequest?.abort(); mediaEpoch++;
     clearTimeout(autoSaveTimeout); dirty = false;
-    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], speedRanges:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+    project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], captions:[], captionSettings:{preview:true,burnIn:true}, originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], speedRanges:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', exportShape:'original', created:Date.now(), modified:Date.now() };
     applyPrefsToProject(true);
     selectedClipId = null;
     video.src = '';
@@ -539,6 +539,9 @@
     $('#exportResolution').value = project.resolution;
     $('#exportFps').value = project.fps;
     $('#exportFormat').value = project.format;
+    project.exportShape ||= 'original';
+    $('#exportShape').value = project.exportShape;
+    applyExportShapePreview();
     $('#duckingToggle').checked = project.ducking.enabled;
     $('#duckingLevel').value = project.ducking.level;
     $('#duckingSilenceWait').value = project.ducking.silenceWait || 0;
@@ -872,6 +875,7 @@
     summary.innerHTML = `
       Video duration: ${formatTime(totalDuration)}<br>
       Resolution: ${project.resolution}p<br>
+      Shape: ${exportShapeLabel()}<br>
       Frame rate: ${project.fps} fps<br>
       Format: ${project.format.toUpperCase()}<br>
       Crop: ${project.crop?.preset||'original'} • Rotation: ${project.rotation||0}° • Freeze frames: ${(project.freezes||[]).length}<br>
@@ -2087,13 +2091,20 @@
   // with our own muxer, so the file plays everywhere including Instagram.
   // An export clock pauses across seeks, so video and audio stay in sync.
   function webCodecsExportSize() {
-    const rotation = ((Number(project.rotation) % 360) + 360) % 360;
-    const portrait = rotation === 90 || rotation === 270;
-    const height = Number(project.resolution);
-    return {
-      width: portrait ? Math.round(height * 9 / 16 / 2) * 2 : Math.round(height * 16 / 9 / 2) * 2,
-      height,
-    };
+    return VoiceCutCore.exportShapeSize(project.exportShape, project.resolution, project.rotation);
+  }
+  function exportShapeLabel() {
+    return { original: 'Original', portrait: 'Portrait 9:16', landscape: 'Landscape 16:9', square: 'Square 1:1' }[project.exportShape] || 'Original';
+  }
+  function exportShapeWords() {
+    return project.exportShape && project.exportShape !== 'original' ? exportShapeLabel() + ' shape. Fills the frame from the middle of your video. ' : '';
+  }
+  function applyExportShapePreview() {
+    const wrap = document.getElementById('videoWrapper'), vid = document.getElementById('mainVideo');
+    if (!wrap || !vid) return;
+    const aspects = { portrait: '9/16', landscape: '16/9', square: '1/1' };
+    if (aspects[project.exportShape]) { wrap.style.aspectRatio = aspects[project.exportShape]; vid.style.objectFit = 'cover'; }
+    else { wrap.style.aspectRatio = ''; vid.style.objectFit = ''; }
   }
   function webCodecsAvcCodec(height) {
     // Constrained Baseline stays free of B-frames (decode order equals
@@ -2131,6 +2142,7 @@
     const snap = {
       path,
       format: project.format,
+      shape: project.exportShape || 'original',
       noiseReduction: project.originalAudio?.noiseReduction || 'off',
       enhancedOriginal: !!project.originalAudio?.enhanced,
       ducking: project.ducking?.enabled ? `on@${project.ducking.level}%` : 'off',
@@ -2185,7 +2197,7 @@
     $('#exportProgressContainer').classList.remove('hidden');
     $('#exportProgressContainer').removeAttribute('aria-hidden');
     $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-    announce('Export started. ' + exportAudioWords(exportAudioSnapshot('direct')) + ' Keep this tab visible. Export runs in real time.');
+    announce('Export started. ' + exportShapeWords() + exportAudioWords(exportAudioSnapshot('direct')) + ' Keep this tab visible. Export runs in real time.');
     await ensureAudioContext().resume();
     const dest = audioContext.createMediaStreamDestination();
     const gain = wireExportAudio(dest);
@@ -2224,7 +2236,8 @@
       const rotation = ((Number(project.rotation) % 360) + 360) % 360;
       const portrait = rotation === 90 || rotation === 270;
       const fitW = portrait ? ch : cw, fitH = portrait ? cw : ch;
-      const scale = Math.min(fitW / rect.w, fitH / rect.h), w = rect.w * scale, h = rect.h * scale;
+      const cover = VoiceCutCore.exportShapeCover(project.exportShape);
+      const scale = (cover ? Math.max : Math.min)(fitW / rect.w, fitH / rect.h), w = rect.w * scale, h = rect.h * scale;
       if (rotation === 0) { ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h, (cw - w) / 2, (ch - h) / 2, w, h); ctx.filter = 'none'; return; }
       ctx.save(); ctx.translate(cw / 2, ch / 2); ctx.rotate(rotation * Math.PI / 180);
       ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h, -w / 2, -h / 2, w, h); ctx.restore(); ctx.filter = 'none';
@@ -2643,14 +2656,14 @@
       $('#exportProgressContainer').classList.remove('hidden');
       $('#exportProgressContainer').removeAttribute('aria-hidden');
       $('#exportStatus').textContent = 'Exporting. Keep this tab visible until finished.';
-      announce(audioOnly ? 'Export started. ' + exportAudioWords(exportAudioSnapshot('recording')) + ' This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. ' + exportAudioWords(exportAudioSnapshot('recording')) + ' Keep this tab visible. Export runs in real time.');
+      announce(audioOnly ? 'Export started. ' + exportShapeWords() + exportAudioWords(exportAudioSnapshot('recording')) + ' This file has sound but no picture, so a still background is used. Keep this tab visible.' : 'Export started. ' + exportShapeWords() + exportAudioWords(exportAudioSnapshot('recording')) + ' Keep this tab visible. Export runs in real time.');
       await ensureAudioContext().resume();
       const dest = audioContext.createMediaStreamDestination();
       const gain = wireExportAudio(dest);
       gain.gain.value = 1;
-      const height = Number(project.resolution);
-      exportCanvas.height = height;
-      exportCanvas.width = portrait?Math.round(height*9/16/2)*2:Math.round(height*16/9/2)*2;
+      const size = VoiceCutCore.exportShapeSize(project.exportShape, project.resolution, project.rotation);
+      exportCanvas.height = size.height;
+      exportCanvas.width = size.width;
       const ctx = exportCanvas.getContext('2d');
       let badFrames = 0;
       const drawAudioOnlyFrame = () => {
@@ -2680,7 +2693,8 @@
         badFrames = 0;
         const cw = exportCanvas.width, ch = exportCanvas.height;
         const fitW = portrait?ch:cw, fitH = portrait?cw:ch;
-        const scale = Math.min(fitW/rect.w,fitH/rect.h), w = rect.w*scale, h = rect.h*scale;
+        const cover = VoiceCutCore.exportShapeCover(project.exportShape);
+        const scale = (cover?Math.max:Math.min)(fitW/rect.w,fitH/rect.h), w = rect.w*scale, h = rect.h*scale;
         if (rotation===0) { ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,(cw-w)/2,(ch-h)/2,w,h); ctx.filter='none'; return; }
         ctx.save(); ctx.translate(cw/2,ch/2); ctx.rotate(rotation*Math.PI/180);
         ctx.drawImage(video,rect.x,rect.y,rect.w,rect.h,-w/2,-h/2,w,h); ctx.restore(); ctx.filter='none';
@@ -4339,6 +4353,7 @@
     $('#exportResolution').addEventListener('change', (e)=>{ project.resolution=e.target.value; updateExportSummary(); });
     $('#exportFps').addEventListener('change', (e)=>{ project.fps=parseInt(e.target.value); updateExportSummary(); });
     $('#exportFormat').addEventListener('change', (e)=>{ project.format=e.target.value; updateExportSummary(); });
+    $('#exportShape').addEventListener('change', (e)=>{ project.exportShape=e.target.value; applyExportShapePreview(); updateExportSummary(); });
     $('#btnDoExport').addEventListener('click', ()=>doExport(0));
     $('#btnExport').addEventListener('click', ()=>{ if(!hasProject()){ showView('none'); return; } openEditor(); showEditorPanel('export',true); doExport(); });
     $('#btnCancelExport').addEventListener('click', cancelExport);
@@ -4397,7 +4412,7 @@
         clearTimeout(autoSaveTimeout); dirty = false; pauseAllAudio();
         await saveQueue.catch(() => {});
         await VoiceCutStorage.remove(project.id);
-        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], speedRanges:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', created:Date.now(), modified:Date.now() };
+        project = { id:'proj_'+Date.now(), name:'Untitled Project', videoFile:null, videoUrl:null, duration:0, trimStart:0, trimEnd:0, markStart:null, markEnd:null, crop:{preset:'original',x:0,y:0,w:100,h:100}, rotation:0, freezes:[], segments:[], originalAudio:{volume:100, muted:false, fadeIn:0, fadeOut:0, noiseReduction:'off'}, clips:[], speedRanges:[], videoFilter:'normal', ducking:{enabled:false, level:30, silenceWait:0}, playbackSpeed:1, skipAmount:5, resolution:'1080', fps:30, format:'mp4', exportShape:'original', created:Date.now(), modified:Date.now() };
         selectedClipId=null;
         video.removeEventListener('error', videoLoadError);
         video.src='';

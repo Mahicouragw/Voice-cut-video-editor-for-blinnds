@@ -311,3 +311,13 @@ test('2.39 uploads and merges allocate track numbers from freed gaps',()=>{
   assert.equal((app.match(/VoiceCutCore\.nextTrackIndex\(/g)||[]).length,2,'uploads and merges both allocate gap-free numbers');
   assert.match(core,/function nextTrackIndex/,'allocator lives in core');
 });
+
+test('2.40 export shape select drives both export paths',()=>{
+  const html = fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  assert.match(html,/id="exportShape"/,'shape select lives in export');
+  for (const v of ['original','portrait','landscape','square']) assert.ok(html.includes('value="'+v+'"'),'shape offers '+v);
+  const app = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  assert.equal((app.match(/exportShapeSize\(project\.exportShape/g)||[]).length,2,'direct and recording paths size from shape');
+  assert.equal((app.match(/exportShapeCover\(project\.exportShape\)/g)||[]).length,2,'both draw paths cover-fill shaped exports');
+  assert.match(app,/applyExportShapePreview/,'preview mirrors the shape');
+});

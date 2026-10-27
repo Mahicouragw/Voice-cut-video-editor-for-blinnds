@@ -433,7 +433,21 @@
     while (set.has(n)) n++;
     return n;
   }
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, nextTrackIndex };
+  // 2.40: export shape (Shorts portrait etc.). Resolution drives the
+  // detail; rotation only affects Original.
+  function exportShapeSize(shape, resolution, rotation) {
+    const height = Number(resolution) || 1080;
+    const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+    if (shape === 'portrait') return { width: height, height: even(height * 16 / 9) };
+    if (shape === 'landscape') return { width: even(height * 16 / 9), height };
+    if (shape === 'square') return { width: even(height), height };
+    const rot = ((Number(rotation) % 360) + 360) % 360;
+    const portrait = rot === 90 || rot === 270;
+    return { width: portrait ? even(height * 9 / 16) : even(height * 16 / 9), height };
+  }
+  // Shaped exports fill the frame from the middle (cover); Original fits.
+  function exportShapeCover(shape) { return shape === 'portrait' || shape === 'landscape' || shape === 'square'; }
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, nextTrackIndex, exportShapeSize, exportShapeCover };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);
