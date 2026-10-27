@@ -1072,7 +1072,7 @@ const path = require('node:path');
   await page.setInputFiles('#fileVideo',videoPath);
   await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
   await showPanel('export');
-  for (const [shape,fmt,w,h] of [['portrait','webm',1080,1920],['landscape','mp4',1920,1080],['square','webm',1080,1080]]) {
+  for (const [shape,fmt,w,h] of [['portrait','mp4',1080,1920],['landscape','mp4',1920,1080],['square','webm',1080,1080]]) {
     await page.locator('#exportShape').selectOption(shape);
     await page.locator('#exportFormat').selectOption(fmt);
     await page.locator('#btnDoExport').click();
@@ -1090,7 +1090,82 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+
+  // Original export keeps the source orientation and states measured dims.
+  {
+    const portraitSrc=path.join(dir,'portrait-src.mp4');
+    execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=green:s=180x320:r=24:d=3','-f','lavfi','-i','sine=frequency=660:duration=3','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest','-y',portraitSrc]);
+    await page.goto('http://127.0.0.1:3099');
+    await page.setInputFiles('#fileVideo',portraitSrc);
+    await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+    await showPanel('export');
+    await page.locator('#exportShape').selectOption('original');
+    await page.locator('#exportFormat').selectOption('webm');
+    await page.locator('#btnDoExport').click();
+    await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:120000});
+    const oStatus=await page.locator('#exportStatus').textContent();
+    console.log('original portrait status: '+oStatus);
+    assert.match(oStatus,/Portrait 1080 by 1920/,'verdict must state measured portrait dims, got '+oStatus);
+    assert.match(oStatus,/Good for Shorts/,'short portrait must read Good for Shorts, got '+oStatus);
+    const oDl=page.waitForEvent('download');
+    await page.locator('#btnDownloadExported').click();
+    const oOutput=path.join(dir,'export-original-portrait.webm');
+    await (await oDl).saveAs(oOutput);
+    const oDims=execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','csv=p=0',oOutput],{encoding:'utf8'}).trim();
+    assert.equal(oDims,'1080,1920','original portrait export must be 1080x1920, got '+oDims);
+    await showPanel('clips');
+    await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+    await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+    await page.goto('http://127.0.0.1:3099');
+    await page.setInputFiles('#fileVideo',videoPath);
+    await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 2,{},{timeout:30000});
+    await showPanel('export');
+    await page.locator('#exportShape').selectOption('original');
+    await page.locator('#exportFormat').selectOption('webm');
+    await page.locator('#btnDoExport').click();
+    await page.waitForFunction(()=>document.querySelector('#exportStatus').textContent.startsWith('Export complete'),{},{timeout:120000});
+    const lStatus=await page.locator('#exportStatus').textContent();
+    console.log('original landscape status: '+lStatus);
+    assert.match(lStatus,/Landscape 1920 by 1080/,'verdict must state measured landscape dims, got '+lStatus);
+    assert.match(lStatus,/Wide video/,'wide export must warn about Videos, got '+lStatus);
+    await showPanel('clips');
+    await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+    await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+  }
+
+  // Rotated phone clips join upright: portrait output, picture rotated.
+  await page.goto('http://127.0.0.1:3099');
+  {
+    const rotClip=path.join(__dirname,'fixtures','rot90-320x180.mp4');
+    const m2b=path.join(dir,'merge2b.mp4');
+    execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:s=320x180:r=24:d=2','-f','lavfi','-i','sine=frequency=880:duration=2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','48000','-shortest','-y',m2b]);
+    await page.setInputFiles('#fileMergeVideos',[rotClip,m2b]);
+    await page.locator('#mergePanel:not(.hidden)').waitFor({timeout:30000});
+    await page.locator('#btnStartMerge').click();
+    await page.waitForFunction(()=>document.querySelector('#mainVideo').duration > 3.5,{},{timeout:180000});
+    const rBytes = await page.evaluate(async ()=>[...new Uint8Array(await window.VoiceCutDebug.lastMergeBlob.arrayBuffer())]);
+    const rPath = path.join(dir,'merged-rotated.mp4');
+    fs.writeFileSync(rPath, Buffer.from(rBytes));
+    const rDims=execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','csv=p=0',rPath],{encoding:'utf8'}).trim();
+    console.log('rotated merge dims: '+rDims);
+    assert.equal(rDims,'180,320','rotated join must be portrait 180x320, got '+rDims);
+    const topPx=execFileSync('ffmpeg',['-v','error','-ss','1','-i',rPath,'-frames:v','1','-vf','crop=iw:ih/4:0:0','-f','rawvideo','-pix_fmt','rgb24','-'],{maxBuffer:4*1024*1024});
+    let tR=0,tB=0;for(let j=0;j<topPx.length;j+=3){tR+=topPx[j];tB+=topPx[j+2];}
+    const botPx=execFileSync('ffmpeg',['-v','error','-ss','1','-i',rPath,'-frames:v','1','-vf','crop=iw:ih/4:0:3*ih/4','-f','rawvideo','-pix_fmt','rgb24','-'],{maxBuffer:4*1024*1024});
+    let bR=0,bB=0;for(let j=0;j<botPx.length;j+=3){bR+=botPx[j];bB+=botPx[j+2];}
+    console.log('rotated merge top R='+Math.round(tR/(topPx.length/3))+' B='+Math.round(tB/(topPx.length/3))+' bottom R='+Math.round(bR/(botPx.length/3))+' B='+Math.round(bB/(botPx.length/3)));
+    assert.ok(tB>tR*2,'rotated join top must be blue, R='+tR+' B='+tB);
+    assert.ok(bR>bB*2,'rotated join bottom must be red, R='+bR+' B='+bB);
+    const rf = audioFidelity(rPath);
+    assert.ok(Math.abs(rf.dur-4)<0.5,'rotated join must last ~4s, got '+rf.dur.toFixed(2));
+    assert.ok(rf.tone(0,440)>rf.tone(0,880)*4,'rotated clip must come first (440Hz)');
+    assert.ok(rf.tone(3,880)>rf.tone(3,440)*4,'second clip must come second (880Hz)');
+    assert.ok(rf.flat<3,'rotated join must stay gapless, RMS spread '+rf.flat.toFixed(2)+'dB');
+  }
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
   assert.deepEqual(errors,[]);
-  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity, merge videos, time steppers, music re-upload track numbers, export shapes');
+  console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity, merge videos, time steppers, music re-upload track numbers, export shapes, original orientation, rotated merge');
  } finally {await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -150,7 +150,7 @@
   }
 
   function parseTrak(file, trak, movieTimescale) {
-    const t = { kind: null, codec: null, timescale: 0, durationSec: 0, tkDurationSec: 0, width: 0, height: 0, desc: null, asc: null, sampleRate: 0, channels: 0, elstHeadSec: 0, elstSegSec: 0, samples: [], nominalFrameUs: 33367 };
+    const t = { kind: null, codec: null, timescale: 0, durationSec: 0, tkDurationSec: 0, width: 0, height: 0, rotation: 0, codedWidth: 0, codedHeight: 0, desc: null, asc: null, sampleRate: 0, channels: 0, elstHeadSec: 0, elstSegSec: 0, samples: [], nominalFrameUs: 33367 };
     walkBoxes(trak, 0, trak.length, (type, start, end) => {
       const c = trak.subarray(start, end);
       if (type === 'tkhd') {
@@ -159,6 +159,16 @@
         if (movieTimescale > 0) t.tkDurationSec = dur / movieTimescale;
         const wo = v === 1 ? 84 : 76;
         t.width = readU32(c, wo) >>> 16; t.height = readU32(c, wo + 4) >>> 16;
+        // 2.41: phone rotation tags live in the tkhd matrix. Browsers
+        // apply them to <video> but VideoDecoder outputs coded pixels,
+        // so joined files must rotate here. Matrix is 9x int32 at +40/+48.
+        try {
+          const mo = v === 1 ? 48 : 40;
+          const ma = readI32(c, mo) / 65536, mc = readI32(c, mo + 12) / 65536;
+          const deg = (Math.round(Math.atan2(mc, ma) * 180 / Math.PI) + 360) % 360;
+          const snap = (Math.round(deg / 90) * 90) % 360;
+          if (Math.abs(deg - snap) < 4 || Math.abs(deg - snap) > 356) t.rotation = snap;
+        } catch (e) { /* leave rotation 0 */ }
       } else if (type === 'edts') {
         walkBoxes(trak, start, end, (t2, s2, e2) => {
           if (t2 !== 'elst') return;
@@ -256,8 +266,10 @@
       });
       if (!t.desc || t.desc.length < 4) return;
       t.codec = 'avc1.' + hexByte(t.desc[1]) + hexByte(t.desc[2]) + hexByte(t.desc[3]);
-      t.width = t.width || (stsd[o + 24] << 8) | stsd[o + 25];
-      t.height = t.height || (stsd[o + 26] << 8) | stsd[o + 27];
+      t.width = t.width || (stsd[o + 32] << 8) | stsd[o + 33];
+      t.height = t.height || (stsd[o + 34] << 8) | stsd[o + 35];
+      t.codedWidth = (stsd[o + 32] << 8) | stsd[o + 33];
+      t.codedHeight = (stsd[o + 34] << 8) | stsd[o + 35];
     } else if (fourcc === 'mp4a') {
       // Sound entries version 0/1/2 put extensions at different offsets.
       for (const ext of [36, 52, 64]) {
@@ -299,6 +311,12 @@
 
   // ---------------- Merge engine (browser, WebCodecs) ----------------
   function even(n) { return Math.max(2, Math.round(n) & ~1); }
+  // Display size: coded pixels with the rotation tag applied. Matches
+  // what <video> reports as videoWidth/videoHeight (verified by probe).
+  function displaySize(t) {
+    const w = t.codedWidth || t.width || 0, h = t.codedHeight || t.height || 0;
+    return (t.rotation === 90 || t.rotation === 270) ? { w: h, h: w } : { w, h };
+  }
 
   async function mergeMp4Files(files, opts) {
     opts = opts || {};
@@ -357,11 +375,12 @@
     // Plan the output from the first clip that has each track.
     const firstVideo = clips.map(c => c.info.video).find(v => v);
     const firstAudio = clips.map(c => c.info.audio).find(a => a);
-    const outW = firstVideo ? even(firstVideo.width) : 640;
-    const outH = firstVideo ? even(firstVideo.height) : 360;
+    const firstDisp = firstVideo ? displaySize(firstVideo) : null;
+    const outW = firstDisp ? even(firstDisp.w) : 640;
+    const outH = firstDisp ? even(firstDisp.h) : 360;
     const outRate = firstAudio ? firstAudio.sampleRate : 48000;
     const outCh = 2;
-    const mixedSizes = clips.some(c => c.info.video && (even(c.info.video.width) !== outW || even(c.info.video.height) !== outH));
+    const mixedSizes = clips.some(c => { if (!c.info.video) return false; const d = displaySize(c.info.video); return even(d.w) !== outW || even(d.h) !== outH; });
     let totalSamples = 0;
     for (const c of clips) {
       if (c.info.video) totalSamples += c.info.video.samples.length;
@@ -495,7 +514,9 @@
         if (info.video) {
           const vt = info.video;
           const vStartUs = videoCursorUs;
-          const needScale = even(vt.width) !== outW || even(vt.height) !== outH;
+          const vDisp = displaySize(vt);
+          const vRotRad = -(vt.rotation || 0) * Math.PI / 180;
+          const needCanvas = even(vDisp.w) !== outW || even(vDisp.h) !== outH || vRotRad !== 0;
           // Presentation-order grid from the container: decoder output
           // timestamps echo input order, so durations come from here.
           const presCtsUs = vt.samples.map(s => s.cts).sort((a, b) => a - b).map(c => toUs(c, vt.timescale));
@@ -508,12 +529,17 @@
             const ts = videoCursorUs;
             videoCursorUs += durUs;
             try {
-              if (needScale) {
+              if (needCanvas) {
                 scaleCtx.fillStyle = '#000000';
                 scaleCtx.fillRect(0, 0, outW, outH);
-                const s = Math.min(outW / vt.width, outH / vt.height);
-                const dw = Math.max(1, Math.round(vt.width * s)), dh = Math.max(1, Math.round(vt.height * s));
-                scaleCtx.drawImage(frame, Math.round((outW - dw) / 2), Math.round((outH - dh) / 2), dw, dh);
+                const s = Math.min(outW / vDisp.w, outH / vDisp.h);
+                const fw = frame.codedWidth || vt.width, fh = frame.codedHeight || vt.height;
+                scaleCtx.save();
+                scaleCtx.translate(outW / 2, outH / 2);
+                if (vRotRad) scaleCtx.rotate(vRotRad);
+                scaleCtx.scale(s, s);
+                scaleCtx.drawImage(frame, -fw / 2, -fh / 2, fw, fh);
+                scaleCtx.restore();
                 frame.close();
                 const vf = new root.VideoFrame(scaleCanvas, { timestamp: ts, duration: durUs });
                 venc.encode(vf, { keyFrame: !!key });
@@ -543,7 +569,7 @@
             error: (e) => { if (!encoderError) encoderError = new Error(clip.label + ' has a picture this browser cannot read.'); },
           });
           try {
-            vdec.configure({ codec: vt.codec, description: vt.desc, codedWidth: vt.width, codedHeight: vt.height });
+            vdec.configure({ codec: vt.codec, description: vt.desc, codedWidth: vt.codedWidth || vt.width, codedHeight: vt.codedHeight || vt.height });
           } catch (e) { fail(clip.label + ' uses a picture format this browser cannot read.'); }
           for (let si = 0; si < vt.samples.length; si++) {
             checkEncoder();
@@ -756,7 +782,7 @@
     }
   }
 
-  const api = { demuxMp4, mergeMp4Files, parseAsc };
+  const api = { demuxMp4, mergeMp4Files, parseAsc, displaySize };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VoiceCutMerge = api;
 })(typeof self !== 'undefined' ? self : this);

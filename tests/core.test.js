@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch,audioBlockTimestamp,nextTrackIndex,exportShapeSize,exportShapeCover} = require('../web/core');
+const {ranges,mimeFor,mimeOptions,exportLooksShort,extension,expired,TTL_MS,deleteRange,detectCaptionScript,captionScriptMismatch,audioBlockTimestamp,nextTrackIndex,exportShapeSize,exportShapeCover,exportShapeVerdict} = require('../web/core');
 test('15-minute boundary',()=>{assert.equal(expired(0,TTL_MS-1),false);assert.equal(expired(0,TTL_MS),true);});
 test('deleted segments omitted and trim intersects retained segments',()=>assert.deepEqual(ranges({trimStart:2,trimEnd:9,duration:10,segments:[{start:0,end:4},{start:6,end:10}]}),[{start:2,end:4},{start:6,end:9}]));
 test('invalid trim rejected',()=>assert.throws(()=>ranges({trimStart:5,trimEnd:2,duration:10,segments:[]})));
@@ -208,7 +208,7 @@ test('2.39 track numbers fill freed gaps',()=>{
 
 test('2.40 export shapes size the canvas',()=>{
   assert.deepEqual(exportShapeSize('original','1080',0),{width:1920,height:1080});
-  assert.deepEqual(exportShapeSize('original','1080',90),{width:608,height:1080});
+  assert.deepEqual(exportShapeSize('original','1080',90),{width:1080,height:1920});
   assert.deepEqual(exportShapeSize('portrait','1080',0),{width:1080,height:1920});
   assert.deepEqual(exportShapeSize('landscape','720',90),{width:1280,height:720});
   assert.deepEqual(exportShapeSize('square','720',0),{width:720,height:720});
@@ -218,4 +218,24 @@ test('2.40 export shapes size the canvas',()=>{
       for (const rot of [0,90]) assert.equal(exportShapeSize(sh,r,rot).width%2,0,sh+' '+r+' '+rot+' stays even');
   assert.equal(exportShapeCover('original'),false);
   assert.equal(exportShapeCover('portrait')&&exportShapeCover('landscape')&&exportShapeCover('square'),true);
+});
+
+test('2.41 Original follows the source orientation, verdict words stay plain',()=>{
+  assert.deepEqual(exportShapeSize('original','1080',0,720,1280),{width:1080,height:1920});
+  assert.deepEqual(exportShapeSize('original','1080',0,1280,720),{width:1920,height:1080});
+  assert.deepEqual(exportShapeSize('original','720',0,1080,1080),{width:720,height:720});
+  assert.deepEqual(exportShapeSize('original','1080',90,1280,720),{width:1080,height:1920});
+  assert.deepEqual(exportShapeSize('original','1080',0,0,0),{width:1920,height:1080});
+  assert.deepEqual(exportShapeSize('original','1080',0,320,180),{width:1920,height:1080});
+  assert.deepEqual(exportShapeVerdict(1080,1920,30),{orientation:'portrait',shorts:true,words:'Portrait 1080 by 1920. Good for Shorts.'});
+  assert.deepEqual(exportShapeVerdict(0,0,5),{orientation:'unknown',shorts:null,words:''});
+  const wide = exportShapeVerdict(1920,1080,30);
+  assert.equal(wide.orientation,'landscape'); assert.equal(wide.shorts,false);
+  assert.match(wide.words,/Wide video/);
+  const long = exportShapeVerdict(1080,1920,200);
+  assert.equal(long.shorts,false); assert.match(long.words,/Longer than 3 minutes/);
+  const sq = exportShapeVerdict(720,720,10);
+  assert.equal(sq.orientation,'square'); assert.match(sq.words,/Square video/);
+  const nodur = exportShapeVerdict(1920,1080,NaN);
+  assert.equal(nodur.words,'Landscape 1920 by 1080.'); assert.equal(nodur.shorts,null);
 });
