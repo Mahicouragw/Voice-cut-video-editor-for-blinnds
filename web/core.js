@@ -435,19 +435,50 @@
   }
   // 2.40: export shape (Shorts portrait etc.). Resolution drives the
   // detail; rotation only affects Original.
-  function exportShapeSize(shape, resolution, rotation) {
+  function exportShapeSize(shape, resolution, rotation, srcW, srcH) {
     const height = Number(resolution) || 1080;
     const even = (n) => Math.max(2, Math.round(n / 2) * 2);
     if (shape === 'portrait') return { width: height, height: even(height * 16 / 9) };
     if (shape === 'landscape') return { width: even(height * 16 / 9), height };
     if (shape === 'square') return { width: even(height), height };
     const rot = ((Number(rotation) % 360) + 360) % 360;
-    const portrait = rot === 90 || rot === 270;
-    return { width: portrait ? even(height * 9 / 16) : even(height * 16 / 9), height };
+    const userPortrait = rot === 90 || rot === 270;
+    // 2.41: Original follows the source picture, not a fixed wide frame.
+    // srcW/srcH are display dims (the browser already applies phone
+    // rotation tags), so only the user's own rotation swaps them, and the
+    // box matches the equivalent shape at full detail.
+    let eff = userPortrait ? 'portrait' : 'landscape';
+    if (Number.isFinite(srcW) && srcW > 0 && Number.isFinite(srcH) && srcH > 0) {
+      let w = srcW, h = srcH;
+      if (userPortrait) { w = srcH; h = srcW; }
+      const ar = w / h;
+      eff = ar < 0.95 ? 'portrait' : ar > 1.05 ? 'landscape' : 'square';
+    }
+    if (eff === 'portrait') return { width: height, height: even(height * 16 / 9) };
+    if (eff === 'square') return { width: even(height), height };
+    return { width: even(height * 16 / 9), height };
   }
   // Shaped exports fill the frame from the middle (cover); Original fits.
   function exportShapeCover(shape) { return shape === 'portrait' || shape === 'landscape' || shape === 'square'; }
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, nextTrackIndex, exportShapeSize, exportShapeCover };
+  // 2.41: plain-words verdict from MEASURED file dims, so a "still wide"
+  // report can be settled from what the file really is. YouTube Shorts
+  // need a tall picture under 3 minutes.
+  function exportShapeVerdict(w, h, durSec) {
+    if (!Number.isFinite(w) || w <= 0 || !Number.isFinite(h) || h <= 0)
+      return { orientation: 'unknown', shorts: null, words: '' };
+    const orientation = h > w ? 'portrait' : w > h ? 'landscape' : 'square';
+    const dims = (orientation === 'portrait' ? 'Portrait' : orientation === 'landscape' ? 'Landscape' : 'Square') + ' ' + w + ' by ' + h + '.';
+    const dur = Number(durSec);
+    if (!Number.isFinite(dur)) return { orientation, shorts: null, words: dims };
+    if (dur > 180)
+      return { orientation, shorts: false, words: dims + ' Longer than 3 minutes, so YouTube lists it under Videos, not Shorts.' };
+    if (orientation === 'portrait')
+      return { orientation, shorts: true, words: dims + ' Good for Shorts.' };
+    if (orientation === 'square')
+      return { orientation, shorts: false, words: dims + ' Square video, so YouTube lists it under Videos. Choose the Portrait shape for Shorts.' };
+    return { orientation, shorts: false, words: dims + ' Wide video, so YouTube lists it under Videos. Choose the Portrait shape for Shorts.' };
+  }
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, nextTrackIndex, exportShapeSize, exportShapeCover, exportShapeVerdict };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

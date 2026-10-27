@@ -2,12 +2,13 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {demuxMp4, parseAsc} = require('../web/merge');
+const {demuxMp4, parseAsc, displaySize} = require('../web/merge');
 
 // Committed fixtures (no ffmpeg needed): clip1 is 320x180 24fps + 48kHz
 // stereo AAC; clip2 is 640x360 30fps + 44.1kHz mono AAC, both 2 seconds.
 const f1 = path.join(__dirname, 'fixtures', 'merge-demux-clip1.mp4');
 const f2 = path.join(__dirname, 'fixtures', 'merge-demux-clip2.mp4');
+const f3 = path.join(__dirname, 'fixtures', 'rot90-320x180.mp4');
 
 test('AAC config bytes decode to object type, rate and channels', () => {
   assert.deepEqual(parseAsc(new Uint8Array([0x11, 0x90])), {objectType: 2, sampleRate: 48000, channels: 2});
@@ -59,4 +60,16 @@ test('demuxer reads a mismatched second clip (size, rate, channels, fps)', () =>
   assert.equal(d.audio.sampleRate, 44100);
   assert.equal(d.audio.channels, 1);
   assert.ok(d.video.nominalFrameUs > 25000 && d.video.nominalFrameUs < 40000, 'nominal frame ~30fps');
+});
+
+test('2.41 demuxer reads the phone rotation tag and coded size', () => {
+  const d = demuxMp4(new Uint8Array(fs.readFileSync(f3)));
+  assert.ok(d.video, 'video track found');
+  assert.equal(d.video.rotation, 90);
+  assert.equal(d.video.codedWidth, 320);
+  assert.equal(d.video.codedHeight, 180);
+  assert.deepEqual(displaySize(d.video), {w: 180, h: 320});
+  const plain = demuxMp4(new Uint8Array(fs.readFileSync(f1)));
+  assert.equal(plain.video.rotation, 0);
+  assert.deepEqual(displaySize(plain.video), {w: 320, h: 180});
 });

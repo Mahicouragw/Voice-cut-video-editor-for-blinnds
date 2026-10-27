@@ -2077,6 +2077,19 @@
       probe.src = url;
     });
   }
+  function measureBlobSize(blob) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const url = URL.createObjectURL(blob);
+      const done = (value) => { if (settled) return; settled = true; clearTimeout(timer); URL.revokeObjectURL(url); resolve(value); };
+      const timer = setTimeout(() => done(null), 15000);
+      const probe = document.createElement('video');
+      probe.preload = 'metadata'; probe.muted = true;
+      probe.onloadedmetadata = () => done({ width: probe.videoWidth || 0, height: probe.videoHeight || 0 });
+      probe.onerror = () => done(null);
+      probe.src = url;
+    });
+  }
   function formatExportLength(seconds) {
     const total = Math.max(0, Math.round(seconds));
     const h = Math.floor(total/3600), m = Math.floor((total%3600)/60), s = total%60;
@@ -2091,7 +2104,7 @@
   // with our own muxer, so the file plays everywhere including Instagram.
   // An export clock pauses across seeks, so video and audio stay in sync.
   function webCodecsExportSize() {
-    return VoiceCutCore.exportShapeSize(project.exportShape, project.resolution, project.rotation);
+    return VoiceCutCore.exportShapeSize(project.exportShape, project.resolution, project.rotation, video.videoWidth, video.videoHeight);
   }
   function exportShapeLabel() {
     return { original: 'Original', portrait: 'Portrait 9:16', landscape: 'Landscape 16:9', square: 'Square 1:1' }[project.exportShape] || 'Original';
@@ -2568,8 +2581,16 @@
         for (const id of ['exportedVideo', 'btnPlayExported', 'btnDownloadExported', 'btnShareExported']) $('#' + id).classList.remove('hidden');
         $('#exportProgressBar').style.width = '100%'; $('#exportProgressBar').setAttribute('aria-valuenow', '100');
         const lengthWords = Number.isFinite(measuredLength) ? ' ' + formatExportLength(measuredLength) + '.' : '';
-        $('#exportStatus').textContent = 'Export complete.' + lengthWords + ' Preview, then download.';
-        announce('Export complete.' + lengthWords + ' Preview, then download.', true);
+        const measuredSize = await measureBlobSize(exportedBlob);
+        // WebM duration tags often read back as unmeasurable: fall back to
+        // the planned length so the Shorts verdict still speaks.
+        const verdictDur = Number.isFinite(measuredLength) ? measuredLength : exportDuration;
+        const shapeVerdict = VoiceCutCore.exportShapeVerdict(measuredSize ? measuredSize.width : 0, measuredSize ? measuredSize.height : 0, verdictDur);
+        const verdictWords = shapeVerdict.words ? ' ' + shapeVerdict.words : '';
+        const measuredInfo = { width: measuredSize ? measuredSize.width : 0, height: measuredSize ? measuredSize.height : 0, orientation: shapeVerdict.orientation, shorts: shapeVerdict.shorts };
+        try { console.log('[VoiceCut export measured] ' + JSON.stringify(measuredInfo)); if (window.VoiceCutDebug && window.VoiceCutDebug.lastExport) window.VoiceCutDebug.lastExport.measured = measuredInfo; } catch (e) {}
+        $('#exportStatus').textContent = 'Export complete.' + lengthWords + verdictWords + ' Preview, then download.';
+        announce('Export complete.' + lengthWords + verdictWords + ' Preview, then download.', true);
         notifyComplete('Export complete', 'Your video export is ready. Preview, then download.');
         try { console.log('[VoiceCut export audio] stallEvents=' + audioStallEvents); if (window.VoiceCutDebug && window.VoiceCutDebug.lastExport) window.VoiceCutDebug.lastExport.stallEvents = audioStallEvents; } catch (e) {}
         exportCleanup?.();
@@ -2661,7 +2682,7 @@
       const dest = audioContext.createMediaStreamDestination();
       const gain = wireExportAudio(dest);
       gain.gain.value = 1;
-      const size = VoiceCutCore.exportShapeSize(project.exportShape, project.resolution, project.rotation);
+      const size = VoiceCutCore.exportShapeSize(project.exportShape, project.resolution, project.rotation, video.videoWidth, video.videoHeight);
       exportCanvas.height = size.height;
       exportCanvas.width = size.width;
       const ctx = exportCanvas.getContext('2d');
@@ -2754,8 +2775,16 @@
         const fellBackToWebm = project.format === 'mp4' && exportedBlob.type.indexOf('video/webm') === 0;
         const lengthWords = Number.isFinite(measuredLength) ? ' ' + formatExportLength(measuredLength) + '.' : '';
         const formatWords = fellBackToWebm ? ' Saved as WebM because this phone cuts MP4 files short.' : '';
-        $('#exportStatus').textContent = 'Export complete.' + lengthWords + formatWords + ' Preview, then download.';
-        announce('Export complete.' + lengthWords + formatWords + ' Preview, then download.', true);
+        const measuredSize = await measureBlobSize(exportedBlob);
+        // WebM duration tags often read back as unmeasurable: fall back to
+        // the planned length so the Shorts verdict still speaks.
+        const verdictDur = Number.isFinite(measuredLength) ? measuredLength : exportDuration;
+        const shapeVerdict = VoiceCutCore.exportShapeVerdict(measuredSize ? measuredSize.width : 0, measuredSize ? measuredSize.height : 0, verdictDur);
+        const verdictWords = shapeVerdict.words ? ' ' + shapeVerdict.words : '';
+        const measuredInfo = { width: measuredSize ? measuredSize.width : 0, height: measuredSize ? measuredSize.height : 0, orientation: shapeVerdict.orientation, shorts: shapeVerdict.shorts };
+        try { console.log('[VoiceCut export measured] ' + JSON.stringify(measuredInfo)); if (window.VoiceCutDebug && window.VoiceCutDebug.lastExport) window.VoiceCutDebug.lastExport.measured = measuredInfo; } catch (e) {}
+        $('#exportStatus').textContent = 'Export complete.' + lengthWords + formatWords + verdictWords + ' Preview, then download.';
+        announce('Export complete.' + lengthWords + formatWords + verdictWords + ' Preview, then download.', true);
         notifyComplete('Export complete','Your video export is ready. Preview, then download.');
       };
       await seekTo(ranges[0].start);

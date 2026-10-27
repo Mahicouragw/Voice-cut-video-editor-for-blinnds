@@ -321,3 +321,14 @@ test('2.40 export shape select drives both export paths',()=>{
   assert.equal((app.match(/exportShapeCover\(project\.exportShape\)/g)||[]).length,2,'both draw paths cover-fill shaped exports');
   assert.match(app,/applyExportShapePreview/,'preview mirrors the shape');
 });
+test('2.41 Original sizing reads the source picture, verdict is measured',()=>{
+  const app = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  assert.equal((app.match(/exportShapeSize\(project\.exportShape, project\.resolution, project\.rotation, video\.videoWidth, video\.videoHeight\)/g)||[]).length,2,'both paths pass display dims');
+  assert.equal((app.match(/measureBlobSize\(exportedBlob\)/g)||[]).length,2,'both finish paths measure the file');
+  assert.equal((app.match(/exportShapeVerdict\(/g)||[]).length,2,'both finish paths speak the measured verdict');
+  assert.equal((app.match(/Number\.isFinite\(measuredLength\) \? measuredLength : exportDuration/g)||[]).length,2,'unmeasurable WebM durations fall back to planned length');
+  const merge = fs.readFileSync(path.join(__dirname,'../web/merge.js'),'utf8');
+  assert.match(merge,/t\.rotation = snap/,'tkhd matrix parsed to degrees');
+  assert.match(merge,/displaySize\(firstVideo\)/,'output planned from display size');
+  assert.match(merge,/scaleCtx\.rotate\(vRotRad\)/,'joining rotates tagged frames');
+});
