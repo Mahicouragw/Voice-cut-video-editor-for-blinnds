@@ -2867,9 +2867,11 @@
       lastCt = null;
       if (exportCancelled) { exportCleanup?.(); return; }
       video.playbackRate = project.playbackSpeed;
+      drawFrame();
+      if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx,VoiceCutCaptions.active(project.captions,video.currentTime),exportCanvas.width,exportCanvas.height);
       syncAudioPlayback(true);
-      await video.play();
       recorder.start(250);
+      await video.play();
       timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
       async function frame() {
         if (!isExporting || exportCancelled) return;
@@ -2920,6 +2922,8 @@
             lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
+            drawFrame();
+            if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx,VoiceCutCaptions.active(project.captions,video.currentTime),exportCanvas.width,exportCanvas.height);
             syncAudioPlayback(true);
             await video.play();
             recorder.resume();
