@@ -239,3 +239,26 @@ test('2.41 Original follows the source orientation, verdict words stay plain',()
   const nodur = exportShapeVerdict(1920,1080,NaN);
   assert.equal(nodur.words,'Landscape 1920 by 1080.'); assert.equal(nodur.shorts,null);
 });
+
+test('contiguous split segments coalesce in ranges() so playback/export never pause or click across a 0ms split',()=>{
+  const {ranges, deleteRange, applyCutMicroFade} = require('../web/core');
+  const splitOnly = {trimStart:0, trimEnd:180, duration:180, segments:[{start:0,end:65},{start:65,end:125},{start:125,end:180}]};
+  assert.deepEqual(ranges(splitOnly), [{start:0,end:180}]);
+
+  // Deleting 1m05s (65s) to 2m05s (125s) leaves two clean non-contiguous segments even if segments started empty
+  const freshProj = {trimStart:0, trimEnd:200, duration:200, segments:[]};
+  assert.deepEqual(deleteRange(freshProj, 65, 125), [{start:0,end:65},{start:125,end:200}]);
+
+  // Micro-fade ramps last samples to 0 on cut-out and first samples from 0 on cut-in
+  const block = new Float32Array(20).fill(1);
+  applyCutMicroFade(block, 2, 10, 4, 'out');
+  assert.equal(block[9], 0);
+  assert.equal(block[19], 0);
+  assert.equal(block[0], 1);
+
+  const inBlock = new Float32Array(20).fill(1);
+  applyCutMicroFade(inBlock, 2, 10, 4, 'in');
+  assert.equal(inBlock[0], 0);
+  assert.equal(inBlock[10], 0);
+  assert.equal(inBlock[9], 1);
+});

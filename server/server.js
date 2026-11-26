@@ -31,7 +31,19 @@ function createApp(options={}) {
   if(!origin||new URL(origin).origin!==origin||!origin.startsWith('https://')) throw new Error('ALLOWED_ORIGIN must be an exact HTTPS origin.');
   const origins=new Set([origin]);
   if(options.allowAndroid??process.env.ALLOW_ANDROID_APP==='true') origins.add('http://localhost:8080');
-  const providers=options.providers||createProviders({openaiKey:process.env.OPENAI_API_KEY,elevenKey:process.env.ELEVENLABS_API_KEY,groqKey:process.env.GROQ_API_KEY,deepgramKey:process.env.DEEPGRAM_API_KEY,assemblyKey:process.env.ASSEMBLYAI_API_KEY});
+  const providers=options.providers||createProviders({
+    openaiKey:process.env.OPENAI_API_KEY,
+    elevenKey:process.env.ELEVENLABS_API_KEY,
+    groqKey:process.env.GROQ_API_KEY,
+    deepgramKey:process.env.DEEPGRAM_API_KEY,
+    assemblyKey:process.env.ASSEMBLYAI_API_KEY,
+    cfAccountId:process.env.CLOUDFLARE_ACCOUNT_ID,
+    cfApiToken:process.env.CLOUDFLARE_API_TOKEN,
+    pollinationsKey:process.env.POLLINATIONS_API_KEY,
+    falKey:process.env.FAL_KEY,
+    replicateToken:process.env.REPLICATE_API_TOKEN,
+    hfToken:process.env.HF_TOKEN,
+  });
   const root=options.root||path.join(os.tmpdir(),'voicecut-temporary');
   const lifetime=Math.min(TTL,options.ttlMs||TTL); // Shorter deadline only used by tests.
   const jobsPerHour=Number(process.env.MAX_AI_REQUESTS_PER_HOUR||20);
@@ -60,7 +72,7 @@ function createApp(options={}) {
     next();
   };
   app.get('/health',(_,res)=>res.json({status:'ok',version:VERSION,temporaryFileTTLSeconds:900}));
-  app.get('/capabilities',authorized,(_,res)=>{const keys=providers.configured.captionProviders||{openai:providers.configured.captions};res.json({publicMode,captions:providers.configured.captions,isolation:providers.configured.isolation,autoProvider:CAPTION_ORDER.find(id=>keys[id])||null,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900});});
+  app.get('/capabilities',authorized,(_,res)=>{const keys=providers.configured.captionProviders||{openai:providers.configured.captions};res.json({publicMode,captions:providers.configured.captions,isolation:providers.configured.isolation,autoProvider:CAPTION_ORDER.find(id=>keys[id])||null,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},imageGen:providers.configured.imageGen??true,videoGen:!!providers.configured.videoGen,tts:providers.configured.tts??true,imageProviders:providers.configured.imageProviders||{freeFallback:true},videoProviders:providers.configured.videoProviders||{},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900});});
   const storage=multer.diskStorage({destination:(req,_,cb)=>cb(null,req.workdir),filename:(_,__,cb)=>cb(null,'input')});
   const upload=multer({storage,limits:{fileSize:100*1024*1024,files:1,fields:0,parts:1}}).single('file');
   const job=(kind)=>async(req,res)=>{
@@ -262,12 +274,90 @@ function createApp(options={}) {
       cleanup();
     }
   };
+  const jsonParser=express.json({limit:'8mb'});
+  const jsonJob=(kind)=>async(req,res)=>{
+    if(active) return res.status(429).json({code:'BUSY',error:'Another job is running. Wait before trying again.'});
+    if(publicMode) {
+      const ip=clientIp(req),now=Date.now();
+      const log=(ipAttempts.get(ip)||[]).filter(t=>now-t<86400000);
+      if(log.filter(t=>now-t<3600000).length>=perIpHour||log.length>=perIpDay) return res.status(429).json({code:'IP_QUOTA',error:'Too many AI requests from this address. Try again later.'});
+      log.push(now);ipAttempts.set(ip,log);
+      if(ipAttempts.size>10000) ipAttempts.clear();
+    }
+    attempts=attempts.filter(t=>Date.now()-t<3600000);
+    if(attempts.length>=jobsPerHour) return res.status(429).json({code:'HOURLY_LIMIT',error:'The server hourly AI request limit was reached. Wait before retrying.'});
+    attempts.push(Date.now());
+    active=true;
+    const controller=new AbortController(),signal=controller.signal;
+    let closed=false,deadline;
+    const cleanup=()=>{
+      if(closed)return;closed=true;clearTimeout(deadline);controller.abort();active=false;
+    };
+    deadline=setTimeout(()=>{
+      if(!res.headersSent) res.status(408).json({code:'EXPIRED',error:'The processing deadline expired. No automatic paid retry was made.'});
+      else res.destroy();
+      cleanup();req.destroy();
+    },lifetime);
+    req.on('aborted',cleanup);res.on('close',cleanup);
+    try {
+      const body=req.body||{};
+      if(kind==='genImage') {
+        if(!providers.generateImage) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Image generation is not available on this server.');
+        const result=await providers.generateImage({
+          prompt:body.prompt,
+          aspectRatio:body.aspectRatio,
+          preset:body.preset,
+          seed:body.seed,
+        },signal);
+        signal.throwIfAborted();
+        res.set('Content-Type',result.mime||'image/jpeg');
+        res.set('X-Processing-Method',result.provider||'AI-Image');
+        res.send(result.bytes);
+        cleanup();return;
+      }
+      if(kind==='genVideo') {
+        if(body.imageDataUrl&&req.headers['x-upload-consent']!=='yes') throw new ServiceError(400,'CONSENT_REQUIRED','Explicit cloud-processing consent is required when uploading an image.');
+        if(!providers.generateVideo) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Video generation is not available on this server.');
+        const result=await providers.generateVideo({
+          prompt:body.prompt,
+          aspectRatio:body.aspectRatio,
+          duration:body.duration,
+          imageDataUrl:body.imageDataUrl||null,
+        },signal);
+        signal.throwIfAborted();
+        res.set('Content-Type',result.mime||'video/mp4');
+        res.set('X-Processing-Method',result.provider||'AI-Video');
+        res.send(result.bytes);
+        cleanup();return;
+      }
+      if(kind==='tts') {
+        if(!providers.synthesizeSpeech) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Speech synthesis is not available on this server.');
+        const result=await providers.synthesizeSpeech({
+          text:body.text,
+          language:body.language,
+          gender:body.gender,
+        },signal);
+        signal.throwIfAborted();
+        res.set('Content-Type',result.mime||'audio/mpeg');
+        res.set('X-Processing-Method',result.provider||'Edge-Neural-TTS');
+        res.send(result.bytes);
+        cleanup();return;
+      }
+      throw new ServiceError(400,'UNKNOWN_JOB','Unknown request.');
+    }catch(e){
+      if(!closed&&!res.headersSent)res.status(e instanceof ServiceError?e.status:502).json({code:e.code||'PROCESSING_FAILED',error:e instanceof ServiceError?e.message:'Processing failed or timed out. No automatic paid retry was made.'});
+      cleanup();
+    }
+  };
   app.post('/enhance',authorized,job('filter'));
   app.post('/api/captions',authorized,job('captions'));
   app.post('/api/isolate',authorized,job('isolation'));
   app.post('/api/denoise-local',authorized,job('deepfilter'));
   app.post('/api/silence',authorized,job('silence'));
   app.post('/api/reverse',authorized,job('reverse'));
+  app.post('/api/generate-image',authorized,jsonParser,jsonJob('genImage'));
+  app.post('/api/generate-video',authorized,jsonParser,jsonJob('genVideo'));
+  app.post('/api/tts',authorized,jsonParser,jsonJob('tts'));
   return app;
 }
 if(require.main===module){

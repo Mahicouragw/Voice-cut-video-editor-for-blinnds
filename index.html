@@ -57,6 +57,22 @@
         <span class="icon" aria-hidden="true">📹</span>
         <span><strong>Record Video</strong><br><small style="font-weight:400; color:var(--text2)">Use camera</small></span>
       </button>
+      <button id="homeAudioToVideo" aria-label="Audio to Video, button. Turn an audio recording or song into a video with optional cover image, waveform, and captions">
+        <span class="icon" aria-hidden="true">🎵</span>
+        <span><strong>Audio to Video</strong><br><small style="font-weight:400; color:var(--text2)">Turn audio into MP4 video</small></span>
+      </button>
+      <button id="homeVideoToAudio" aria-label="Video to Audio, button. Extract clean audio from any video file">
+        <span class="icon" aria-hidden="true">🔊</span>
+        <span><strong>Video to Audio</strong><br><small style="font-weight:400; color:var(--text2)">Save sound as WAV audio</small></span>
+      </button>
+      <button id="homeGenerateVideo" class="primary" aria-label="Generate Video, button. Create AI videos from text or an image with voice narration in any language">
+        <span class="icon" aria-hidden="true">✨</span>
+        <span><strong>Generate Video</strong><br><small style="font-weight:400; color:var(--text2)">Text or Image to Video + Voice</small></span>
+      </button>
+      <button id="homeGenerateImage" aria-label="Generate Image, Thumbnail, and Logo, button. Create AI images, YouTube thumbnails, social graphics, and logos">
+        <span class="icon" aria-hidden="true">🖼️</span>
+        <span><strong>Generate Image, Thumbnail &amp; Logo</strong><br><small style="font-weight:400; color:var(--text2)">YouTube, Social &amp; Brand Logos</small></span>
+      </button>
       <button id="homeOpenProject" aria-label="Open Project, button. Open a saved project">
         <span class="icon" aria-hidden="true">📂</span>
         <span><strong>Open Project</strong><br><small style="font-weight:400; color:var(--text2)">Continue editing</small></span>
@@ -81,6 +97,190 @@
       </div>
       <progress id="mergeProgress" max="100" value="0" style="width:100%; display:none; margin-top:8px;" aria-label="Merge progress"></progress>
       <p id="mergeStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+    </div>
+
+    <!-- AUDIO TO VIDEO PANEL -->
+    <div class="card hidden" id="audioToVideoPanel" role="region" aria-labelledby="a2vHeading">
+      <h2 id="a2vHeading" tabindex="-1">Audio to Video</h2>
+      <p style="color:var(--text2)">Choose an audio file, pick an aspect ratio and optional background picture, and create a ready-to-edit MP4 video with live sound bars.</p>
+      <div class="grid grid-2">
+        <div>
+          <label for="a2vAudioInput">1. Audio file (voice, podcast, song)</label>
+          <input type="file" id="a2vAudioInput" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
+        </div>
+        <div>
+          <label for="a2vImageInput">2. Optional background image</label>
+          <input type="file" id="a2vImageInput" accept="image/*,.png,.jpg,.jpeg,.webp">
+        </div>
+        <div>
+          <label for="a2vAspect">3. Aspect ratio</label>
+          <select id="a2vAspect">
+            <option value="16:9" selected>16:9 Landscape (YouTube)</option>
+            <option value="9:16">9:16 Vertical (Shorts, Reels, TikTok)</option>
+            <option value="1:1">1:1 Square (Instagram, Feed)</option>
+            <option value="4:5">4:5 Portrait (Social Post)</option>
+          </select>
+        </div>
+        <div>
+          <label for="a2vTitle">4. Optional on-screen title</label>
+          <input type="text" id="a2vTitle" placeholder="Episode title or speaker name">
+        </div>
+      </div>
+      <p style="color:var(--text2); font-size:14px; margin-top:12px;">Your original sound is kept untouched. To reduce noise later, open Cleanup and press Reduce Noise.</p>
+      <div class="flex gap-8 wrap mt-16">
+        <button id="btnRunAudioToVideo" class="primary">Create Video &amp; Open in Editor</button>
+        <button id="btnCloseAudioToVideo">Close</button>
+      </div>
+      <progress id="a2vProgress" max="100" value="0" style="width:100%; display:none; margin-top:8px;" aria-label="Audio to video progress"></progress>
+      <p id="a2vStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+    </div>
+
+    <!-- VIDEO TO AUDIO PANEL -->
+    <div class="card hidden" id="videoToAudioPanel" role="region" aria-labelledby="v2aHeading">
+      <h2 id="v2aHeading" tabindex="-1">Video to Audio</h2>
+      <p style="color:var(--text2)">Extract the original untouched WAV audio from any video on your device.</p>
+      <div class="grid grid-2">
+        <div>
+          <label for="v2aVideoInput">Select video file</label>
+          <input type="file" id="v2aVideoInput" accept="video/*,.mp4,.mov,.webm,.mkv">
+        </div>
+      </div>
+      <div class="flex gap-8 wrap mt-16">
+        <button id="btnRunVideoToAudio" class="primary">Extract &amp; Download WAV Audio</button>
+        <button id="btnCloseVideoToAudio">Close</button>
+      </div>
+      <p id="v2aStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+    </div>
+
+    <!-- GENERATE VIDEO PANEL (TEXT TO VIDEO & IMAGE TO VIDEO + MULTILINGUAL VOICE + EXTEND) -->
+    <div class="card hidden" id="generateVideoPanel" role="region" aria-labelledby="genVideoHeading">
+      <h2 id="genVideoHeading" tabindex="-1">Generate AI Video (Text to Video &amp; Image to Video)</h2>
+      <p style="color:var(--text2)">Describe your scene, choose aspect ratio and duration (up to 15 seconds per clip), and optionally add AI voice narration in any language. Your clip opens directly in the editor so you can extend it with more clips, merge, align captions, remove noise, add music, or record your own voice-over.</p>
+      <div class="grid grid-2">
+        <div>
+          <label for="genVideoMode">Generation mode</label>
+          <select id="genVideoMode">
+            <option value="storyboard" selected>Instant AI Storyboard Video (Free, works up to 15s)</option>
+            <option value="cloud">Cloud AI Motion Video (Wan / Seedance / Kling)</option>
+          </select>
+        </div>
+        <div>
+          <label for="genVideoAspect">Aspect ratio</label>
+          <select id="genVideoAspect">
+            <option value="16:9" selected>16:9 Landscape (YouTube)</option>
+            <option value="9:16">9:16 Vertical (Shorts, Reels, TikTok)</option>
+            <option value="1:1">1:1 Square (Instagram, Feed)</option>
+          </select>
+        </div>
+        <div>
+          <label for="genVideoDuration">Clip duration</label>
+          <select id="genVideoDuration">
+            <option value="5">5 seconds</option>
+            <option value="8" selected>8 seconds</option>
+            <option value="10">10 seconds</option>
+            <option value="15">15 seconds</option>
+          </select>
+        </div>
+        <div>
+          <label for="genVideoStartImage">Optional starting image (Image to Video)</label>
+          <input type="file" id="genVideoStartImage" accept="image/*,.png,.jpg,.jpeg,.webp">
+        </div>
+      </div>
+      <div class="mt-16">
+        <label for="genVideoPrompt">Visual scene prompt</label>
+        <textarea id="genVideoPrompt" rows="3" placeholder="Example: Golden sunrise over Charminar in Hyderabad, warm cinematic camera movement, ultra-detailed"></textarea>
+      </div>
+      <div class="grid grid-2 mt-16">
+        <div>
+          <label for="genVideoVoiceLang">AI voice narration language</label>
+          <select id="genVideoVoiceLang">
+            <option value="none">No AI voice narration</option>
+            <option value="en" selected>English</option>
+            <option value="te">Telugu (తెలుగు)</option>
+            <option value="hi">Hindi (हिन्दी)</option>
+            <option value="ta">Tamil (தமிழ்)</option>
+            <option value="kn">Kannada (ಕನ್ನಡ)</option>
+            <option value="ml">Malayalam (മലയാളം)</option>
+            <option value="mr">Marathi (मराठी)</option>
+            <option value="bn">Bengali (বাংলা)</option>
+            <option value="ur">Urdu (اردو)</option>
+            <option value="gu">Gujarati (ગુજરાતી)</option>
+            <option value="es">Spanish (Español)</option>
+            <option value="fr">French (Français)</option>
+            <option value="de">German (Deutsch)</option>
+            <option value="ar">Arabic (العربية)</option>
+            <option value="zh">Chinese (中文)</option>
+            <option value="ja">Japanese (日本語)</option>
+            <option value="ko">Korean (한국어)</option>
+            <option value="pt">Portuguese (Português)</option>
+          </select>
+        </div>
+        <div>
+          <label for="genVideoVoiceGender">Voice style</label>
+          <select id="genVideoVoiceGender">
+            <option value="female" selected>Natural Female Voice</option>
+            <option value="male">Natural Male Voice</option>
+          </select>
+        </div>
+      </div>
+      <div class="mt-16">
+        <label for="genVideoNarration">Narration script (spoken by AI &amp; auto-aligned as captions)</label>
+        <textarea id="genVideoNarration" rows="2" placeholder="Optional: Type what the narrator should say in your chosen language"></textarea>
+      </div>
+      <label class="mt-16" style="display:flex; gap:10px; align-items:flex-start;">
+        <input type="checkbox" id="genVideoConsent" checked>
+        <span>Send my prompt (and optional reference image) to the AI service to generate this clip.</span>
+      </label>
+      <div class="flex gap-8 wrap mt-16">
+        <button id="btnRunGenerateVideo" class="primary">Generate Video &amp; Open in Editor</button>
+        <button id="btnCloseGenerateVideo">Close</button>
+      </div>
+      <progress id="genVideoProgress" max="100" value="0" style="width:100%; display:none; margin-top:8px;" aria-label="Video generation progress"></progress>
+      <p id="genVideoStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+    </div>
+
+    <!-- GENERATE IMAGE, YOUTUBE THUMBNAIL & LOGO PANEL -->
+    <div class="card hidden" id="generateImagePanel" role="region" aria-labelledby="genImageHeading">
+      <h2 id="genImageHeading" tabindex="-1">Generate Image, YouTube Thumbnail &amp; Logo</h2>
+      <p style="color:var(--text2)">Create high-impact YouTube thumbnails, social media posts, brand logos, or scene artwork. Download as PNG or turn your image straight into a video.</p>
+      <div class="grid grid-2">
+        <div>
+          <label for="genImagePreset">Design type</label>
+          <select id="genImagePreset">
+            <option value="thumbnail" selected>YouTube &amp; Social Thumbnail</option>
+            <option value="logo">Brand &amp; Channel Logo Generator</option>
+            <option value="social">Social Media Post Graphic</option>
+            <option value="general">General AI Artwork / Scene</option>
+          </select>
+        </div>
+        <div>
+          <label for="genImageAspect">Platform size &amp; aspect ratio</label>
+          <select id="genImageAspect">
+            <option value="16:9" selected>16:9 YouTube Thumbnail (1280×720)</option>
+            <option value="9:16">9:16 Shorts / Reels / Stories Cover (720×1280)</option>
+            <option value="1:1">1:1 Logo / Instagram Square (1080×1080)</option>
+            <option value="4:5">4:5 Instagram / LinkedIn Feed (864×1080)</option>
+          </select>
+        </div>
+      </div>
+      <div class="mt-16">
+        <label for="genImagePrompt">Describe your image, thumbnail, or logo</label>
+        <textarea id="genImagePrompt" rows="3" placeholder="Example: Tech reviewer holding glowing smartphone, vibrant purple and gold studio lighting"></textarea>
+      </div>
+      <div class="mt-16">
+        <label for="genImageTitle">Optional bold headline or brand name overlay (word-wrapped cleanly)</label>
+        <input type="text" id="genImageTitle" placeholder="Example: TOP 5 AI TOOLS or VOICECUT STUDIO">
+      </div>
+      <div class="flex gap-8 wrap mt-16">
+        <button id="btnRunGenerateImage" class="primary">Generate Image</button>
+        <button id="btnDownloadGenImage" class="hidden">Download PNG</button>
+        <button id="btnAnimateGenImage" class="hidden">Turn This Image into Video</button>
+        <button id="btnCloseGenerateImage">Close</button>
+      </div>
+      <p id="genImageStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+      <div id="genImagePreviewWrap" class="hidden mt-16" style="text-align:center;">
+        <canvas id="genImageCanvas" style="max-width:100%; max-height:360px; border-radius:10px; border:1px solid var(--border);" aria-label="Generated image preview"></canvas>
+      </div>
     </div>
 
     <div class="card" role="region" aria-labelledby="homeRecentHeading">
@@ -387,6 +587,59 @@
         <button id="btnCrop" aria-label="Crop settings, button">Crop…</button>
         <button id="btnRotate" aria-label="Rotation settings, button">Rotate…</button>
         <button id="btnFreezeFrame" aria-label="Freeze frame settings, button">Freeze Frame…</button>
+        <button id="btnExtendVideo" class="primary" aria-label="Extend Video with AI, button. Generate another video clip continuing from this clip and merge them seamlessly">✨ Extend / Generate Next Clip</button>
+        <button id="btnAppendVideoFile" aria-label="Merge Another Video Clip, button. Pick another MP4 clip to join seamlessly at the end of this video">🔗 Merge Another Clip</button>
+        <button id="btnExtractVideoAudio" aria-label="Video to Audio, button. Save the audio from this video as a WAV file">🔊 Save Audio (WAV)</button>
+      </div>
+      <div id="extendVideoBox" class="card hidden mt-16" role="region" aria-labelledby="extendVideoHeading">
+        <h3 id="extendVideoHeading" tabindex="-1">Extend Video — Generate &amp; Merge Next Clip</h3>
+        <p style="color:var(--text2); font-size:14px;">VoiceCut captures the final frame of your current video, generates a continuation clip in the matching aspect ratio, and merges both clips together seamlessly.</p>
+        <div class="grid grid-2">
+          <div>
+            <label for="extendVideoMode">Continuation mode</label>
+            <select id="extendVideoMode">
+              <option value="storyboard" selected>Instant AI Storyboard Continuation (Free)</option>
+              <option value="cloud">Cloud AI Motion Continuation (Image-to-Video)</option>
+            </select>
+          </div>
+          <div>
+            <label for="extendVideoDuration">Next clip length</label>
+            <select id="extendVideoDuration">
+              <option value="5">5 seconds</option>
+              <option value="8" selected>8 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="15">15 seconds</option>
+            </select>
+          </div>
+          <div>
+            <label for="extendVoiceLang">Narration language for next clip</label>
+            <select id="extendVoiceLang">
+              <option value="none">No new voice narration</option>
+              <option value="en" selected>English</option>
+              <option value="te">Telugu (తెలుగు)</option>
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="ta">Tamil (தமிழ்)</option>
+              <option value="kn">Kannada (ಕನ್ನಡ)</option>
+              <option value="ml">Malayalam (മലയാളം)</option>
+              <option value="es">Spanish (Español)</option>
+              <option value="fr">French (Français)</option>
+              <option value="ar">Arabic (العربية)</option>
+            </select>
+          </div>
+          <div>
+            <label for="extendNarration">Optional narration for next clip</label>
+            <input type="text" id="extendNarration" placeholder="What happens or is spoken next">
+          </div>
+        </div>
+        <div class="mt-16">
+          <label for="extendVideoPrompt">Describe what happens in the next clip</label>
+          <input type="text" id="extendVideoPrompt" placeholder="Example: Camera zooms forward into the market street at dusk">
+        </div>
+        <div class="flex gap-8 wrap mt-16">
+          <button id="btnRunExtendVideo" class="primary">Generate &amp; Merge Next Clip</button>
+          <button id="btnCancelExtendVideo">Cancel</button>
+        </div>
+        <p id="extendVideoStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
       </div>
       <p id="reverseStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
 
@@ -503,6 +756,54 @@
         <button id="btnRecordVO" class="primary" aria-label="Record Voice-over, button. Opens microphone recording controls">● Record Voice-over</button>
         <button id="btnStopVO" aria-label="Stop recording, button" disabled>■ Stop Recording</button>
         <button id="btnImportVO2" aria-label="Import Voice-over, button">Import Voice-over</button>
+        <button id="btnOpenAiVoiceover" aria-label="Generate AI Voice-over in any language, button">🗣️ Generate AI Voice-over</button>
+      </div>
+      <div id="aiVoiceoverBox" class="card hidden mt-16" role="region" aria-labelledby="aiVoHeading">
+        <h3 id="aiVoHeading" tabindex="-1">Generate Multilingual AI Voice-over</h3>
+        <div class="grid grid-2">
+          <div>
+            <label for="aiVoLanguage">Language</label>
+            <select id="aiVoLanguage">
+              <option value="en" selected>English</option>
+              <option value="te">Telugu (తెలుగు)</option>
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="ta">Tamil (தமிழ்)</option>
+              <option value="kn">Kannada (ಕನ್ನಡ)</option>
+              <option value="ml">Malayalam (മലയാളം)</option>
+              <option value="mr">Marathi (मराठी)</option>
+              <option value="bn">Bengali (বাংলা)</option>
+              <option value="ur">Urdu (اردو)</option>
+              <option value="gu">Gujarati (ગુજરાતી)</option>
+              <option value="es">Spanish (Español)</option>
+              <option value="fr">French (Français)</option>
+              <option value="de">German (Deutsch)</option>
+              <option value="ar">Arabic (العربية)</option>
+              <option value="zh">Chinese (中文)</option>
+              <option value="ja">Japanese (日本語)</option>
+              <option value="ko">Korean (한국어)</option>
+              <option value="pt">Portuguese (Português)</option>
+            </select>
+          </div>
+          <div>
+            <label for="aiVoGender">Voice style</label>
+            <select id="aiVoGender">
+              <option value="female" selected>Natural Female Voice</option>
+              <option value="male">Natural Male Voice</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-16">
+          <label for="aiVoText">Script to speak at current playhead position</label>
+          <textarea id="aiVoText" rows="2" placeholder="Type narration in Telugu, Hindi, Tamil, English, or any chosen language"></textarea>
+        </div>
+        <label class="mt-16" style="display:flex; gap:10px; align-items:center;">
+          <input type="checkbox" id="aiVoAddCaptions" checked> Also align and add spoken words to captions
+        </label>
+        <div class="flex gap-8 wrap mt-16">
+          <button id="btnRunAiVoiceover" class="primary">Speak &amp; Add to Timeline</button>
+          <button id="btnCancelAiVoiceover">Close</button>
+        </div>
+        <p id="aiVoStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
       </div>
       <div class="flex gap-8 wrap items-center mt-16">
         <label for="voiceFilterSelect">Voice changer</label>
@@ -1035,6 +1336,7 @@
   <input type="file" id="fileVideo" accept="video/*,.mp4,.mov,.webm,.mkv" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileVideoReconnect" accept="video/*,.mp4,.mov,.webm,.mkv" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileMergeVideos" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" multiple class="sr-only" tabindex="-1" aria-hidden="true">
+  <input type="file" id="fileAppendVideo" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileAudio" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" class="sr-only" tabindex="-1" aria-hidden="true">
   <input type="file" id="fileVoiceover" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" class="sr-only" tabindex="-1" aria-hidden="true">
 
@@ -1055,6 +1357,7 @@
 <script src="web/storage.js" defer></script>
 <script src="web/wc-muxer.js" defer></script>
 <script src="web/merge.js" defer></script>
+<script src="web/studio.js" defer></script>
 <script src="web/app.js" defer></script>
 </body>
 </html>

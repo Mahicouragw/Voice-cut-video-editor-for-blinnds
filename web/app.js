@@ -263,11 +263,12 @@
     updateCaptionPreview();
   }
   function updateCaptionPreview() {
-    const text=VoiceCutCaptions.active(project.captions,video.currentTime);
+    const raw=VoiceCutCaptions.active(project.captions,video.currentTime);
+    const text=raw?raw.split('\n').map(l=>VoiceCutCaptions.wrapCueText(l)).join('\n'):'';
     const overlay=$('#captionOverlay');
     overlay.textContent=text;overlay.hidden=!text||!project.captionSettings?.preview;
     // Not a live region: screen-reader users choose when to hear changing captions.
-    $('#currentCaption').textContent='Current caption: '+(text||'none');
+    $('#currentCaption').textContent='Current caption: '+(raw?raw.replace(/\n+/g,' '):'none');
   }
   async function generateCaptions() {
     if(captionRequestBusy||isExporting||cleanupBusy){announce('Wait for the current operation to finish.',true);return;}
@@ -343,8 +344,10 @@
       if(cues.length&&project.duration>20&&span<project.duration*0.5){
         sparseNote=` Only ${formatTimeVerbose(span)} of ${formatTimeVerbose(project.duration)} has detected speech. The rest is likely music, silence, or unclear audio.`;
       }
-      const firstCue=cues.length?` First caption: "${cues[0].text.slice(0,120)}".`:'';
-      const message=`${cues.length} captions generated${cover}. Detected language: ${result.language||'unknown'}.${langNote}${sparseNote}${firstCue} Review text and timing before publishing.`;
+      const cueWarnings=VoiceCutCaptions.inspectCues(cues);
+      const formatNote=cueWarnings.length?` Subtitle check: ${cueWarnings[0].message}`:'';
+      const firstCue=cues.length?` First caption: "${cues[0].text.replace(/\n+/g,' ').slice(0,120)}".`:'';
+      const message=`${cues.length} captions generated${cover}. Detected language: ${result.language||'unknown'}.${langNote}${sparseNote}${formatNote}${firstCue} Review text and timing before publishing.`;
       $('#captionStatus').textContent=message;announce(message);
       notifyComplete('Captions ready',`${cues.length} captions generated for your video.`);
     }catch(e){
@@ -373,13 +376,15 @@
     try{
       const cues=VoiceCutCaptions.forExport(project.captions,VoiceCutCore.ranges(project),project.playbackSpeed,VoiceCutCore.speedRangesOf(project));
       if(!cues.length)throw new Error('No captions fall within the retained video segments.');
+      const warnings=VoiceCutCaptions.inspectCues(cues);
       const text=VoiceCutCaptions.serialize(cues,format);
       if(window.flutter_inappwebview){await window.flutter_inappwebview.callHandler('shareSubtitles',text,format);}
       else{
         const blob=new Blob([text],{type:format==='vtt'?'text/vtt;charset=utf-8':'application/x-subrip;charset=utf-8'});
         const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='voicecut-captions.'+format;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),60000);
       }
-      announce(format.toUpperCase()+' subtitles prepared for the current edited video settings.');
+      const warnSuffix=warnings.length?` Subtitle check: ${warnings[0].message}`:'';
+      announce(format.toUpperCase()+' subtitles prepared for the current edited video settings.'+warnSuffix);
     }catch(e){announce('Subtitle download failed: '+e.message,true);}
   }
   function initCaptions() {
@@ -400,10 +405,14 @@
     });
     $('#btnSaveCaption').addEventListener('click',()=>{
       try{
-        const cue=VoiceCutCaptions.validate([{start:Number($('#captionStart').value),end:Number($('#captionEnd').value),text:$('#captionText').value}],project.duration)[0];
+        const rawText=$('#captionText').value;
+        const normalized=rawText.includes('\n')?rawText:VoiceCutCaptions.wrapCueText(rawText);
+        const cue=VoiceCutCaptions.validate([{start:Number($('#captionStart').value),end:Number($('#captionEnd').value),text:normalized}],project.duration)[0];
         if(!project.captions[captionSelection])return;
         project.captions[captionSelection]=cue;project.captions.sort((a,b)=>a.start-b.start);captionSelection=project.captions.indexOf(cue);
-        pushHistory();renderCaptions();announce('Caption changes saved.');
+        const warnings=VoiceCutCaptions.inspectCues(project.captions);
+        const warnText=warnings.length?' Note: '+warnings[0].message:'';
+        pushHistory();renderCaptions();announce('Caption changes saved.'+warnText);
       }catch(e){announce(e.message,true);}
     });
     $('#btnDeleteCaption').addEventListener('click',()=>{project.captions.splice(captionSelection,1);pushHistory();renderCaptions();announce('Caption deleted. Undo is available.');});
@@ -499,6 +508,7 @@
     currentRequest?.abort(); mediaEpoch++;
     project = structuredClone(snap);
     if (video.src !== project.videoUrl) { video.src = project.videoUrl || ''; video.load(); }
+    applyOriginalNR();
     for (const clip of project.clips) if (clip.url) createAudioNodeForClip(clip);
     renderAll(); updateUndoRedoButtons(); autoSave();
   }
@@ -1043,7 +1053,7 @@
       el.after(group);
     }
   }
-  function loadVideoFile(file) {
+  function loadVideoFile(file, onLoaded) {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024 * 1024) { announce('Use a video under 2 GB. Larger files can exhaust device memory.',true); return; }
     currentRequest?.abort(); mediaEpoch++;
@@ -1051,13 +1061,14 @@
     project.captions = [];
     project.trimStart = 0;
     project.originalAudio.enhanced = false; project.originalAudio.muted = false;
+    project.originalAudio.noiseReduction = 'off'; // Never auto-reduce noise unless user selects it!
     project.clips = project.clips.filter(c => !c.id.startsWith('enhanced_original_'));
     historyStack = []; historyIndex = -1;
     project.videoFile = file;
     project.videoUrl = URL.createObjectURL(file);
     video.src = project.videoUrl;
     video.load();
-    video.addEventListener('loadedmetadata', () => {
+    video.addEventListener('loadedmetadata', async () => {
       // Audio-only uploads (voice recordings saved as MP4) have no picture:
       // say so for sighted helpers instead of showing a wrong empty player.
       if (!(video.videoWidth > 0) && Number.isFinite(video.duration) && video.duration > 0) {
@@ -1069,12 +1080,16 @@
       project.duration = video.duration;
       project.trimEnd = video.duration;
       project.segments = [{id:uid(), start:0, end:video.duration, label:'Full Video'}];
+      project.id = 'proj_'+Date.now();
+      captionDefaults();
+      applyPrefsToProject(true);
+      if (typeof onLoaded === 'function') {
+        try { await onLoaded(); } catch (e) { console.warn('Post-load callback error:', e); }
+      }
       pushHistory();
       renderAll();
       announce(`Video loaded successfully. Duration ${formatTimeVerbose(video.duration)}.`, true);
-      project.id = 'proj_'+Date.now();
-      captionDefaults();
-      applyPrefsToProject(true); ensureVoiceCurve();
+      ensureVoiceCurve();
       openEditor(); showEditorPanel('home',true);
       $('#section-video').scrollIntoView({behavior:'smooth'});
       autoSave();
@@ -1351,15 +1366,24 @@
       }
     }
     const original = project.originalAudio;
-    const t = video.currentTime - project.trimStart;
-    const duration = (project.trimEnd || project.duration) - project.trimStart;
+    let t = video.currentTime - project.trimStart;
+    let duration = (project.trimEnd || project.duration) - project.trimStart;
+    try {
+      const kp = keptPositionNow();
+      if (Number.isFinite(kp.total) && kp.total > 0) { t = kp.pos; duration = kp.total; }
+    } catch {}
     let fade = 1;
-    if (original.fadeIn > 0) fade = Math.min(fade, t / original.fadeIn);
-    if (original.fadeOut > 0) fade = Math.min(fade, (duration-t) / original.fadeOut);
+    if (original.fadeIn > 0) fade = Math.min(fade, Math.max(0, t / original.fadeIn));
+    if (original.fadeOut > 0) fade = Math.min(fade, Math.max(0, (duration - t) / original.fadeOut));
     video.volume = Math.max(0, Math.min(1, original.volume / 100 * fade));
     if (!project.clips.length) return;
     const currentTime = video.currentTime;
-    const voiceoverActive = project.clips.some(c=>c.type==='voiceover' && !c.isEnhancedOriginal && !c.muted && currentTime>=c.startTime && currentTime<=c.startTime + (c.duration - c.trimStart - c.trimEnd));
+    const voiceoverActive = project.clips.some(c=>{
+      if (c.type!=='voiceover' || c.isEnhancedOriginal || c.muted) return false;
+      const d = Math.max(0, c.duration - c.trimStart - c.trimEnd);
+      const off = clipWindowOffset(c, currentTime);
+      return off >= 0 && off <= d;
+    });
     const originalSpeaking = !project.originalAudio.muted && (project.originalAudio.volume > 0) && (voiceCurve ? VoiceCutCore.voiceActiveAt(voiceCurve, currentTime) : liveVoiceActive());
     // The enhanced original replaces the video sound for the whole timeline,
     // so ducking listens to its speech instead of treating it as always on.
@@ -1390,8 +1414,9 @@
     project.clips.forEach(clip=>{
       const node = audioNodes.get(clip.id);
       if (!node) { createAudioNodeForClip(clip); return; }
-      const clipEnd = clip.startTime + (clip.duration - clip.trimStart - clip.trimEnd);
-      const shouldPlay = currentTime>=clip.startTime && currentTime<=clipEnd && !clip.muted && !video.paused;
+      const clipDur = Math.max(0, clip.duration - clip.trimStart - clip.trimEnd);
+      const timeInClip = clipWindowOffset(clip, currentTime);
+      const shouldPlay = timeInClip >= 0 && timeInClip <= clipDur && !clip.muted && !video.paused;
       const audioEl = node.element;
 
       // Smart ducking: music dips under any voice and lifts where nobody speaks.
@@ -1402,11 +1427,9 @@
       }
 
       // Fade
-      const timeInClip = currentTime - clip.startTime;
-      const clipDur = clip.duration - clip.trimStart - clip.trimEnd;
       let fadeVol = 1;
-      if (clip.fadeIn>0 && timeInClip < clip.fadeIn) fadeVol = timeInClip/clip.fadeIn;
-      if (clip.fadeOut>0 && timeInClip > clipDur - clip.fadeOut) fadeVol = Math.min(fadeVol, (clipDur - timeInClip)/clip.fadeOut);
+      if (clip.fadeIn>0 && timeInClip < clip.fadeIn) fadeVol = Math.max(0, timeInClip / clip.fadeIn);
+      if (clip.fadeOut>0 && timeInClip > clipDur - clip.fadeOut) fadeVol = Math.min(fadeVol, Math.max(0, (clipDur - timeInClip) / clip.fadeOut));
       // Apply fade as multiplier
       const finalVol = clip.muted ? 0 : effectiveVolume * Math.max(0,fadeVol);
       // Smooth gain moves so ducking, fades and mutes glide instead of
@@ -1416,13 +1439,46 @@
       audioEl.playbackRate = project.playbackSpeed;
 
       if (shouldPlay) {
-        const desiredAudioTime = (currentTime - clip.startTime) + clip.trimStart;
-        if (Math.abs(audioEl.currentTime - desiredAudioTime) > 0.5) audioEl.currentTime = desiredAudioTime;
+        const desiredAudioTime = keptClipAudioTime(clip, currentTime);
+        if (Math.abs(audioEl.currentTime - desiredAudioTime) > 0.35) audioEl.currentTime = desiredAudioTime;
         playClipElement(audioEl);
       } else {
-        if (!audioEl.paused) audioEl.pause();
+        if (!audioEl.paused) {
+          // 12ms micro-ramp before pause prevents mid-waveform pop/click
+          node.gain.gain.setTargetAtTime(0, audioContext.currentTime, 0.004);
+          setTimeout(() => { try { if (!shouldClipPlayNow(clip)) audioEl.pause(); } catch {} }, 14);
+        }
       }
     });
+  }
+
+  function clipWindowOffset(clip, currentTime) {
+    if (clip.isEnhancedOriginal) return currentTime - clip.startTime;
+    try {
+      const rs = VoiceCutCore.ranges(project);
+      if (rs.length > 1) {
+        const keptNow = VoiceCutCore.keptPositionAt(rs, currentTime, []);
+        const keptStart = VoiceCutCore.keptPositionAt(rs, clip.startTime, []);
+        return keptNow - keptStart;
+      }
+    } catch {}
+    return currentTime - clip.startTime;
+  }
+
+  function shouldClipPlayNow(clip) {
+    if (!video || video.paused || clip.muted) return false;
+    const dur = Math.max(0, clip.duration - clip.trimStart - clip.trimEnd);
+    const off = clipWindowOffset(clip, video.currentTime);
+    return off >= 0 && off <= dur;
+  }
+
+  // Maps timeline position onto clip audio time: enhanced original tracks map
+  // 1:1 with source video time, while music/voice-over/SFX play continuously
+  // across deleted video gaps so background songs never jump or stutter on cuts!
+  function keptClipAudioTime(clip, currentTime) {
+    const dur = Math.max(0, clip.duration - clip.trimStart - clip.trimEnd);
+    const off = Math.max(0, Math.min(dur, clipWindowOffset(clip, currentTime)));
+    return clip.trimStart + off;
   }
 
   function playClipPreview(id) {
@@ -2375,6 +2431,19 @@
       let nextBlockKept = 0;
       let audioStallEvents = 0;
       let lastQuantumWall = 0;
+      let needPostCutFadeIn = false;
+      let heldAudioBlock = null;
+      const flushHeldBlock = (fadeOut) => {
+        if (!heldAudioBlock) return;
+        const hb = heldAudioBlock; heldAudioBlock = null;
+        if (fadeOut) VoiceCutCore.applyCutMicroFade(hb.out, audioChannels, BLOCK, Math.round(audioSampleRate * 0.012), 'out');
+        try {
+          aenc.encode(new AudioData({
+            format: 'f32-planar', sampleRate: audioSampleRate, numberOfFrames: BLOCK,
+            numberOfChannels: audioChannels, timestamp: hb.ts, data: hb.out.buffer,
+          }));
+        } catch (e) {}
+      };
       const feedQuantum = (qd) => {
         if (!qd || clockRunning === false) { try { qd?.close(); } catch (e) {} return; }
         try {
@@ -2409,20 +2478,21 @@
           const blockRate = (carry[0] && carry[0].rate) || exportRate;
           carry = carry.slice(qp);
           carryFrames -= BLOCK;
+          if (needPostCutFadeIn) {
+            VoiceCutCore.applyCutMicroFade(out, audioChannels, BLOCK, Math.round(audioSampleRate * 0.012), 'in');
+            needPostCutFadeIn = false;
+          }
           const ts = VoiceCutCore.audioBlockTimestamp(audioBaseUs, nextBlockKept, audioSampleRate, lastAudioTs);
           nextBlockKept += BLOCK * blockRate;
           lastAudioTs = ts;
-          try {
-            aenc.encode(new AudioData({
-              format: 'f32-planar', sampleRate: audioSampleRate, numberOfFrames: BLOCK,
-              numberOfChannels: audioChannels, timestamp: ts, data: out.buffer,
-            }));
-          } catch (e) {}
+          flushHeldBlock(false);
+          heldAudioBlock = { out, ts };
         }
         } catch (e) {}
       };
       const audioPump = (async () => {
-        feedQuantum(q0);
+        // q0 was captured while paused before video.play(); close it so zero leading silence is added!
+        try { q0?.close(); } catch (e) {}
         for (;;) {
           if (audioDone || !isExporting || exportCancelled) break;
           let r;
@@ -2430,6 +2500,7 @@
           if (!r || r.done) break;
           feedQuantum(r.value);
         }
+        flushHeldBlock(false);
         // Pad the tail with silence so the last frame is complete.
         if (carryFrames > 0 && !exportCancelled) {
           const out = new Float32Array(BLOCK * audioChannels);
@@ -2458,8 +2529,8 @@
       if (exportCancelled) { exportCleanup?.(); await audioPump.catch(() => {}); return; }
       video.playbackRate = project.playbackSpeed;
       timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
-      clockStart(project.playbackSpeed);
       await video.play();
+      clockStart(project.playbackSpeed);
       async function frame() {
         if (!isExporting || exportCancelled) return;
         try {
@@ -2507,15 +2578,20 @@
             completed += range.end - range.start;
             rangeIndex++;
             if (rangeIndex === ranges.length) { await finishExport(); return; }
-            clockPause(); video.pause();
+            clockPause();
+            flushHeldBlock(true);
+            carry = []; carryFrames = 0;
+            needPostCutFadeIn = true;
+            video.pause();
             for (const node of audioNodes.values()) node.element.pause();
             await seekTo(ranges[rangeIndex].start);
             lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
             requestKey = true;
-            clockStart(project.playbackSpeed);
+            syncAudioPlayback(true);
             await video.play();
+            clockStart(project.playbackSpeed);
           }
           drawFrame();
           if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx, VoiceCutCaptions.active(project.captions, video.currentTime), exportCanvas.width, exportCanvas.height);
@@ -2791,8 +2867,9 @@
       lastCt = null;
       if (exportCancelled) { exportCleanup?.(); return; }
       video.playbackRate = project.playbackSpeed;
-      recorder.start(250);
+      syncAudioPlayback(true);
       await video.play();
+      recorder.start(250);
       timeout = setTimeout(cancelExport, (exportDuration / project.playbackSpeed + 60) * 1000);
       async function frame() {
         if (!isExporting || exportCancelled) return;
@@ -2843,7 +2920,9 @@
             lastCt = null;
             while (freezeIndex < freezes.length && freezes[freezeIndex].at < ranges[rangeIndex].start) freezeIndex++;
             if (!isExporting || exportCancelled) return;
-            recorder.resume(); await video.play();
+            syncAudioPlayback(true);
+            await video.play();
+            recorder.resume();
           }
           drawFrame();
           if (project.captionSettings?.burnIn) VoiceCutCaptions.draw(ctx,VoiceCutCaptions.active(project.captions,video.currentTime),exportCanvas.width,exportCanvas.height);
@@ -3917,6 +3996,459 @@
       throw e;
     }finally{clearTimeout(timer);currentRequest=null;}
   }
+  async function requestServerJson(endpoint, payload, {timeoutMs=180000, uploadConsent=false}={}) {
+    const backend = backendConfig();
+    if (!backend) throw new Error('SERVICE_UNAVAILABLE');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(backend.key ? { Authorization: 'Bearer ' + backend.key } : {}),
+        ...(uploadConsent ? { 'X-Upload-Consent': 'yes' } : {}),
+      };
+      const response = await fetch(new URL(endpoint, backend.url), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload || {}),
+        signal: controller.signal,
+      });
+      lastResponseHeaders = response.headers;
+      if (!response.ok) {
+        let detail = '';
+        try { const j = await response.json(); detail = j?.error || ''; } catch {}
+        const err = new Error(detail || 'SERVICE_UNAVAILABLE');
+        err.status = response.status;
+        throw err;
+      }
+      return response.headers.get('content-type')?.includes('application/json') ? await response.json() : await response.blob();
+    } catch (e) {
+      if (controller.signal.aborted) throw new Error('Request timed out. Please try again.');
+      if (e instanceof TypeError) throw new Error('SERVICE_UNAVAILABLE');
+      throw e;
+    } finally { clearTimeout(timer); }
+  }
+
+  function loadImageElementFromBlob(blob) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not decode image.')); };
+      img.src = url;
+    });
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(new Error('Could not read selected image.'));
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function fetchAiImageElement(prompt, aspectRatio, preset) {
+    // 1. Try VoiceCut backend (/api/generate-image -> Cloudflare FLUX / Pollinations / fal.ai)
+    try {
+      const blob = await requestServerJson('/api/generate-image', { prompt, aspectRatio, preset }, { timeoutMs: 90000 });
+      if (blob instanceof Blob && blob.size > 100) return await loadImageElementFromBlob(blob);
+    } catch (e) {
+      console.warn('Backend image generation fallback:', e.message);
+    }
+    // 2. Direct keyless Pollinations browser fallback so local static preview also works immediately
+    const dims = VoiceCutStudio.dimensionsForAspect(aspectRatio, 768);
+    const full = VoiceCutStudio.buildImagePrompt(prompt, preset);
+    const seed = Math.floor(Math.random() * 1000000);
+    const resp = await fetch(`https://image.pollinations.ai/prompt/${encodeURIComponent(full)}?width=${dims.width}&height=${dims.height}&seed=${seed}`);
+    if (!resp.ok) throw new Error('Free image service is busy right now. Please try again in a moment.');
+    const blob = await resp.blob();
+    return loadImageElementFromBlob(blob);
+  }
+
+  async function synthesizeNarrationBuffer(text, language, gender) {
+    const clean = String(text || '').trim();
+    if (!clean || language === 'none') return null;
+    const blob = await requestServerJson('/api/tts', { text: clean, language, gender }, { timeoutMs: 90000 });
+    if (!(blob instanceof Blob) || blob.size < 100) throw new Error('Could not synthesize voice narration.');
+    const decoded = await decodeAudioFile(blob);
+    return { blob, buffer: decoded };
+  }
+
+  async function deliverFileToUser(blob, filename, ext, statusEl, label) {
+    if (window.flutter_inappwebview) {
+      const how = await sendFileToApp(blob, ext, 'save', statusEl);
+      const msg = how === 'saved' ? `${label} saved to your device.` : `${label} ready in share sheet.`;
+      if (statusEl) statusEl.textContent = msg;
+      announce(msg);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const msg = `${label} downloaded (${filename}).`;
+    if (statusEl) statusEl.textContent = msg;
+    announce(msg);
+  }
+
+  function closeHomeStudioPanels() {
+    for (const id of ['#audioToVideoPanel', '#videoToAudioPanel', '#generateVideoPanel', '#generateImagePanel']) {
+      $(id)?.classList.add('hidden');
+    }
+  }
+
+  function openHomeStudioPanel(panelSelector, headingSelector) {
+    closeHomeStudioPanels();
+    const panel = $(panelSelector);
+    if (!panel) return;
+    panel.classList.remove('hidden');
+    $(headingSelector)?.focus();
+  }
+
+  let lastGeneratedPngBlob = null;
+
+  async function runAudioToVideoFlow() {
+    const statusEl = $('#a2vStatus');
+    const prog = $('#a2vProgress');
+    const audioFile = $('#a2vAudioInput')?.files?.[0];
+    if (!audioFile) { const m = 'Select an audio file first.'; statusEl.textContent = m; announce(m, true); return; }
+    const imgFile = $('#a2vImageInput')?.files?.[0] || null;
+    const aspectRatio = $('#a2vAspect')?.value || '16:9';
+    const title = ($('#a2vTitle')?.value || '').trim();
+    const cleanNoise = Boolean($('#a2vCleanNoise')?.checked);
+    try {
+      prog.style.display = 'block'; prog.value = 5;
+      statusEl.textContent = 'Reading audio…'; announce('Creating video from audio.');
+      let audioBuf = await decodeAudioFile(audioFile);
+      if (cleanNoise) {
+        statusEl.textContent = 'Cleaning background noise…';
+        audioBuf = await processLongAudioWithAI(audioBuf, 'voicefocus', (pct) => { prog.value = Math.min(40, 5 + Math.round(pct * 0.35)); });
+      }
+      const images = [];
+      if (imgFile) images.push(await loadImageElementFromBlob(imgFile));
+      statusEl.textContent = 'Rendering MP4 video…';
+      const videoBlob = await VoiceCutStudio.renderStoryboardVideo({
+        aspectRatio,
+        durationSec: audioBuf.duration,
+        images,
+        audioBuffer: audioBuf,
+        title,
+        motion: images.length ? 'zoomIn' : 'still',
+        showWaveform: true,
+        onProgress: (p) => { prog.value = 40 + Math.round(p * 0.6); },
+      });
+      const ext = (videoBlob.type || '').includes('mp4') ? 'mp4' : 'webm';
+      const base = audioFile.name.replace(/\.[^.]+$/, '') || 'audio-video';
+      const outFile = new File([videoBlob], `${base}-video.${ext}`, { type: videoBlob.type || 'video/mp4' });
+      closeHomeStudioPanels();
+      loadVideoFile(outFile);
+      announce('Audio converted to video and opened in the editor. You can now generate captions, add music, or export.');
+    } catch (e) {
+      const m = 'Could not create video from audio: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    } finally { prog.style.display = 'none'; }
+  }
+
+  async function extractAudioFromVideoBlob(videoFile, cleanVoice, statusEl) {
+    if (!videoFile) { const m = 'Select a video file first.'; if (statusEl) statusEl.textContent = m; announce(m, true); return; }
+    try {
+      if (statusEl) statusEl.textContent = 'Extracting audio from video…';
+      announce('Extracting audio from video.');
+      let audioBuf = await decodeAudioFile(videoFile);
+      if (cleanVoice) {
+        if (statusEl) statusEl.textContent = 'Cleaning background noise…';
+        audioBuf = await processLongAudioWithAI(audioBuf, 'voicefocus', () => {});
+      }
+      const wavBlob = audioBufferToWavBlob(audioBuf);
+      const base = (videoFile.name || 'video').replace(/\.[^.]+$/, '');
+      await deliverFileToUser(wavBlob, `${base}-audio.wav`, 'wav', statusEl, 'Extracted WAV audio');
+    } catch (e) {
+      const m = 'Could not extract audio from this video: ' + e.message;
+      if (statusEl) statusEl.textContent = m;
+      announce(m, true);
+    }
+  }
+
+  async function buildGeneratedClip({ mode, prompt, aspectRatio, durationSec, startImageFile, startImageEl, voiceLang, voiceGender, narrationText, consent, onStatus, onProgress }) {
+    const cleanPrompt = String(prompt || '').trim();
+    if (!cleanPrompt) throw new Error('Enter a visual scene description first.');
+    if (!consent) throw new Error('Check the consent box to send your prompt to the AI generator.');
+    const targetSec = Math.max(4, Math.min(15, Number(durationSec) || 8));
+
+    // Optional multilingual AI narration
+    let narration = null;
+    if (narrationText && voiceLang && voiceLang !== 'none') {
+      onStatus?.('Generating AI voice narration…');
+      onProgress?.(15);
+      try {
+        narration = await synthesizeNarrationBuffer(narrationText, voiceLang, voiceGender);
+      } catch (ttsErr) {
+        console.warn('TTS fallback notice:', ttsErr.message);
+      }
+    }
+    const finalDur = narration ? Math.max(targetSec, Math.ceil(narration.buffer.duration)) : targetSec;
+    const cues = narrationText ? VoiceCutStudio.cuesFromScript(narrationText, narration ? narration.buffer.duration : finalDur) : [];
+
+    // Cloud Motion Video mode (Pollinations Wan/Seedance, fal.ai, Replicate)
+    if (mode === 'cloud') {
+      onStatus?.('Generating cloud AI motion video… This can take 30 to 90 seconds.');
+      onProgress?.(30);
+      let imageDataUrl = null;
+      if (startImageFile) imageDataUrl = await fileToDataUrl(startImageFile);
+      else if (startImageEl) {
+        const c = document.createElement('canvas');
+        c.width = startImageEl.naturalWidth || startImageEl.width || 1280;
+        c.height = startImageEl.naturalHeight || startImageEl.height || 720;
+        c.getContext('2d').drawImage(startImageEl, 0, 0, c.width, c.height);
+        imageDataUrl = c.toDataURL('image/jpeg', 0.88);
+      }
+      const vidBlob = await requestServerJson('/api/generate-video', {
+        prompt: cleanPrompt, aspectRatio, duration: targetSec, imageDataUrl,
+      }, { timeoutMs: 240000, uploadConsent: Boolean(imageDataUrl) });
+      onProgress?.(100);
+      return { videoBlob: vidBlob, narration, cues };
+    }
+
+    // Instant AI Storyboard Video mode (works free up to 15s+ with multi-keyframe scenes + camera motion + voice + captions)
+    const images = [];
+    if (startImageFile) images.push(await loadImageElementFromBlob(startImageFile));
+    else if (startImageEl) images.push(startImageEl);
+
+    const neededScenes = Math.max(1, Math.min(3, Math.ceil(finalDur / 5)) - images.length);
+    for (let i = 0; i < neededScenes; i++) {
+      onStatus?.(`Generating AI scene artwork ${i + 1} of ${neededScenes}…`);
+      onProgress?.(20 + Math.round(((i + 0.5) / neededScenes) * 40));
+      const variation = neededScenes > 1 ? `${cleanPrompt}, cinematic shot ${i + 1}` : cleanPrompt;
+      images.push(await fetchAiImageElement(variation, aspectRatio, 'general'));
+    }
+
+    onStatus?.('Rendering smooth motion video…');
+    const videoBlob = await VoiceCutStudio.renderStoryboardVideo({
+      aspectRatio,
+      durationSec: finalDur,
+      images,
+      audioBuffer: narration ? narration.buffer : null,
+      cues: [], // Keep captions editable in VoiceCut Editor rather than double-burning!
+      motion: 'auto',
+      onProgress: (p) => onProgress?.(60 + Math.round(p * 0.4)),
+    });
+    return { videoBlob, narration, cues, embeddedNarration: Boolean(narration) };
+  }
+
+  async function runGenerateVideoFlow() {
+    const statusEl = $('#genVideoStatus');
+    const prog = $('#genVideoProgress');
+    try {
+      prog.style.display = 'block'; prog.value = 5;
+      const mode = $('#genVideoMode')?.value || 'storyboard';
+      const aspectRatio = $('#genVideoAspect')?.value || '16:9';
+      const durationSec = Number($('#genVideoDuration')?.value || 8);
+      const prompt = $('#genVideoPrompt')?.value || '';
+      const startImageFile = $('#genVideoStartImage')?.files?.[0] || null;
+      const voiceLang = $('#genVideoVoiceLang')?.value || 'none';
+      const voiceGender = $('#genVideoVoiceGender')?.value || 'female';
+      const narrationText = ($('#genVideoNarration')?.value || '').trim();
+      const consent = Boolean($('#genVideoConsent')?.checked);
+
+      announce('Generating AI video. Please wait.');
+      const res = await buildGeneratedClip({
+        mode, prompt, aspectRatio, durationSec, startImageFile,
+        voiceLang, voiceGender, narrationText, consent,
+        onStatus: (t) => { statusEl.textContent = t; },
+        onProgress: (p) => { prog.value = p; },
+      });
+      const ext = (res.videoBlob.type || '').includes('mp4') ? 'mp4' : 'webm';
+      const outFile = new File([res.videoBlob], `ai-video-${Date.now()}.${ext}`, { type: res.videoBlob.type || 'video/mp4' });
+      closeHomeStudioPanels();
+      loadVideoFile(outFile, async () => {
+        captionDefaults();
+        if (res.cues?.length) {
+          project.captions = res.cues;
+          project.captionSettings.burnIn = true;
+          project.captionSettings.preview = true;
+        }
+        if (res.narration && !res.embeddedNarration) {
+          const voFile = new File([res.narration.blob], 'ai-narration.mp3', { type: 'audio/mpeg' });
+          addAudioFile(voFile, 'voiceover', 0);
+        }
+        announce('AI video opened in the editor. Captions are aligned on word boundaries. Noise reduction stays off unless you turn it on.');
+      });
+    } catch (e) {
+      const m = e.message === 'SERVICE_UNAVAILABLE'
+        ? 'Could not reach the AI server. Switch to Instant AI Storyboard Video mode or check your connection.'
+        : 'Video generation stopped: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    } finally { prog.style.display = 'none'; }
+  }
+
+  async function captureLastVideoFrameElement() {
+    if (!video || !video.videoWidth) return null;
+    const prevTime = video.currentTime;
+    const target = Math.max(0, (video.duration || 1) - 0.08);
+    await new Promise((resolve) => {
+      const done = () => { video.removeEventListener('seeked', done); resolve(); };
+      video.addEventListener('seeked', done, { once: true });
+      video.currentTime = target;
+      setTimeout(done, 600);
+    });
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+    video.currentTime = prevTime;
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+    return blob ? loadImageElementFromBlob(blob) : null;
+  }
+
+  async function runExtendVideoFlow() {
+    const statusEl = $('#extendVideoStatus');
+    if (!project.videoFile) { announce('Upload or generate a video first.', true); return; }
+    const prompt = ($('#extendVideoPrompt')?.value || '').trim();
+    if (!prompt) { const m = 'Describe what happens in the next clip first.'; statusEl.textContent = m; announce(m, true); return; }
+    try {
+      const w = video.videoWidth || 1280, h = video.videoHeight || 720;
+      const aspectRatio = Math.abs(w - h) < 80 ? '1:1' : h > w ? '9:16' : '16:9';
+      const mode = $('#extendVideoMode')?.value || 'storyboard';
+      const durationSec = Number($('#extendVideoDuration')?.value || 8);
+      const voiceLang = $('#extendVoiceLang')?.value || 'none';
+      const narrationText = ($('#extendNarration')?.value || '').trim();
+
+      statusEl.textContent = 'Capturing final frame of current clip…';
+      announce('Extending video. Capturing last frame and generating continuation clip.');
+      const lastFrameImg = await captureLastVideoFrameElement();
+      const prevDuration = project.duration || video.duration || 0;
+      const existingCaptions = Array.isArray(project.captions) ? project.captions.slice() : [];
+
+      const nextClip = await buildGeneratedClip({
+        mode, prompt, aspectRatio, durationSec, startImageEl: lastFrameImg,
+        voiceLang, voiceGender: 'female', narrationText, consent: true,
+        onStatus: (t) => { statusEl.textContent = t; },
+      });
+      const nextFile = new File([nextClip.videoBlob], `continuation-${Date.now()}.mp4`, { type: 'video/mp4' });
+      statusEl.textContent = 'Merging original clip and continuation clip seamlessly…';
+      const mergedBlob = await VoiceCutMerge.mergeMp4Files([project.videoFile, nextFile], (frac, txt) => {
+        statusEl.textContent = `${txt} (${Math.round(frac * 100)}%)`;
+      });
+      const mergedFile = new File([mergedBlob], (project.name || 'extended-video') + '.mp4', { type: 'video/mp4' });
+      $('#extendVideoBox')?.classList.add('hidden');
+      loadVideoFile(mergedFile, async () => {
+        captionDefaults();
+        const shiftedNewCues = (nextClip.cues || []).map(c => ({
+          start: Number((c.start + prevDuration).toFixed(3)),
+          end: Number((c.end + prevDuration).toFixed(3)),
+          text: c.text,
+        }));
+        if (existingCaptions.length || shiftedNewCues.length) {
+          project.captions = [...existingCaptions, ...shiftedNewCues];
+          project.captionSettings.burnIn = true;
+          project.captionSettings.preview = true;
+        }
+        if (nextClip.narration && !nextClip.embeddedNarration) {
+          const voFile = new File([nextClip.narration.blob], 'continuation-narration.mp3', { type: 'audio/mpeg' });
+          addAudioFile(voFile, 'voiceover', prevDuration);
+        }
+        for (const c of project.clips) if (c.url) createAudioNodeForClip(c);
+        statusEl.textContent = 'Extended clip merged cleanly.';
+        announce('Continuation clip generated and merged seamlessly with your video.');
+      });
+    } catch (e) {
+      const m = 'Could not extend video: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    }
+  }
+
+  async function appendAnotherVideoClip(secondFile) {
+    if (!project.videoFile || !secondFile) return;
+    const statusEl = $('#reverseStatus');
+    try {
+      statusEl.textContent = 'Merging clips seamlessly…';
+      announce('Merging selected clip at the end of your current video.');
+      const existingCaptions = Array.isArray(project.captions) ? project.captions.slice() : [];
+      const mergedBlob = await VoiceCutMerge.mergeMp4Files([project.videoFile, secondFile], (frac, txt) => {
+        statusEl.textContent = `${txt} (${Math.round(frac * 100)}%)`;
+      });
+      const mergedFile = new File([mergedBlob], (project.name || 'merged-video') + '.mp4', { type: 'video/mp4' });
+      loadVideoFile(mergedFile, async () => {
+        captionDefaults();
+        if (existingCaptions.length) project.captions = existingCaptions;
+        for (const c of project.clips) if (c.url) createAudioNodeForClip(c);
+        statusEl.textContent = 'Clips merged into your timeline.';
+        announce('Clip merged at the end of your video.');
+      });
+    } catch (e) {
+      const m = 'Could not merge clip: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    }
+  }
+
+  async function runGenerateImageFlow() {
+    const statusEl = $('#genImageStatus');
+    const preset = $('#genImagePreset')?.value || 'thumbnail';
+    const aspectRatio = $('#genImageAspect')?.value || '16:9';
+    const prompt = ($('#genImagePrompt')?.value || '').trim();
+    const title = ($('#genImageTitle')?.value || '').trim();
+    if (!prompt) { const m = 'Describe the image, thumbnail, or logo you want first.'; statusEl.textContent = m; announce(m, true); return; }
+    try {
+      statusEl.textContent = 'Generating AI artwork…';
+      announce('Generating image. Please wait.');
+      const img = await fetchAiImageElement(VoiceCutStudio.buildImagePrompt(prompt, preset, title), aspectRatio, preset);
+      const dims = VoiceCutStudio.dimensionsForAspect(aspectRatio);
+      const canvas = $('#genImageCanvas');
+      canvas.width = dims.width;
+      canvas.height = dims.height;
+      const ctx = canvas.getContext('2d');
+      VoiceCutStudio.drawStudioFrame(ctx, dims.width, dims.height, { image: img, motion: 'still', title });
+      lastGeneratedPngBlob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+      $('#genImagePreviewWrap')?.classList.remove('hidden');
+      $('#btnDownloadGenImage')?.classList.remove('hidden');
+      $('#btnAnimateGenImage')?.classList.remove('hidden');
+      const label = preset === 'logo' ? 'Logo generated.' : preset === 'thumbnail' ? 'Thumbnail generated.' : 'Image generated.';
+      statusEl.textContent = `${label} Ready to download as PNG or turn into a video.`;
+      announce(`${label} Use Download PNG or Turn This Image into Video.`);
+    } catch (e) {
+      const m = 'Could not generate image: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    }
+  }
+
+  async function runAiVoiceoverInEditor() {
+    const statusEl = $('#aiVoStatus');
+    const text = ($('#aiVoText')?.value || '').trim();
+    const lang = $('#aiVoLanguage')?.value || 'en';
+    const gender = $('#aiVoGender')?.value || 'female';
+    const addCaps = Boolean($('#aiVoAddCaptions')?.checked);
+    if (!text) { const m = 'Type the script to speak first.'; statusEl.textContent = m; announce(m, true); return; }
+    try {
+      statusEl.textContent = 'Generating AI voice-over…';
+      announce('Generating AI voice-over.');
+      const startAt = video?.currentTime || 0;
+      const res = await synthesizeNarrationBuffer(text, lang, gender);
+      const voFile = new File([res.blob], `ai-voiceover-${lang}.mp3`, { type: 'audio/mpeg' });
+      await addAudioFile(voFile, 'voiceover', startAt);
+      if (addCaps) {
+        const rawCues = VoiceCutStudio.cuesFromScript(text, res.buffer.duration).map(c => ({
+          start: Number((c.start + startAt).toFixed(3)),
+          end: Number((c.end + startAt).toFixed(3)),
+          text: c.text,
+        }));
+        captionDefaults();
+        project.captions = [...(project.captions || []), ...rawCues].sort((a, b) => a.start - b.start);
+        project.captionSettings.burnIn = true;
+        project.captionSettings.preview = true;
+      }
+      renderAll();
+      statusEl.textContent = 'AI voice-over added to timeline.';
+      announce('AI voice-over added to timeline' + (addCaps ? ' with aligned captions.' : '.'));
+    } catch (e) {
+      const m = e.message === 'SERVICE_UNAVAILABLE'
+        ? 'Could not reach the voice service. Check your connection and try again.'
+        : 'Could not generate AI voice-over: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    }
+  }
   async function enhanceWithRealAI(file,level,onProgress,mediaSeconds=0) {
     if($('#enhanceMode').value==='device')return null;
     if(mediaSeconds>600){announce('Long video: reducing noise across the whole video…');return null;}
@@ -4025,6 +4557,75 @@
     $('#btnStartMerge').addEventListener('click', startMerge);
     $('#btnCancelMerge').addEventListener('click', cancelMerge);
     $('#homeRecordVideo').addEventListener('click', openVideoRecordDialog);
+    // Creative Studio Home & Editor actions
+    $('#homeAudioToVideo')?.addEventListener('click', ()=>openHomeStudioPanel('#audioToVideoPanel', '#a2vHeading'));
+    $('#btnCloseAudioToVideo')?.addEventListener('click', closeHomeStudioPanels);
+    $('#btnRunAudioToVideo')?.addEventListener('click', runAudioToVideoFlow);
+
+    $('#homeVideoToAudio')?.addEventListener('click', ()=>openHomeStudioPanel('#videoToAudioPanel', '#v2aHeading'));
+    $('#btnCloseVideoToAudio')?.addEventListener('click', closeHomeStudioPanels);
+    $('#btnRunVideoToAudio')?.addEventListener('click', ()=>extractAudioFromVideoBlob($('#v2aVideoInput')?.files?.[0], false, $('#v2aStatus')));
+
+    $('#homeGenerateVideo')?.addEventListener('click', ()=>openHomeStudioPanel('#generateVideoPanel', '#genVideoHeading'));
+    $('#btnCloseGenerateVideo')?.addEventListener('click', closeHomeStudioPanels);
+    $('#btnRunGenerateVideo')?.addEventListener('click', runGenerateVideoFlow);
+
+    $('#homeGenerateImage')?.addEventListener('click', ()=>openHomeStudioPanel('#generateImagePanel', '#genImageHeading'));
+    $('#btnCloseGenerateImage')?.addEventListener('click', closeHomeStudioPanels);
+    $('#genImagePreset')?.addEventListener('change', (e)=>{
+      const p=e.target.value;
+      if (p==='logo' && $('#genImageAspect')) $('#genImageAspect').value='1:1';
+      else if (p==='thumbnail' && $('#genImageAspect')) $('#genImageAspect').value='16:9';
+    });
+    $('#btnRunGenerateImage')?.addEventListener('click', runGenerateImageFlow);
+    $('#btnDownloadGenImage')?.addEventListener('click', ()=>{
+      if (!lastGeneratedPngBlob) return;
+      const preset=$('#genImagePreset')?.value||'image';
+      deliverFileToUser(lastGeneratedPngBlob, `voicecut-${preset}-${Date.now()}.png`, 'png', $('#genImageStatus'), 'PNG image');
+    });
+    $('#btnAnimateGenImage')?.addEventListener('click', ()=>{
+      if (!lastGeneratedPngBlob) return;
+      const aspect=$('#genImageAspect')?.value||'16:9';
+      const prompt=$('#genImagePrompt')?.value||'Gentle cinematic camera movement';
+      const file=new File([lastGeneratedPngBlob], 'generated-frame.png', {type:'image/png'});
+      const dt=typeof DataTransfer==='function'?new DataTransfer():null;
+      if (dt && $('#genVideoStartImage')) { dt.items.add(file); $('#genVideoStartImage').files=dt.files; }
+      if ($('#genVideoAspect') && ['16:9','9:16','1:1'].includes(aspect)) $('#genVideoAspect').value=aspect;
+      if ($('#genVideoPrompt') && !$('#genVideoPrompt').value) $('#genVideoPrompt').value=prompt;
+      openHomeStudioPanel('#generateVideoPanel', '#genVideoHeading');
+      announce('Image loaded into Generate Video. Choose duration and voice narration, then press Generate Video.');
+    });
+
+    // Editor Extend Video, Merge Another Clip, Extract Audio & AI Voice-over
+    $('#btnExtendVideo')?.addEventListener('click', ()=>{
+      const box=$('#extendVideoBox');
+      if (!box) return;
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) $('#extendVideoHeading')?.focus();
+    });
+    $('#btnCancelExtendVideo')?.addEventListener('click', ()=>$('#extendVideoBox')?.classList.add('hidden'));
+    $('#btnRunExtendVideo')?.addEventListener('click', runExtendVideoFlow);
+    $('#btnAppendVideoFile')?.addEventListener('click', ()=>{
+      if (!project.videoFile) { announce('Upload or generate a video first.', true); return; }
+      $('#fileAppendVideo')?.click();
+    });
+    $('#fileAppendVideo')?.addEventListener('change', (e)=>{
+      const f=e.target.files?.[0]; e.target.value='';
+      if (f) appendAnotherVideoClip(f);
+    });
+    $('#btnExtractVideoAudio')?.addEventListener('click', ()=>{
+      if (!project.videoFile) { announce('Upload or generate a video first.', true); return; }
+      extractAudioFromVideoBlob(project.videoFile, false, $('#reverseStatus'));
+    });
+    $('#btnOpenAiVoiceover')?.addEventListener('click', ()=>{
+      const box=$('#aiVoiceoverBox');
+      if (!box) return;
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) $('#aiVoHeading')?.focus();
+    });
+    $('#btnCancelAiVoiceover')?.addEventListener('click', ()=>$('#aiVoiceoverBox')?.classList.add('hidden'));
+    $('#btnRunAiVoiceover')?.addEventListener('click', runAiVoiceoverInEditor);
+
     $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
     $('#homeLibrary').addEventListener('click', ()=>{ location.hash='#/library'; });
     $('#homeHelp').addEventListener('click', ()=>$('#helpDialog').showModal());
@@ -4316,7 +4917,8 @@
       const clip=project.clips.find(c=>c.id===selectedClipId); if(!clip) return;
       const newEnd=parseTime(e.target.value);
       const newDur=newEnd - clip.startTime;
-      if(newDur>0) { clip.trimEnd = clip.duration - clip.trimStart - newDur; pushHistory(); renderAll(); }
+      const maxDur=Math.max(0.05, clip.duration - clip.trimStart);
+      if(newDur>0.05) { clip.trimEnd = Math.max(0, clip.duration - clip.trimStart - Math.min(maxDur, newDur)); pushHistory(); renderAll(); }
     });
     $('#selVolumeSlider').addEventListener('input', (e)=>{ $('#selVolumeNumber').value=e.target.value; $('#selVolumeText').textContent=e.target.value+'%'; e.target.setAttribute('aria-valuetext', `Volume ${e.target.value} percent`); if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip){ clip.volume=parseInt(e.target.value); const n=audioNodes.get(clip.id); if(n) n.gain.gain.value=clip.muted?0:clip.volume/100; } } });
     $('#selVolumeSlider').addEventListener('change', (e)=>{ updateSelectedClipVolume(parseInt(e.target.value)); pushHistory(); });
@@ -4337,7 +4939,9 @@
     $('#fadeInSelect').addEventListener('change', (e)=>{ if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip){ clip.fadeIn=parseFloat(e.target.value); pushHistory(); renderAll(); } } });
     $('#fadeOutSelect').addEventListener('change', (e)=>{ if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip){ clip.fadeOut=parseFloat(e.target.value); pushHistory(); renderAll(); } } });
     $('#fadeInCustom').addEventListener('input', (e)=>{ $('#fadeInCustomVal').textContent=e.target.value+'s'; if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip) clip.fadeIn=parseFloat(e.target.value); } });
+    $('#fadeInCustom').addEventListener('change', ()=>{ if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip){ pushHistory(); renderAll(); announce(`Fade in set to ${clip.fadeIn} seconds.`); } } });
     $('#fadeOutCustom').addEventListener('input', (e)=>{ $('#fadeOutCustomVal').textContent=e.target.value+'s'; if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip) clip.fadeOut=parseFloat(e.target.value); } });
+    $('#fadeOutCustom').addEventListener('change', ()=>{ if(selectedClipId){ const clip=project.clips.find(c=>c.id===selectedClipId); if(clip){ pushHistory(); renderAll(); announce(`Fade out set to ${clip.fadeOut} seconds.`); } } });
     $('#duckingToggle').addEventListener('change', (e)=>{ project.ducking.enabled=e.target.checked; pushHistory(); announce(`Voice ducking ${e.target.checked?'enabled':'disabled'}.`); });
     $('#duckingLevel').addEventListener('change', (e)=>{ project.ducking.level=parseInt(e.target.value); pushHistory(); announce(`Ducking level set to ${e.target.value} percent.`); });
     $('#duckingSilenceWait').addEventListener('change', (e)=>{ project.ducking.silenceWait=parseInt(e.target.value); pushHistory(); announce(project.ducking.silenceWait>0?`Music rises after ${e.target.value} second${e.target.value==='1'?'':'s'} of silence.`:'Music rises as soon as there is silence.'); });
@@ -4480,24 +5084,81 @@
 
     loadPrefs();
 
+    // High-precision 60fps cut-skipper & de-clicker so deleted ranges never
+    // leak milliseconds of audio/silence or produce a seek click during preview!
+    let previewCutRaf = 0, previewSeekingCut = false, previewDeclickUntil = 0;
+    function stepPreviewCutMonitor() {
+      previewCutRaf = 0;
+      if (!video || video.paused || isExporting) return;
+      try {
+        const rs = VoiceCutCore.ranges(project);
+        const ct = video.currentTime;
+        const next = rs.find(r => ct < r.end - 0.008);
+        if (!next) {
+          video.pause();
+          return;
+        }
+        if (!previewSeekingCut && ct < next.start - 0.004) {
+          previewSeekingCut = true;
+          previewDeclickUntil = performance.now() + 28;
+          // Mute video element momentarily across the hardware decoder seek so
+          // stale decoded audio buffers cannot click, while music tracks keep playing!
+          const wasMuted = video.muted;
+          video.muted = true;
+          const finishJump = () => {
+            video.removeEventListener('seeked', finishJump);
+            previewSeekingCut = false;
+            setTimeout(() => {
+              previewDeclickUntil = 0;
+              if (!isExporting) video.muted = !!(project.originalAudio.enhanced || project.originalAudio.muted || wasMuted);
+              syncAudioPlayback();
+            }, 14);
+          };
+          video.addEventListener('seeked', finishJump, { once: true });
+          video.currentTime = next.start;
+          setTimeout(finishJump, 180);
+        } else if (!previewSeekingCut && rs.length > 1) {
+          // Pre-mute 12ms right before hitting a cut boundary so zero cut-region samples leak!
+          const curSeg = rs.find(r => ct >= r.start - 0.01 && ct < r.end);
+          if (curSeg && curSeg !== rs[rs.length - 1] && curSeg.end - ct <= 0.016) {
+            previewDeclickUntil = performance.now() + 30;
+            video.muted = true;
+          }
+        }
+      } catch {
+        video.pause();
+        return;
+      }
+      if (performance.now() >= previewDeclickUntil) syncAudioPlayback();
+      previewCutRaf = requestAnimationFrame(stepPreviewCutMonitor);
+    }
+
     // Video time updates
     video.addEventListener('timeupdate', ()=>{
       currentVideoTime=video.currentTime;
       const kpNow = keptPositionNow();
       $('#currentPositionDisplay').textContent=`Current: ${formatTime(kpNow.pos)} / Total: ${formatTime(kpNow.total)}`;
       $('#currentPositionDisplay').setAttribute('aria-label', `Current position ${formatTimeVerbose(kpNow.pos)} of ${formatTimeVerbose(kpNow.total)}. Playback speed ${project.playbackSpeed}x`);
-      if(!isExporting && !video.paused) {
+      if(!isExporting && !video.paused && !previewSeekingCut) {
         try {
           const ranges=VoiceCutCore.ranges(project);
-          const next=ranges.find(r=>video.currentTime<r.end-0.015);
+          const next=ranges.find(r=>video.currentTime<r.end-0.008);
           if(!next)video.pause();
-          else if(video.currentTime<next.start)video.currentTime=next.start;
+          else if(video.currentTime<next.start - 0.004)video.currentTime=next.start;
         }catch {video.pause();}
       }
+      if (performance.now() >= previewDeclickUntil) syncAudioPlayback();
+    });
+    video.addEventListener('play', ()=>{
+      $('#btnPlay').setAttribute('aria-pressed','true');
+      if (!isExporting && !previewCutRaf) previewCutRaf = requestAnimationFrame(stepPreviewCutMonitor);
+    });
+    video.addEventListener('pause', ()=>{
+      $('#btnPlay').setAttribute('aria-pressed','false');
+      if (previewCutRaf) { cancelAnimationFrame(previewCutRaf); previewCutRaf = 0; }
+      previewSeekingCut = false; previewDeclickUntil = 0;
       syncAudioPlayback();
     });
-    video.addEventListener('play', ()=>{ $('#btnPlay').setAttribute('aria-pressed','true'); });
-    video.addEventListener('pause', ()=>{ $('#btnPlay').setAttribute('aria-pressed','false'); syncAudioPlayback(); });
 
     // A tap re-allows blocked timeline sounds on phones that need a gesture.
     for (const gesture of ['pointerdown','keydown']) document.addEventListener(gesture, ()=>{
@@ -4516,13 +5177,13 @@
       if (e.code==='Space') { e.preventDefault(); if(video.paused) playVideo(); else pauseVideo(); }
       else if (e.key==='ArrowLeft') {
         e.preventDefault();
-        if (e.shiftKey) { video.currentTime=Math.max(0, video.currentTime-10); announce(`Jumped backward 10 seconds to ${formatTimeVerbose(video.currentTime)}.`); }
-        else { video.currentTime=Math.max(0, video.currentTime-1); }
+        if (e.shiftKey) { video.currentTime=keptSeekNow(-10); announce(`Jumped backward 10 seconds to ${formatTimeVerbose(keptPositionNow().pos)}.`); }
+        else { video.currentTime=keptSeekNow(-1); }
       }
       else if (e.key==='ArrowRight') {
         e.preventDefault();
-        if (e.shiftKey) { video.currentTime=Math.min(video.duration, video.currentTime+10); announce(`Jumped forward 10 seconds to ${formatTimeVerbose(video.currentTime)}.`); }
-        else { video.currentTime=Math.min(video.duration, video.currentTime+1); }
+        if (e.shiftKey) { video.currentTime=keptSeekNow(10); announce(`Jumped forward 10 seconds to ${formatTimeVerbose(keptPositionNow().pos)}.`); }
+        else { video.currentTime=keptSeekNow(1); }
       }
       else if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z') {
         e.preventDefault();
