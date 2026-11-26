@@ -21,5 +21,17 @@ services:
         sync: false
       - key: ASSEMBLYAI_API_KEY
         sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: POLLINATIONS_API_KEY
+        sync: false
+      - key: FAL_KEY
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
       - key: MAX_AI_REQUESTS_PER_HOUR
         value: '20'

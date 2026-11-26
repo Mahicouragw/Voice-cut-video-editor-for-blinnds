@@ -11,9 +11,16 @@ This guide applies to the VoiceCut 2.10 app and its optional processing backend 
 | `GROQ_API_KEY` | Free-tier Whisper captions (recommended free option) | Render → your **backend service** → **Environment** → variable with this exact name |
 | `DEEPGRAM_API_KEY` | Nova captions using Deepgram's free starter credit | Same backend Environment page |
 | `ASSEMBLYAI_API_KEY` | Captions using AssemblyAI's free tier | Same backend Environment page |
-| `OPENAI_API_KEY` | Paid Whisper captions (optional alternative) | Same backend Environment page |
+| `OPENAI_API_KEY` | Paid Whisper captions & optional fallback TTS | Same backend Environment page |
 | `ELEVENLABS_API_KEY` | Cloud AI voice isolation/background-noise removal | Same backend Environment page |
-| `SERVER_ACCESS_KEY` | Protects your personal backend against other people using your API credits | Backend Environment **and** VoiceCut → Settings → **Your SERVER_ACCESS_KEY** |
+| `CLOUDFLARE_ACCOUNT_ID` | Free daily FLUX.1-schnell Images, Thumbnails & Logos (~170–230/day, resets 00:00 UTC) | Same backend Environment page (`https://dash.cloudflare.com`) |
+| `CLOUDFLARE_API_TOKEN` | Workers AI Read/Edit token paired with `CLOUDFLARE_ACCOUNT_ID` | Same backend Environment page (`https://dash.cloudflare.com/profile/api-tokens`) |
+| `HF_TOKEN` | Free Hugging Face ZeroGPU token (unlocks daily free GPU quota on `Wan 2.1`, `LTX-Video` & `FLUX.1-schnell` Spaces, no credit card) | Same backend Environment page (`https://huggingface.co/settings/tokens`) |
+| `POLLINATIONS_API_KEY` | Unified FLUX Images + Wan (up to 15s) & Seedance Text/Image-to-Video | Same backend Environment page (`https://enter.pollinations.ai`) |
+| `FAL_KEY` | Optional Cloud Wan-2.1 / Kling / LTX Text-to-Video & Image-to-Video | Same backend Environment page (`https://fal.ai/dashboard/keys`) |
+| `REPLICATE_API_TOKEN` | Optional Replicate Wan-2.1 Video fallback | Same backend Environment page (`https://replicate.com/account/api-tokens`) |
+| *(No key needed)* | **Multilingual AI Voice Narration (`msedge-tts`)**, **RNNoise/DeepFilterNet Cleanup**, **Audio↔Video**, and **Instant Storyboard Video** | Built in — works automatically with zero keys |
+| `SERVER_ACCESS_KEY` | Protects your personal backend against other people using your API credits | Backend Environment **and** VoiceCut private `#dev-key` URL |
 
 **The website should never receive any provider key.** Only the separate server access key goes into the editor. The backend attaches the appropriate provider key privately when making requests.
 

@@ -166,7 +166,7 @@
     .section-nav { top:64px; overflow-x:auto; flex-wrap:nowrap; }
   }
 
-.caption-overlay { position:absolute; bottom:8%; left:6%; width:88%; padding:8px 12px; background:rgba(0,0,0,.82); color:#fff; text-align:center; white-space:pre-wrap; overflow-wrap:anywhere; font-size:clamp(14px,2.8vw,28px); line-height:1.35; pointer-events:none; }
+.caption-overlay { position:absolute; bottom:8%; left:8%; width:84%; max-width:84%; padding:8px 14px; background:rgba(0,0,0,.82); color:#fff; text-align:center; white-space:pre-line; word-break:keep-all; overflow-wrap:normal; hyphens:none; font-family:system-ui, -apple-system, "Noto Sans Telugu", "Noto Sans Devanagari", "Noto Sans Tamil", "Noto Sans Kannada", "Noto Sans Malayalam", "Noto Sans Bengali", sans-serif; font-size:clamp(14px,2.6vw,26px); font-weight:600; line-height:1.38; border-radius:6px; pointer-events:none; }
 .caption-overlay[hidden] { display:none; }
 #section-captions label { display:block; margin-top:12px; }
 #section-captions button { margin:6px 6px 6px 0; }

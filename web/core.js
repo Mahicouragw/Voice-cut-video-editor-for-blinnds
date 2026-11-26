@@ -5,9 +5,17 @@
   function ranges(project) {
     const start = Number(project.trimStart), end = Number(project.trimEnd || project.duration);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > project.duration + 0.01) throw new Error('Choose a valid start and end within the video.');
-    const kept = project.segments.map(s => ({start: Math.max(start, s.start), end: Math.min(end, s.end)})).filter(s => s.end > s.start).sort((a,b) => a.start-b.start);
+    const kept = (project.segments || []).map(s => ({start: Math.max(start, s.start), end: Math.min(end, s.end)})).filter(s => s.end > s.start).sort((a,b) => a.start-b.start);
     if (!kept.length) throw new Error('No video segments remain. Undo deletion or upload a video.');
-    return kept;
+    // Coalesce contiguous segments (e.g. after Split without Delete) so preview
+    // and export never pause/seek/click across a 0ms split boundary.
+    const merged = [kept[0]];
+    for (let i = 1; i < kept.length; i++) {
+      const prev = merged[merged.length - 1], cur = kept[i];
+      if (cur.start <= prev.end + 0.002) prev.end = Math.max(prev.end, cur.end);
+      else merged.push({start: cur.start, end: cur.end});
+    }
+    return merged;
   }
   // Plain containers first: explicit avc1 codec strings make Chrome (phone
   // Chrome especially) write cut-short MP4 files, while the default
@@ -54,11 +62,14 @@
     const ds = Number(delStart), de = Number(delEnd);
     if (!Number.isFinite(ds) || !Number.isFinite(de) || ds < 0 || de - ds < 0.05 || de > project.duration + 0.01)
       throw new Error('Type a valid range inside the video, at least 0.05 seconds long.');
-    const kept = ranges(project);
+    const normalized = (project.segments && project.segments.length)
+      ? project
+      : {...project, segments: [{start: Number(project.trimStart) || 0, end: Number(project.trimEnd || project.duration)}]};
+    const kept = ranges(normalized);
     if (kept.every(r => r.start >= ds - 0.001 && r.end <= de + 0.001))
       throw new Error('That range covers the whole video. Delete a smaller range instead.');
     const out = [];
-    for (const s of project.segments) {
+    for (const s of normalized.segments) {
       if (s.start < ds) out.push({start: s.start, end: Math.min(s.end, ds)});
       if (s.end > de) out.push({start: Math.max(s.start, de), end: s.end});
     }
@@ -478,7 +489,24 @@
       return { orientation, shorts: false, words: dims + ' Square video, so YouTube lists it under Videos. Choose the Portrait shape for Shorts.' };
     return { orientation, shorts: false, words: dims + ' Wide video, so YouTube lists it under Videos. Choose the Portrait shape for Shorts.' };
   }
-  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, nextTrackIndex, exportShapeSize, exportShapeCover, exportShapeVerdict };
+  // Click-free 12ms linear de-click envelope applied across cut boundaries
+  // on 1024-frame audio blocks so cuts never pop or click.
+  function applyCutMicroFade(planarBuffer, channels, framesPerChannel, fadeFrames, mode) {
+    const f = Math.max(1, Math.min(framesPerChannel, Math.floor(fadeFrames || 0)));
+    if (!planarBuffer || !f) return planarBuffer;
+    for (let c = 0; c < channels; c++) {
+      const off = c * framesPerChannel;
+      if (mode === 'out' || mode === 'both') {
+        const start = framesPerChannel - f;
+        for (let i = 0; i < f; i++) planarBuffer[off + start + i] *= 1 - (i + 1) / f;
+      }
+      if (mode === 'in' || mode === 'both') {
+        for (let i = 0; i < f; i++) planarBuffer[off + i] *= i / f;
+      }
+    }
+    return planarBuffer;
+  }
+  const api = { TTL_MS, ranges, mimeFor, mimeOptions, exportLooksShort, extension, expired, cropRect, deleteRange, splitAt, findGaps, retainedDuration, keptPositionAt, keptSeekAt, splitChunks, chooseCutPoint, computeVoiceCurve, voiceActiveAt, selectRanges, expandRanges, recordErrorHint, duckedGain, detectCaptionScript, captionScriptGroup, captionScriptMismatch, VIDEO_FILTERS, VOICE_FILTERS, needsAutoProcessingMigration, applyAutoProcessingMigration, speedRangesOf, speedAt, keptRangeLen, keptRangesDuration, addSpeedRange, audioBlockTimestamp, applyCutMicroFade, nextTrackIndex, exportShapeSize, exportShapeCover, exportShapeVerdict };
   root.VoiceCutCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);

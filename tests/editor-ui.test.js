@@ -332,3 +332,45 @@ test('2.41 Original sizing reads the source picture, verdict is measured',()=>{
   assert.match(merge,/displaySize\(firstVideo\)/,'output planned from display size');
   assert.match(merge,/scaleCtx\.rotate\(vRotRad\)/,'joining rotates tagged frames');
 });
+
+test('caption overlay CSS and renderer protect word boundaries and Indic scripts',()=>{
+  const css = fs.readFileSync(path.join(__dirname,'../web/styles.css'),'utf8');
+  const cap = fs.readFileSync(path.join(__dirname,'../web/captions.js'),'utf8');
+  assert.doesNotMatch(css,/\.caption-overlay[^}]*overflow-wrap:\s*anywhere/,'caption overlay must never break words mid-character');
+  assert.match(css,/\.caption-overlay[^}]*word-break:\s*keep-all/,'caption overlay keeps words whole');
+  assert.match(css,/Noto Sans Telugu/,'overlay includes Indic font stack');
+  assert.match(cap,/function wrapCueText/,'word-boundary wrapper exported');
+  assert.match(cap,/function inspectCues/,'pre-export subtitle inspector exported');
+});
+
+test('home screen and editor offer Audio to Video, Video to Audio, Generate Video, Extend Video, and Image/Thumbnail/Logo Studio',()=>{
+  const html = fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  const studio = fs.readFileSync(path.join(__dirname,'../web/studio.js'),'utf8');
+  for (const id of [
+    'homeAudioToVideo','homeVideoToAudio','homeGenerateVideo','homeGenerateImage',
+    'audioToVideoPanel','videoToAudioPanel','generateVideoPanel','generateImagePanel',
+    'btnExtendVideo','btnAppendVideoFile','btnExtractVideoAudio','btnOpenAiVoiceover',
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`), 'missing UI element '+id);
+  }
+  for (const d of ['5','8','10','15']) {
+    assert.match(html, new RegExp(`<option value="${d}"[^>]*>${d} seconds</option>`), 'duration '+d+'s offered');
+  }
+  for (const ar of ['16:9','9:16','1:1']) {
+    assert.ok(html.includes(`value="${ar}"`), 'aspect ratio '+ar+' offered');
+  }
+  assert.match(html, /web\/studio\.js/, 'studio module loaded');
+  assert.match(studio, /function renderStoryboardVideo/, 'storyboard renderer exported');
+  assert.match(studio, /function cuesFromScript/, 'script-to-caption aligner exported');
+  // Noise reduction must NEVER run automatically on Audio-to-Video, Video-to-Audio, or loadVideoFile
+  assert.doesNotMatch(html, /id="a2vCleanNoise"/, 'no automatic noise-reduction checkbox in Audio-to-Video');
+  assert.doesNotMatch(html, /id="v2aNoiseLevel"/, 'no automatic noise-reduction selector in Video-to-Audio');
+});
+
+test('cut boundaries use 60fps preview jump monitor, de-click micro-fades, and continuous music timeline mapping',()=>{
+  const app = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  assert.match(app, /function stepPreviewCutMonitor/, '60fps cut monitor prevents cut-region audio leakage');
+  assert.match(app, /function keptClipAudioTime/, 'overlay clips map continuously across deleted video gaps');
+  assert.match(app, /applyCutMicroFade/, 'WebCodecs export applies 12ms micro-fades across cuts');
+  assert.match(app, /try \{ q0\?\.close\(\); \}/, 'initial paused audio quantum dropped so zero leading silence is added');
+});
