@@ -23,7 +23,19 @@ jobs:
       - run: npm test
       - run: npm --prefix server ci
       - run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
-      - run: npm --prefix server test
+      - name: Run server test suite
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix server test 2>&1 | tee /tmp/voicecut-server-tests.log
+      - name: Summarize server-test failure details
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f /tmp/voicecut-server-tests.log ]; then
+            log_output="$(tail -n 80 /tmp/voicecut-server-tests.log | tr -d '\000' | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error title=Server test output::${log_output}"
+          fi
       - run: npx playwright install --with-deps chromium
       - name: Run Chromium integration suite
         shell: bash
