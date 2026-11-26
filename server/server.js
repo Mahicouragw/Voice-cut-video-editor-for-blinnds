@@ -185,15 +185,25 @@ function createApp(options={}) {
         for(const [a,b] of silent){const st=Math.max(0,a),en=Math.min(duration,b);if(st>cursor+0.02)kept.push([cursor,st]);removed+=Math.max(0,en-st);cursor=Math.max(cursor,en);}
         if(cursor<duration-0.02)kept.push([cursor,duration]);
         if(!kept.length)throw new ServiceError(422,'SILENCE_ONLY','No speech found: the whole recording is quiet. Your original media is unchanged.');
-        const span=([a,b])=>`between(t\\,${a.toFixed(3)}\\,${b.toFixed(3)})`;
-        const expr=kept.map(span).join('+');
         if(!silent.length){
           // Nothing to cut: return the original bytes untouched (instant, no re-encode).
           fs.copyFileSync(req.file.path,output);
         }else if(hasVideo){
-          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-vf',`select=${expr},setpts=N/FRAME_RATE/TB`,'-af',`aselect=${expr},asetpts=N/SR/TB`,'-c:v','libx264','-preset','ultrafast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-y',output]);
+          const chains=[],inputs=[];
+          kept.forEach(([a,b],i)=>{
+            chains.push(`[0:v]trim=${a.toFixed(3)}:${b.toFixed(3)},setpts=PTS-STARTPTS[v${i}];[0:a]atrim=${a.toFixed(3)}:${b.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
+            inputs.push(`[v${i}][a${i}]`);
+          });
+          const fg=`${chains.join(';')};${inputs.join('')}concat=n=${kept.length}:v=1:a=1[vout][aout]`;
+          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-filter_complex',fg,'-map','[vout]','-map','[aout]','-c:v','libx264','-preset','ultrafast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-y',output]);
         }else{
-          await encode(req.file.path,output,['-af',`aselect=${expr},asetpts=N/SR/TB,aresample=48000`,'-ar','48000','-ac','2','-c:a','pcm_s16le']);
+          const chains=[],inputs=[];
+          kept.forEach(([a,b],i)=>{
+            chains.push(`[0:a]atrim=${a.toFixed(3)}:${b.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
+            inputs.push(`[a${i}]`);
+          });
+          const fg=`${chains.join(';')};${inputs.join('')}concat=n=${kept.length}:v=0:a=1,aresample=48000[aout]`;
+          await run(process.env.FFMPEG_PATH||'ffmpeg',['-nostdin','-v','error','-threads','2','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',req.file.path,'-vn','-t','600','-filter_complex',fg,'-map','[aout]','-ar','48000','-ac','2','-c:a','pcm_s16le','-y',output]);
         }
         signal.throwIfAborted();
         const expected=kept.reduce((t,[a,b])=>t+(b-a),0);
