@@ -4052,15 +4052,16 @@
     });
   }
 
-  async function fetchAiImageElement(prompt, aspectRatio, preset) {
-    // 1. Try VoiceCut backend (/api/generate-image -> Cloudflare FLUX / Pollinations / fal.ai)
+  async function fetchAiImageElement(prompt, aspectRatio, preset, model='auto') {
+    // 1. Try VoiceCut backend (/api/generate-image -> Cloudflare FLUX / HF ZeroGPU / Z-Image / Qwen-Image / Pollinations)
     try {
-      const blob = await requestServerJson('/api/generate-image', { prompt, aspectRatio, preset }, { timeoutMs: 90000 });
+      const blob = await requestServerJson('/api/generate-image', { prompt, aspectRatio, preset, model }, { timeoutMs: 120000 });
       if (blob instanceof Blob && blob.size > 100) return await loadImageElementFromBlob(blob);
     } catch (e) {
-      console.warn('Backend image generation fallback:', e.message);
+      if (model && model !== 'auto' && model !== 'pollinations') throw e;
+      console.warn('Image generation fallback:', e.message);
     }
-    // 2. Direct keyless Pollinations browser fallback so local static preview also works immediately
+    // 2. Direct keyless Pollinations browser fallback so static preview also works
     const dims = VoiceCutStudio.dimensionsForAspect(aspectRatio, 768);
     const full = VoiceCutStudio.buildImagePrompt(prompt, preset);
     const seed = Math.floor(Math.random() * 1000000);
@@ -4070,13 +4071,46 @@
     return loadImageElementFromBlob(blob);
   }
 
-  async function synthesizeNarrationBuffer(text, language, gender) {
+  async function synthesizeNarrationBuffer(text, language, gender, model='auto') {
     const clean = String(text || '').trim();
     if (!clean || language === 'none') return null;
-    const blob = await requestServerJson('/api/tts', { text: clean, language, gender }, { timeoutMs: 90000 });
+    const blob = await requestServerJson('/api/tts', { text: clean, language, gender, model }, { timeoutMs: 90000 });
     if (!(blob instanceof Blob) || blob.size < 100) throw new Error('Could not synthesize voice narration.');
     const decoded = await decodeAudioFile(blob);
     return { blob, buffer: decoded };
+  }
+
+  let studioModelsSynced = false;
+  async function syncStudioModelLists() {
+    if (studioModelsSynced) return;
+    try {
+      const caps = await getCapabilities();
+      const models = caps?.models;
+      if (!models) return;
+      studioModelsSynced = true;
+      const fillSelect = (sel, items) => {
+        const el = $(sel);
+        if (!el || !Array.isArray(items) || !items.length) return;
+        const prev = el.value;
+        el.innerHTML = '';
+        for (const item of items) {
+          const opt = document.createElement('option');
+          opt.value = item.id;
+          opt.textContent = item.label;
+          el.appendChild(opt);
+        }
+        if ([...el.options].some(o => o.value === prev)) el.value = prev;
+      };
+      fillSelect('#genVideoModel', models.video);
+      fillSelect('#extendVideoModel', models.video);
+      fillSelect('#genImageModel', models.image);
+      fillSelect('#genVideoTtsModel', models.tts);
+      fillSelect('#aiVoModel', models.tts);
+      fillSelect('#genVideoSfxModel', models.sfx);
+      fillSelect('#aiSfxModel', models.sfx);
+      fillSelect('#genVideoMusicModel', models.music);
+      fillSelect('#aiMusicModel', models.music);
+    } catch {}
   }
 
   async function deliverFileToUser(blob, filename, ext, statusEl, label) {
@@ -4110,6 +4144,7 @@
     if (!panel) return;
     panel.classList.remove('hidden');
     $(headingSelector)?.focus();
+    syncStudioModelLists();
   }
 
   let lastGeneratedPngBlob = null;
@@ -4134,7 +4169,7 @@
       const images = [];
       if (imgFile) images.push(await loadImageElementFromBlob(imgFile));
       statusEl.textContent = 'Rendering MP4 video…';
-      const videoBlob = await VoiceCutStudio.renderStoryboardVideo({
+      const videoBlob = await VoiceCutStudio.renderAudioVisualizerVideo({
         aspectRatio,
         durationSec: audioBuf.duration,
         images,
@@ -4176,70 +4211,80 @@
     }
   }
 
-  async function buildGeneratedClip({ mode, prompt, aspectRatio, durationSec, startImageFile, startImageEl, voiceLang, voiceGender, narrationText, consent, onStatus, onProgress }) {
+  async function buildGeneratedClip({
+    model = 'auto',
+    prompt,
+    aspectRatio,
+    durationSec,
+    startImageFile,
+    startImageEl,
+    includeSceneAudio = true,
+    sfxModel = 'auto',
+    sfxPrompt = '',
+    includeMusic = false,
+    musicModel = 'auto',
+    musicPrompt = '',
+    voiceLang = 'none',
+    voiceGender = 'female',
+    ttsModel = 'auto',
+    narrationText = '',
+    consent,
+    onStatus,
+    onProgress,
+  }) {
     const cleanPrompt = String(prompt || '').trim();
     if (!cleanPrompt) throw new Error('Enter a visual scene description first.');
     if (!consent) throw new Error('Check the consent box to send your prompt to the AI generator.');
     const targetSec = Math.max(4, Math.min(15, Number(durationSec) || 8));
+    const hasNarration = Boolean(narrationText && String(narrationText).trim() && voiceLang && voiceLang !== 'none');
 
-    // Optional multilingual AI narration
-    let narration = null;
-    if (narrationText && voiceLang && voiceLang !== 'none') {
-      onStatus?.('Generating AI voice narration…');
-      onProgress?.(15);
-      try {
-        narration = await synthesizeNarrationBuffer(narrationText, voiceLang, voiceGender);
-      } catch (ttsErr) {
-        console.warn('TTS fallback notice:', ttsErr.message);
-      }
-    }
-    const finalDur = narration ? Math.max(targetSec, Math.ceil(narration.buffer.duration)) : targetSec;
-    const cues = narrationText ? VoiceCutStudio.cuesFromScript(narrationText, narration ? narration.buffer.duration : finalDur) : [];
-
-    // Cloud Motion Video mode (Pollinations Wan/Seedance, fal.ai, Replicate)
-    if (mode === 'cloud') {
-      onStatus?.('Generating cloud AI motion video… This can take 30 to 90 seconds.');
-      onProgress?.(30);
-      let imageDataUrl = null;
-      if (startImageFile) imageDataUrl = await fileToDataUrl(startImageFile);
-      else if (startImageEl) {
-        const c = document.createElement('canvas');
-        c.width = startImageEl.naturalWidth || startImageEl.width || 1280;
-        c.height = startImageEl.naturalHeight || startImageEl.height || 720;
-        c.getContext('2d').drawImage(startImageEl, 0, 0, c.width, c.height);
-        imageDataUrl = c.toDataURL('image/jpeg', 0.88);
-      }
-      const vidBlob = await requestServerJson('/api/generate-video', {
-        prompt: cleanPrompt, aspectRatio, duration: targetSec, imageDataUrl,
-      }, { timeoutMs: 240000, uploadConsent: Boolean(imageDataUrl) });
-      onProgress?.(100);
-      return { videoBlob: vidBlob, narration, cues };
+    let imageDataUrl = null;
+    if (startImageFile) imageDataUrl = await fileToDataUrl(startImageFile);
+    else if (startImageEl) {
+      const c = document.createElement('canvas');
+      c.width = startImageEl.naturalWidth || startImageEl.width || 1280;
+      c.height = startImageEl.naturalHeight || startImageEl.height || 720;
+      c.getContext('2d').drawImage(startImageEl, 0, 0, c.width, c.height);
+      imageDataUrl = c.toDataURL('image/jpeg', 0.88);
     }
 
-    // Instant AI Storyboard Video mode (works free up to 15s+ with multi-keyframe scenes + camera motion + voice + captions)
-    const images = [];
-    if (startImageFile) images.push(await loadImageElementFromBlob(startImageFile));
-    else if (startImageEl) images.push(startImageEl);
+    const audioDesc = [
+      includeSceneAudio ? 'synchronized scene SFX' : '',
+      includeMusic ? 'AI music' : '',
+      hasNarration ? 'multilingual voice' : '',
+    ].filter(Boolean);
+    onStatus?.(audioDesc.length
+      ? `Generating AI video + ${audioDesc.join(' + ')}… This can take 45 to 120 seconds.`
+      : 'Generating AI motion video… This can take 30 to 90 seconds.');
+    onProgress?.(25);
 
-    const neededScenes = Math.max(1, Math.min(3, Math.ceil(finalDur / 5)) - images.length);
-    for (let i = 0; i < neededScenes; i++) {
-      onStatus?.(`Generating AI scene artwork ${i + 1} of ${neededScenes}…`);
-      onProgress?.(20 + Math.round(((i + 0.5) / neededScenes) * 40));
-      const variation = neededScenes > 1 ? `${cleanPrompt}, cinematic shot ${i + 1}` : cleanPrompt;
-      images.push(await fetchAiImageElement(variation, aspectRatio, 'general'));
-    }
-
-    onStatus?.('Rendering smooth motion video…');
-    const videoBlob = await VoiceCutStudio.renderStoryboardVideo({
+    const vidBlob = await requestServerJson('/api/generate-video', {
+      model: model || 'auto',
+      prompt: cleanPrompt,
       aspectRatio,
-      durationSec: finalDur,
-      images,
-      audioBuffer: narration ? narration.buffer : null,
-      cues: [], // Keep captions editable in VoiceCut Editor rather than double-burning!
-      motion: 'auto',
-      onProgress: (p) => onProgress?.(60 + Math.round(p * 0.4)),
-    });
-    return { videoBlob, narration, cues, embeddedNarration: Boolean(narration) };
+      duration: targetSec,
+      imageDataUrl,
+      includeSceneAudio: Boolean(includeSceneAudio),
+      sfxModel: sfxModel || 'auto',
+      sfxPrompt: String(sfxPrompt || '').trim(),
+      includeMusic: Boolean(includeMusic),
+      musicModel: musicModel || 'auto',
+      musicPrompt: String(musicPrompt || '').trim(),
+      voiceLanguage: hasNarration ? voiceLang : 'none',
+      voiceGender: voiceGender || 'female',
+      ttsModel: ttsModel || 'auto',
+      narrationText: hasNarration ? String(narrationText).trim() : '',
+    }, { timeoutMs: 360000, uploadConsent: Boolean(imageDataUrl) });
+
+    onProgress?.(92);
+    let actualDur = targetSec;
+    try {
+      const decoded = await decodeAudioFile(vidBlob);
+      if (decoded?.duration > 0.5) actualDur = decoded.duration;
+    } catch {}
+    const cues = hasNarration ? VoiceCutStudio.cuesFromScript(narrationText, actualDur) : [];
+    onProgress?.(100);
+    return { videoBlob: vidBlob, narration: null, cues, embeddedNarration: hasNarration };
   }
 
   async function runGenerateVideoFlow() {
@@ -4247,20 +4292,29 @@
     const prog = $('#genVideoProgress');
     try {
       prog.style.display = 'block'; prog.value = 5;
-      const mode = $('#genVideoMode')?.value || 'storyboard';
+      const model = $('#genVideoModel')?.value || 'auto';
       const aspectRatio = $('#genVideoAspect')?.value || '16:9';
       const durationSec = Number($('#genVideoDuration')?.value || 8);
       const prompt = $('#genVideoPrompt')?.value || '';
       const startImageFile = $('#genVideoStartImage')?.files?.[0] || null;
+      const includeSceneAudio = Boolean($('#genVideoSceneAudio')?.checked);
+      const sfxModel = $('#genVideoSfxModel')?.value || 'auto';
+      const sfxPrompt = ($('#genVideoSfxPrompt')?.value || '').trim();
+      const includeMusic = Boolean($('#genVideoMusic')?.checked);
+      const musicModel = $('#genVideoMusicModel')?.value || 'auto';
+      const musicPrompt = ($('#genVideoMusicPrompt')?.value || '').trim();
       const voiceLang = $('#genVideoVoiceLang')?.value || 'none';
       const voiceGender = $('#genVideoVoiceGender')?.value || 'female';
+      const ttsModel = $('#genVideoTtsModel')?.value || 'auto';
       const narrationText = ($('#genVideoNarration')?.value || '').trim();
       const consent = Boolean($('#genVideoConsent')?.checked);
 
-      announce('Generating AI video. Please wait.');
+      announce('Generating AI video with synchronized audio. Please wait.');
       const res = await buildGeneratedClip({
-        mode, prompt, aspectRatio, durationSec, startImageFile,
-        voiceLang, voiceGender, narrationText, consent,
+        model, prompt, aspectRatio, durationSec, startImageFile,
+        includeSceneAudio, sfxModel, sfxPrompt,
+        includeMusic, musicModel, musicPrompt,
+        voiceLang, voiceGender, ttsModel, narrationText, consent,
         onStatus: (t) => { statusEl.textContent = t; },
         onProgress: (p) => { prog.value = p; },
       });
@@ -4274,15 +4328,11 @@
           project.captionSettings.burnIn = true;
           project.captionSettings.preview = true;
         }
-        if (res.narration && !res.embeddedNarration) {
-          const voFile = new File([res.narration.blob], 'ai-narration.mp3', { type: 'audio/mpeg' });
-          addAudioFile(voFile, 'voiceover', 0);
-        }
-        announce('AI video opened in the editor. Captions are aligned on word boundaries. Noise reduction stays off unless you turn it on.');
+        announce('AI video opened in the editor with synchronized sound. Captions are aligned on word boundaries. Noise reduction stays off unless you turn it on.');
       });
     } catch (e) {
       const m = e.message === 'SERVICE_UNAVAILABLE'
-        ? 'Could not reach the AI server. Switch to Instant AI Storyboard Video mode or check your connection.'
+        ? 'Could not reach the AI service right now. Check your connection and try again in a moment.'
         : 'Video generation stopped: ' + e.message;
       statusEl.textContent = m; announce(m, true);
     } finally { prog.style.display = 'none'; }
@@ -4315,10 +4365,12 @@
     try {
       const w = video.videoWidth || 1280, h = video.videoHeight || 720;
       const aspectRatio = Math.abs(w - h) < 80 ? '1:1' : h > w ? '9:16' : '16:9';
-      const mode = $('#extendVideoMode')?.value || 'storyboard';
+      const model = $('#extendVideoModel')?.value || 'auto';
       const durationSec = Number($('#extendVideoDuration')?.value || 8);
       const voiceLang = $('#extendVoiceLang')?.value || 'none';
       const narrationText = ($('#extendNarration')?.value || '').trim();
+      const includeSceneAudio = Boolean($('#extendSceneAudio')?.checked);
+      const includeMusic = Boolean($('#extendMusic')?.checked);
 
       statusEl.textContent = 'Capturing final frame of current clip…';
       announce('Extending video. Capturing last frame and generating continuation clip.');
@@ -4327,7 +4379,8 @@
       const existingCaptions = Array.isArray(project.captions) ? project.captions.slice() : [];
 
       const nextClip = await buildGeneratedClip({
-        mode, prompt, aspectRatio, durationSec, startImageEl: lastFrameImg,
+        model, prompt, aspectRatio, durationSec, startImageEl: lastFrameImg,
+        includeSceneAudio, includeMusic,
         voiceLang, voiceGender: 'female', narrationText, consent: true,
         onStatus: (t) => { statusEl.textContent = t; },
       });
@@ -4392,13 +4445,14 @@
     const statusEl = $('#genImageStatus');
     const preset = $('#genImagePreset')?.value || 'thumbnail';
     const aspectRatio = $('#genImageAspect')?.value || '16:9';
+    const model = $('#genImageModel')?.value || 'auto';
     const prompt = ($('#genImagePrompt')?.value || '').trim();
     const title = ($('#genImageTitle')?.value || '').trim();
     if (!prompt) { const m = 'Describe the image, thumbnail, or logo you want first.'; statusEl.textContent = m; announce(m, true); return; }
     try {
       statusEl.textContent = 'Generating AI artwork…';
       announce('Generating image. Please wait.');
-      const img = await fetchAiImageElement(VoiceCutStudio.buildImagePrompt(prompt, preset, title), aspectRatio, preset);
+      const img = await fetchAiImageElement(VoiceCutStudio.buildImagePrompt(prompt, preset, title), aspectRatio, preset, model);
       const dims = VoiceCutStudio.dimensionsForAspect(aspectRatio);
       const canvas = $('#genImageCanvas');
       canvas.width = dims.width;
@@ -4423,14 +4477,16 @@
     const text = ($('#aiVoText')?.value || '').trim();
     const lang = $('#aiVoLanguage')?.value || 'en';
     const gender = $('#aiVoGender')?.value || 'female';
+    const model = $('#aiVoModel')?.value || 'auto';
     const addCaps = Boolean($('#aiVoAddCaptions')?.checked);
     if (!text) { const m = 'Type the script to speak first.'; statusEl.textContent = m; announce(m, true); return; }
     try {
       statusEl.textContent = 'Generating AI voice-over…';
       announce('Generating AI voice-over.');
       const startAt = video?.currentTime || 0;
-      const res = await synthesizeNarrationBuffer(text, lang, gender);
-      const voFile = new File([res.blob], `ai-voiceover-${lang}.mp3`, { type: 'audio/mpeg' });
+      const res = await synthesizeNarrationBuffer(text, lang, gender, model);
+      const ext = (res.blob.type || '').includes('wav') ? 'wav' : 'mp3';
+      const voFile = new File([res.blob], `ai-voiceover-${lang}.${ext}`, { type: res.blob.type || 'audio/mpeg' });
       await addAudioFile(voFile, 'voiceover', startAt);
       if (addCaps) {
         const rawCues = VoiceCutStudio.cuesFromScript(text, res.buffer.duration).map(c => ({
@@ -4450,6 +4506,58 @@
       const m = e.message === 'SERVICE_UNAVAILABLE'
         ? 'Could not reach the voice service. Check your connection and try again.'
         : 'Could not generate AI voice-over: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    }
+  }
+
+  async function runAiMusicInEditor() {
+    const statusEl = $('#aiMusicStatus');
+    const prompt = ($('#aiMusicPrompt')?.value || '').trim();
+    const model = $('#aiMusicModel')?.value || 'auto';
+    const duration = Number($('#aiMusicDuration')?.value || 15);
+    if (!prompt) { const m = 'Describe the music style or mood first.'; statusEl.textContent = m; announce(m, true); return; }
+    try {
+      statusEl.textContent = 'Generating AI music track… This can take 20 to 60 seconds.';
+      announce('Generating AI music track.');
+      const startAt = video?.currentTime || 0;
+      const blob = await requestServerJson('/api/generate-music', { prompt, duration, model }, { timeoutMs: 180000 });
+      if (!(blob instanceof Blob) || blob.size < 100) throw new Error('Could not generate music.');
+      const ext = (blob.type || '').includes('mpeg') ? 'mp3' : 'wav';
+      const musFile = new File([blob], `ai-music-${Date.now()}.${ext}`, { type: blob.type || 'audio/wav' });
+      await addAudioFile(musFile, 'music', startAt);
+      renderAll();
+      statusEl.textContent = 'AI music track added to timeline.';
+      announce('AI music track generated and added to timeline.');
+    } catch (e) {
+      const m = e.message === 'SERVICE_UNAVAILABLE'
+        ? 'Could not reach the music service right now. Try again in a moment.'
+        : 'Could not generate AI music: ' + e.message;
+      statusEl.textContent = m; announce(m, true);
+    }
+  }
+
+  async function runAiSfxInEditor() {
+    const statusEl = $('#aiSfxStatus');
+    const prompt = ($('#aiSfxPrompt')?.value || '').trim();
+    const model = $('#aiSfxModel')?.value || 'auto';
+    const duration = Number($('#aiSfxDuration')?.value || 8);
+    if (!prompt) { const m = 'Describe the sound effect first.'; statusEl.textContent = m; announce(m, true); return; }
+    try {
+      statusEl.textContent = 'Generating AI sound effect…';
+      announce('Generating AI sound effect.');
+      const startAt = video?.currentTime || 0;
+      const blob = await requestServerJson('/api/generate-sfx', { prompt, duration, model }, { timeoutMs: 180000 });
+      if (!(blob instanceof Blob) || blob.size < 100) throw new Error('Could not generate sound effect.');
+      const ext = (blob.type || '').includes('flac') ? 'flac' : (blob.type || '').includes('mpeg') ? 'mp3' : 'wav';
+      const sfxFile = new File([blob], `ai-sfx-${Date.now()}.${ext}`, { type: blob.type || 'audio/wav' });
+      await addAudioFile(sfxFile, 'sfx', startAt);
+      renderAll();
+      statusEl.textContent = 'AI sound effect added to timeline over your music.';
+      announce('AI sound effect generated and added at current position.');
+    } catch (e) {
+      const m = e.message === 'SERVICE_UNAVAILABLE'
+        ? 'Could not reach the sound effect service right now. Try again in a moment.'
+        : 'Could not generate AI sound effect: ' + e.message;
       statusEl.textContent = m; announce(m, true);
     }
   }
@@ -4600,12 +4708,12 @@
       announce('Image loaded into Generate Video. Choose duration and voice narration, then press Generate Video.');
     });
 
-    // Editor Extend Video, Merge Another Clip, Extract Audio & AI Voice-over
+    // Editor Extend Video, Merge Another Clip, Extract Audio, AI Voice-over, AI Music & AI SFX
     $('#btnExtendVideo')?.addEventListener('click', ()=>{
       const box=$('#extendVideoBox');
       if (!box) return;
       box.classList.toggle('hidden');
-      if (!box.classList.contains('hidden')) $('#extendVideoHeading')?.focus();
+      if (!box.classList.contains('hidden')) { syncStudioModelLists(); $('#extendVideoHeading')?.focus(); }
     });
     $('#btnCancelExtendVideo')?.addEventListener('click', ()=>$('#extendVideoBox')?.classList.add('hidden'));
     $('#btnRunExtendVideo')?.addEventListener('click', runExtendVideoFlow);
@@ -4625,10 +4733,26 @@
       const box=$('#aiVoiceoverBox');
       if (!box) return;
       box.classList.toggle('hidden');
-      if (!box.classList.contains('hidden')) $('#aiVoHeading')?.focus();
+      if (!box.classList.contains('hidden')) { syncStudioModelLists(); $('#aiVoHeading')?.focus(); }
     });
     $('#btnCancelAiVoiceover')?.addEventListener('click', ()=>$('#aiVoiceoverBox')?.classList.add('hidden'));
     $('#btnRunAiVoiceover')?.addEventListener('click', runAiVoiceoverInEditor);
+    $('#btnOpenAiMusic')?.addEventListener('click', ()=>{
+      const box=$('#aiMusicBox');
+      if (!box) return;
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) { syncStudioModelLists(); $('#aiMusicHeading')?.focus(); }
+    });
+    $('#btnCancelAiMusic')?.addEventListener('click', ()=>$('#aiMusicBox')?.classList.add('hidden'));
+    $('#btnRunAiMusic')?.addEventListener('click', runAiMusicInEditor);
+    $('#btnOpenAiSfx')?.addEventListener('click', ()=>{
+      const box=$('#aiSfxBox');
+      if (!box) return;
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) { syncStudioModelLists(); $('#aiSfxHeading')?.focus(); }
+    });
+    $('#btnCancelAiSfx')?.addEventListener('click', ()=>$('#aiSfxBox')?.classList.add('hidden'));
+    $('#btnRunAiSfx')?.addEventListener('click', runAiSfxInEditor);
 
     $('#homeOpenProject').addEventListener('click', ()=>openProjectById(null));
     $('#homeLibrary').addEventListener('click', ()=>{ location.hash='#/library'; });

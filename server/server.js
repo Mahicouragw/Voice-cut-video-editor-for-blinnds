@@ -25,7 +25,7 @@ function createApp(options={}) {
   const publicMode=options.public??process.env.PUBLIC_MODE==='true';
   const key=options.key||process.env.SERVER_ACCESS_KEY;
   if(!publicMode&&(!key||key.length<32)) throw new Error('Set SERVER_ACCESS_KEY to a random secret of at least 32 characters, or explicitly set PUBLIC_MODE=true with quotas.');
-  const perIpHour=Number(process.env.MAX_AI_PER_IP_PER_HOUR||5),perIpDay=Number(process.env.MAX_AI_PER_IP_PER_DAY||20);
+  const perIpHour=Number(process.env.MAX_AI_PER_IP_PER_HOUR||12),perIpDay=Number(process.env.MAX_AI_PER_IP_PER_DAY||60);
   if(!Number.isInteger(perIpHour)||perIpHour<1||perIpHour>100||!Number.isInteger(perIpDay)||perIpDay<1||perIpDay>500) throw new Error('Per-IP quotas must be within 1-100/hour and 1-500/day.');
   const origin=options.origin||process.env.ALLOWED_ORIGIN;
   if(!origin||new URL(origin).origin!==origin||!origin.startsWith('https://')) throw new Error('ALLOWED_ORIGIN must be an exact HTTPS origin.');
@@ -46,7 +46,7 @@ function createApp(options={}) {
   });
   const root=options.root||path.join(os.tmpdir(),'voicecut-temporary');
   const lifetime=Math.min(TTL,options.ttlMs||TTL); // Shorter deadline only used by tests.
-  const jobsPerHour=Number(process.env.MAX_AI_REQUESTS_PER_HOUR||20);
+  const jobsPerHour=Number(process.env.MAX_AI_REQUESTS_PER_HOUR||60);
   if(!Number.isInteger(jobsPerHour)||jobsPerHour<1||jobsPerHour>100) throw new Error('MAX_AI_REQUESTS_PER_HOUR must be between 1 and 100.');
   fs.mkdirSync(root,{recursive:true,mode:0o700});
   for(const name of fs.readdirSync(root)) fs.rmSync(path.join(root,name),{recursive:true,force:true});
@@ -72,7 +72,7 @@ function createApp(options={}) {
     next();
   };
   app.get('/health',(_,res)=>res.json({status:'ok',version:VERSION,temporaryFileTTLSeconds:900}));
-  app.get('/capabilities',authorized,(_,res)=>{const keys=providers.configured.captionProviders||{openai:providers.configured.captions};res.json({publicMode,captions:providers.configured.captions,isolation:providers.configured.isolation,autoProvider:CAPTION_ORDER.find(id=>keys[id])||null,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},imageGen:providers.configured.imageGen??true,videoGen:!!providers.configured.videoGen,tts:providers.configured.tts??true,imageProviders:providers.configured.imageProviders||{freeFallback:true},videoProviders:providers.configured.videoProviders||{},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900});});
+  app.get('/capabilities',authorized,(_,res)=>{const keys=providers.configured.captionProviders||{openai:providers.configured.captions};res.json({publicMode,captions:providers.configured.captions,isolation:providers.configured.isolation,autoProvider:CAPTION_ORDER.find(id=>keys[id])||null,captionProviders:providers.configured.captionProviders||{openai:providers.configured.captions},imageGen:providers.configured.imageGen??true,videoGen:!!providers.configured.videoGen,tts:providers.configured.tts??true,musicGen:providers.configured.musicGen??true,sfxGen:providers.configured.sfxGen??true,imageProviders:providers.configured.imageProviders||{freeFallback:true},videoProviders:providers.configured.videoProviders||{},ttsProviders:providers.configured.ttsProviders||{edgeNeural:true},soundProviders:providers.configured.soundProviders||{},models:providers.configured.models||{},deepFilterNet:deepFilterAvailable(),providerKeys:'Configuration only; not validated with providers',maxUploadMB:100,maxDurationSeconds:600,temporaryFileTTLSeconds:900});});
   const storage=multer.diskStorage({destination:(req,_,cb)=>cb(null,req.workdir),filename:(_,__,cb)=>cb(null,'input')});
   const upload=multer({storage,limits:{fileSize:100*1024*1024,files:1,fields:0,parts:1}}).single('file');
   const job=(kind)=>async(req,res)=>{
@@ -284,7 +284,7 @@ function createApp(options={}) {
       cleanup();
     }
   };
-  const jsonParser=express.json({limit:'8mb'});
+  const jsonParser=express.json({limit:'12mb'});
   const jsonJob=(kind)=>async(req,res)=>{
     if(active) return res.status(429).json({code:'BUSY',error:'Another job is running. Wait before trying again.'});
     if(publicMode) {
@@ -298,11 +298,23 @@ function createApp(options={}) {
     if(attempts.length>=jobsPerHour) return res.status(429).json({code:'HOURLY_LIMIT',error:'The server hourly AI request limit was reached. Wait before retrying.'});
     attempts.push(Date.now());
     active=true;
+    const workdir=fs.mkdtempSync(path.join(root,'json-job-'));
     const controller=new AbortController(),signal=controller.signal;
+    const children=new Set();
     let closed=false,deadline;
     const cleanup=()=>{
-      if(closed)return;closed=true;clearTimeout(deadline);controller.abort();active=false;
+      if(closed)return;closed=true;clearTimeout(deadline);controller.abort();
+      children.forEach(child=>child.kill('SIGKILL'));
+      fs.rmSync(workdir,{recursive:true,force:true});
+      active=false;
     };
+    const runBin=(binary,args)=>new Promise((resolve,reject)=>{
+      if(signal.aborted)return reject(new ServiceError(408,'EXPIRED','Request expired.'));
+      const child=spawn(binary,args,{stdio:['ignore','pipe','ignore']});children.add(child);let out='';
+      child.stdout.on('data',d=>{out+=d;if(out.length>2*1024*1024)child.kill('SIGKILL');});
+      child.on('error',()=>reject(new ServiceError(503,'PROCESSOR_UNAVAILABLE','FFmpeg or FFprobe is unavailable on the server.')));
+      child.on('close',code=>{children.delete(child);code===0?resolve(out):reject(new ServiceError(502,'MUX_FAILED','Audio-visual mastering failed on the server.'));});
+    });
     deadline=setTimeout(()=>{
       if(!res.headersSent) res.status(408).json({code:'EXPIRED',error:'The processing deadline expired. No automatic paid retry was made.'});
       else res.destroy();
@@ -318,6 +330,7 @@ function createApp(options={}) {
           aspectRatio:body.aspectRatio,
           preset:body.preset,
           seed:body.seed,
+          model:body.model||'auto',
         },signal);
         signal.throwIfAborted();
         res.set('Content-Type',result.mime||'image/jpeg');
@@ -328,15 +341,181 @@ function createApp(options={}) {
       if(kind==='genVideo') {
         if(body.imageDataUrl&&req.headers['x-upload-consent']!=='yes') throw new ServiceError(400,'CONSENT_REQUIRED','Explicit cloud-processing consent is required when uploading an image.');
         if(!providers.generateVideo) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Video generation is not available on this server.');
+        const targetSec=Math.max(2,Math.min(15,Math.round(Number(body.duration)||8)));
         const result=await providers.generateVideo({
           prompt:body.prompt,
           aspectRatio:body.aspectRatio,
-          duration:body.duration,
+          duration:targetSec,
           imageDataUrl:body.imageDataUrl||null,
+          model:body.model||'auto',
         },signal);
         signal.throwIfAborted();
-        res.set('Content-Type',result.mime||'video/mp4');
-        res.set('X-Processing-Method',result.provider||'AI-Video');
+
+        const wantSceneAudio=Boolean(body.includeSceneAudio);
+        const wantMusic=Boolean(body.includeMusic);
+        const wantNarration=Boolean(body.narrationText&&String(body.narrationText).trim()&&body.voiceLanguage&&body.voiceLanguage!=='none');
+        if(!wantSceneAudio&&!wantMusic&&!wantNarration) {
+          res.set('Content-Type',result.mime||'video/mp4');
+          res.set('X-Processing-Method',result.provider||'AI-Video');
+          res.send(result.bytes);
+          cleanup();return;
+        }
+
+        // Google Flow–style Audio-Visual Mastering:
+        // Generate synchronized scene Foley/SFX + background music + multilingual dialogue/voice and master into a single H.264/AAC MP4.
+        const ff=process.env.FFMPEG_PATH||'ffmpeg';
+        const fp=process.env.FFPROBE_PATH||'ffprobe';
+        const rawVidPath=path.join(workdir,'raw.mp4');
+        fs.writeFileSync(rawVidPath,result.bytes);
+        let clipDur=Number((await runBin(fp,['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',rawVidPath]).catch(()=>''))||0);
+        if(!Number.isFinite(clipDur)||clipDur<=0.2) clipDur=targetSec;
+
+        const methods=[result.provider||'AI-Video'];
+        const audioStems=[];
+
+        // 1) Synchronized Scene Sound Effects (MMAudio / HunyuanVideo-Foley / Stable Audio Open)
+        if(wantSceneAudio&&providers.generateVideoFoley) {
+          try {
+            const sfxRes=await providers.generateVideoFoley({
+              videoBytes:result.bytes,
+              prompt:String(body.sfxPrompt||body.prompt||'realistic ambient scene sound effects').slice(0,500),
+              duration:clipDur,
+              model:body.sfxModel||'auto',
+            },signal);
+            signal.throwIfAborted();
+            if(sfxRes?.bytes?.length>100) {
+              const sfxRaw=path.join(workdir,sfxRes.kind==='video-with-audio'?'foley-vid.mp4':'foley-raw.audio');
+              const sfxWav=path.join(workdir,'sfx.wav');
+              fs.writeFileSync(sfxRaw,sfxRes.bytes);
+              await runBin(ff,['-nostdin','-v','error','-i',sfxRaw,'-vn','-ac','2','-ar','48000','-t',clipDur.toFixed(3),'-y',sfxWav]);
+              audioStems.push({path:sfxWav,gain:wantNarration?0.55:0.85});
+              methods.push(sfxRes.provider||'Scene-SFX');
+            }
+          } catch(sfxErr) {
+            if(signal.aborted) throw sfxErr;
+          }
+        }
+
+        // 2) Background Music Bed (Stable Audio Open / ACE-Step / MusicGen)
+        if(wantMusic&&providers.generateMusic) {
+          try {
+            const musRes=await providers.generateMusic({
+              prompt:String(body.musicPrompt||`cinematic soundtrack matching scene: ${body.prompt}`).slice(0,500),
+              duration:Math.ceil(clipDur)+2,
+              model:body.musicModel||'auto',
+            },signal);
+            signal.throwIfAborted();
+            if(musRes?.bytes?.length>100) {
+              const musRaw=path.join(workdir,'music-raw.audio');
+              const musWav=path.join(workdir,'music.wav');
+              fs.writeFileSync(musRaw,musRes.bytes);
+              await runBin(ff,['-nostdin','-v','error','-i',musRaw,'-vn','-ac','2','-ar','48000','-t',clipDur.toFixed(3),'-y',musWav]);
+              audioStems.push({path:musWav,gain:wantNarration?0.26:0.48});
+              methods.push(musRes.provider||'AI-Music');
+            }
+          } catch(musErr) {
+            if(signal.aborted) throw musErr;
+          }
+        }
+
+        // 3) Multilingual Neural Voice / Dialogue
+        let finalDur=clipDur;
+        if(wantNarration&&providers.synthesizeSpeech) {
+          try {
+            const ttsRes=await providers.synthesizeSpeech({
+              text:String(body.narrationText).trim(),
+              language:body.voiceLanguage||'en',
+              gender:body.voiceGender||'female',
+              model:body.ttsModel||'auto',
+            },signal);
+            signal.throwIfAborted();
+            if(ttsRes?.bytes?.length>100) {
+              const voRaw=path.join(workdir,'vo.mp3');
+              const voWav=path.join(workdir,'vo.wav');
+              fs.writeFileSync(voRaw,ttsRes.bytes);
+              await runBin(ff,['-nostdin','-v','error','-i',voRaw,'-vn','-ac','2','-ar','48000','-y',voWav]);
+              const voDur=Number((await runBin(fp,['-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',voWav]).catch(()=>''))||0);
+              if(Number.isFinite(voDur)&&voDur>finalDur) finalDur=Math.min(20,voDur+0.15);
+              audioStems.push({path:voWav,gain:1.0});
+              methods.push(ttsRes.provider||'Neural-TTS');
+            }
+          } catch(voErr) {
+            if(signal.aborted) throw voErr;
+          }
+        }
+
+        if(!audioStems.length) {
+          res.set('Content-Type',result.mime||'video/mp4');
+          res.set('X-Processing-Method',methods.join(' + '));
+          res.send(result.bytes);
+          cleanup();return;
+        }
+
+        const masteredPath=path.join(workdir,'mastered.mp4');
+        const ffArgs=['-nostdin','-v','error','-threads','2','-stream_loop','-1','-i',rawVidPath];
+        audioStems.forEach(s=>ffArgs.push('-i',s.path));
+        const filterParts=audioStems.map((s,idx)=>`[${idx+1}:a]volume=${s.gain.toFixed(2)},apad,atrim=duration=${finalDur.toFixed(3)},asetpts=PTS-STARTPTS[a${idx}]`);
+        const mixInputs=audioStems.map((_,idx)=>`[a${idx}]`).join('');
+        const fadeOutStart=Math.max(0,finalDur-0.25).toFixed(3);
+        const filterGraph=`${filterParts.join(';')};${mixInputs}amix=inputs=${audioStems.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95,afade=t=in:st=0:d=0.04,afade=t=out:st=${fadeOutStart}:d=0.22[aout]`;
+        ffArgs.push(
+          '-filter_complex',filterGraph,
+          '-map','0:v:0','-map','[aout]',
+          '-t',finalDur.toFixed(3),
+          '-c:v','libx264','-preset','ultrafast','-crf','22','-pix_fmt','yuv420p',
+          '-c:a','aac','-b:a','160k','-movflags','+faststart',
+          '-y',masteredPath
+        );
+        await runBin(ff,ffArgs);
+        signal.throwIfAborted();
+        const masteredBytes=fs.readFileSync(masteredPath);
+        res.set('Content-Type','video/mp4');
+        res.set('X-Processing-Method',methods.join(' + '));
+        res.send(masteredBytes);
+        cleanup();return;
+      }
+      if(kind==='genMusic') {
+        if(!providers.generateMusic) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Music generation is not available on this server.');
+        const result=await providers.generateMusic({
+          prompt:body.prompt,
+          duration:body.duration,
+          lyrics:body.lyrics||'',
+          model:body.model||'auto',
+        },signal);
+        signal.throwIfAborted();
+        res.set('Content-Type',result.mime||'audio/wav');
+        res.set('X-Processing-Method',result.provider||'AI-Music');
+        res.send(result.bytes);
+        cleanup();return;
+      }
+      if(kind==='genSfx') {
+        if(!providers.generateVideoFoley) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Sound effect generation is not available on this server.');
+        let videoBytes=null;
+        if(body.videoDataUrl&&String(body.videoDataUrl).startsWith('data:')) {
+          if(req.headers['x-upload-consent']!=='yes') throw new ServiceError(400,'CONSENT_REQUIRED','Explicit cloud-processing consent is required when uploading video.');
+          videoBytes=Buffer.from(String(body.videoDataUrl).split(',')[1]||'','base64');
+        }
+        const result=await providers.generateVideoFoley({
+          videoBytes,
+          prompt:body.prompt,
+          duration:body.duration,
+          model:body.model||'auto',
+        },signal);
+        signal.throwIfAborted();
+        if(result.kind==='video-with-audio') {
+          const ff=process.env.FFMPEG_PATH||'ffmpeg';
+          const vIn=path.join(workdir,'foley.mp4');
+          const aOut=path.join(workdir,'foley.wav');
+          fs.writeFileSync(vIn,result.bytes);
+          await runBin(ff,['-nostdin','-v','error','-i',vIn,'-vn','-ac','2','-ar','48000','-y',aOut]);
+          const wavBytes=fs.readFileSync(aOut);
+          res.set('Content-Type','audio/wav');
+          res.set('X-Processing-Method',result.provider||'AI-SFX');
+          res.send(wavBytes);
+          cleanup();return;
+        }
+        res.set('Content-Type',result.mime||'audio/wav');
+        res.set('X-Processing-Method',result.provider||'AI-SFX');
         res.send(result.bytes);
         cleanup();return;
       }
@@ -346,6 +525,7 @@ function createApp(options={}) {
           text:body.text,
           language:body.language,
           gender:body.gender,
+          model:body.model||'auto',
         },signal);
         signal.throwIfAborted();
         res.set('Content-Type',result.mime||'audio/mpeg');
@@ -367,6 +547,8 @@ function createApp(options={}) {
   app.post('/api/reverse',authorized,job('reverse'));
   app.post('/api/generate-image',authorized,jsonParser,jsonJob('genImage'));
   app.post('/api/generate-video',authorized,jsonParser,jsonJob('genVideo'));
+  app.post('/api/generate-music',authorized,jsonParser,jsonJob('genMusic'));
+  app.post('/api/generate-sfx',authorized,jsonParser,jsonJob('genSfx'));
   app.post('/api/tts',authorized,jsonParser,jsonJob('tts'));
   return app;
 }

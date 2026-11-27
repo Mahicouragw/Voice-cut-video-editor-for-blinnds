@@ -155,9 +155,9 @@
     ctx.restore();
   }
 
-  // Render an on-device MP4 (via WebCodecs + VoiceCutMuxer) or WebM fallback from
-  // one or more images (or gradient backdrop), optional AudioBuffer, and optional captions.
-  async function renderStoryboardVideo(options) {
+  // Render an on-device MP4 (via WebCodecs + VoiceCutMuxer) or WebM fallback for Audio-to-Video
+  // (converts an audio file + optional cover art + audio waveform into an editable MP4).
+  async function renderAudioVisualizerVideo(options) {
     const {
       aspectRatio = '16:9',
       durationSec = 6,
@@ -353,7 +353,7 @@
     buildImagePrompt,
     cuesFromScript,
     drawStudioFrame,
-    renderStoryboardVideo,
+    renderAudioVisualizerVideo,
   };
   root.VoiceCutStudio = api;
   if (typeof module !== 'undefined') module.exports = api;
