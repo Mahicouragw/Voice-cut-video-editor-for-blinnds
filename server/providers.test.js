@@ -132,16 +132,17 @@ test('multilingual Edge Neural TTS selects Telugu/Hindi/English voices without A
  assert.equal(res.provider,'Edge Neural TTS');
  assert.equal(res.bytes.length,300);
 });
-test('free Hugging Face ZeroGPU Spaces fallback works for Text-to-Video and Image-to-Video with no paid keys',async()=>{
+test('free Hugging Face ZeroGPU Spaces fallback works for Text-to-Video and Image-to-Video with verified LTX mode and no paid keys',async()=>{
  const fakeMp4=Buffer.from('00000018667479706d703432','hex');
- const connectedSpaces=[];
+ const connectedSpaces=[],predicted=[];
  const fakeGradio={
   handle_file:b=>b,
   Client:{
    async connect(space,opts){
     connectedSpaces.push({space,token:opts?.token||null});
     return {
-     async predict(fn){
+     async predict(fn,args){
+      predicted.push({space,fn,args});
       return {data:[{video:{url:'https://hf.space/file/out.mp4'},fn}]};
      }
     };
@@ -156,6 +157,66 @@ test('free Hugging Face ZeroGPU Spaces fallback works for Text-to-Video and Imag
  const t2v=await p.generateVideo({prompt:'Ocean waves at sunset',aspectRatio:'16:9',duration:8},new AbortController().signal);
  assert.match(t2v.provider,/HF ZeroGPU/);
  assert.equal(connectedSpaces[0].token,'hf_free_user_token');
+ assert.equal(predicted[0].fn,'/text_to_video');
+ assert.equal(predicted[0].args.mode,'text-to-video');
+ assert.ok(predicted[0].args.duration_ui<=7);
  const i2v=await p.generateVideo({prompt:'Clouds drifting',aspectRatio:'9:16',duration:8,imageDataUrl:'data:image/png;base64,AAAA'},new AbortController().signal);
  assert.match(i2v.provider,/HF ZeroGPU/);
+ assert.equal(predicted[1].fn,'/image_to_video');
+ assert.equal(predicted[1].args.mode,'image-to-video');
+});
+
+test('multilingual TTS automatically falls back to keyless Google Translate TTS if Edge Neural fails, and honors explicit model picker',async()=>{
+ const mp3Chunk=Buffer.alloc(240,0x49);
+ const failingEdge={
+  OUTPUT_FORMAT:{AUDIO_24KHZ_96KBITRATE_MONO_MP3:'mp3'},
+  MsEdgeTTS:class{async setMetadata(){throw new Error('403 Forbidden');}}
+ };
+ const fakeGoogle={
+  getAllAudioUrls(text,opts){
+   assert.equal(opts.lang,'te');
+   return [{shortText:text,url:'https://translate.google.com/translate_tts?tl=te'}];
+  }
+ };
+ const p=createProviders({
+  edgeTtsImpl:failingEdge,
+  googleTtsImpl:fakeGoogle,
+  fetchImpl:async()=>new Response(mp3Chunk,{headers:{'content-type':'audio/mpeg'}}),
+ });
+ const autoRes=await p.synthesizeSpeech({text:'నమస్కారం మిత్రులారా',language:'te',gender:'female',model:'auto'},new AbortController().signal);
+ assert.equal(autoRes.provider,'Google Translate TTS');
+ assert.equal(autoRes.bytes.length,240);
+ const explicitRes=await p.synthesizeSpeech({text:'నమస్కారం మిత్రులారా',language:'te',gender:'male',model:'google-tts'},new AbortController().signal);
+ assert.equal(explicitRes.provider,'Google Translate TTS');
+});
+
+test('MMAudio scene Foley and Stable Audio / ACE-Step music adapters pass verified Space schemas',async()=>{
+ const fakeBytes=Buffer.alloc(512,0x22);
+ const calls=[];
+ const fakeGradio={
+  handle_file:b=>b,
+  Client:{
+   async connect(space){
+    return {
+     async predict(fn,args){
+      calls.push({space,fn,args});
+      return {data:[{url:'https://hf.space/file/audio-out.mp4'}]};
+     }
+    };
+   }
+  }
+ };
+ const p=createProviders({
+  hfToken:'hf_test',
+  gradioClientImpl:fakeGradio,
+  fetchImpl:async()=>new Response(fakeBytes,{headers:{'content-type':'audio/wav'}}),
+ });
+ const foley=await p.generateVideoFoley({videoBytes:Buffer.from('0000001866747970','hex'),prompt:'rain and thunder',duration:8,model:'mmaudio'},new AbortController().signal);
+ assert.equal(foley.provider,'MMAudio Video-to-Audio');
+ assert.equal(calls[0].space,'hkchengrex/MMAudio');
+ assert.equal(calls[0].fn,'/video_to_audio');
+ const mus=await p.generateMusic({prompt:'warm acoustic guitar',duration:15,model:'ace-step'},new AbortController().signal);
+ assert.equal(mus.provider,'ACE-Step 3.5B');
+ assert.equal(calls[1].space,'ACE-Step/ACE-Step');
+ assert.equal(calls[1].fn,'/__call__');
 });

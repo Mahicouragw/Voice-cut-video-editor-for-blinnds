@@ -88,3 +88,53 @@ test('unknown noise reduction level is rejected before processing',async()=>{
   assert.deepEqual(fs.readdirSync(t.root),[]);
  }finally{await t.close();}
 });
+test('Google Flow–style /api/generate-video masters AI video + synchronized scene Foley + AI music + multilingual voice into playable MP4',async()=>{
+ const vidPath=path.join(os.tmpdir(),'vc-flow-v-'+process.pid+'.mp4');
+ const wavPath=path.join(os.tmpdir(),'vc-flow-a-'+process.pid+'.wav');
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','testsrc=duration=2:size=320x180:rate=15','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-y',vidPath]);
+ execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=520:duration=2','-y',wavPath]);
+ const rawVid=fs.readFileSync(vidPath),rawWav=fs.readFileSync(wavPath);
+ const p={
+  configured:{captions:false,isolation:false,videoGen:true,tts:true,musicGen:true,sfxGen:true,models:{video:[{id:'auto',label:'Auto'}]}},
+  async generateVideo(opts){assert.equal(opts.model,'ltx-video');return {bytes:rawVid,mime:'video/mp4',provider:'LTX-Video'};},
+  async generateVideoFoley(){return {bytes:rawWav,mime:'audio/wav',kind:'audio',provider:'MMAudio'};},
+  async generateMusic(){return {bytes:rawWav,mime:'audio/wav',provider:'Stable-Audio'};},
+  async synthesizeSpeech(opts){assert.equal(opts.language,'te');return {bytes:rawWav,mime:'audio/wav',provider:'Edge-Neural-TTS'};},
+ };
+ const t=await setup(p);
+ try{
+  const res=await fetch(t.url+'/api/generate-video',{
+   method:'POST',
+   headers:{Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+   body:JSON.stringify({
+    model:'ltx-video',
+    prompt:'Sunrise over Hyderabad Charminar',
+    aspectRatio:'16:9',
+    duration:4,
+    includeSceneAudio:true,
+    includeMusic:true,
+    voiceLanguage:'te',
+    narrationText:'నమస్కారం మిత్రులారా',
+   }),
+  });
+  assert.equal(res.status,200);
+  const methodHdr=res.headers.get('x-processing-method')||'';
+  assert.match(methodHdr,/LTX-Video/);
+  assert.match(methodHdr,/MMAudio/);
+  assert.match(methodHdr,/Stable-Audio/);
+  assert.match(methodHdr,/Edge-Neural-TTS/);
+  const outMp4=Buffer.from(await res.arrayBuffer());
+  assert.equal(outMp4.subarray(4,8).toString(),'ftyp');
+  const checkFile=path.join(os.tmpdir(),'vc-flow-mastered-'+process.pid+'.mp4');
+  fs.writeFileSync(checkFile,outMp4);
+  const streams=JSON.parse(execFileSync('ffprobe',['-v','error','-show_streams','-of','json',checkFile]).toString());
+  assert.equal(streams.streams.some(s=>s.codec_type==='video'),true);
+  assert.equal(streams.streams.some(s=>s.codec_type==='audio'),true);
+  fs.rmSync(checkFile,{force:true});
+  assert.deepEqual(fs.readdirSync(t.root),[]);
+ }finally{
+  fs.rmSync(vidPath,{force:true});
+  fs.rmSync(wavPath,{force:true});
+  await t.close();
+ }
+});

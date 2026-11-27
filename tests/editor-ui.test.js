@@ -343,12 +343,15 @@ test('caption overlay CSS and renderer protect word boundaries and Indic scripts
   assert.match(cap,/function inspectCues/,'pre-export subtitle inspector exported');
 });
 
-test('home screen and editor offer Audio to Video, Video to Audio, Generate Video, Extend Video, and Image/Thumbnail/Logo Studio',()=>{
+test('home screen and editor offer Audio to Video, Video to Audio, Generate Video (with Model Pickers, Scene SFX & Music, no Instant Storyboard), Extend Video, and Image/Thumbnail/Logo Studio',()=>{
   const html = fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
   const studio = fs.readFileSync(path.join(__dirname,'../web/studio.js'),'utf8');
+  const app = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
   for (const id of [
     'homeAudioToVideo','homeVideoToAudio','homeGenerateVideo','homeGenerateImage',
     'audioToVideoPanel','videoToAudioPanel','generateVideoPanel','generateImagePanel',
+    'genVideoModel','genVideoSceneAudio','genVideoSfxModel','genVideoMusic','genVideoMusicModel','genVideoTtsModel',
+    'genImageModel','extendVideoModel','aiVoModel','btnOpenAiMusic','aiMusicModel','btnOpenAiSfx','aiSfxModel',
     'btnExtendVideo','btnAppendVideoFile','btnExtractVideoAudio','btnOpenAiVoiceover',
   ]) {
     assert.match(html, new RegExp(`id="${id}"`), 'missing UI element '+id);
@@ -359,8 +362,11 @@ test('home screen and editor offer Audio to Video, Video to Audio, Generate Vide
   for (const ar of ['16:9','9:16','1:1']) {
     assert.ok(html.includes(`value="${ar}"`), 'aspect ratio '+ar+' offered');
   }
+  // Instant Storyboard must be completely removed
+  assert.doesNotMatch(html, /Instant AI Storyboard/i, 'Instant Storyboard removed from HTML');
+  assert.doesNotMatch(app, /Storyboard/i, 'Storyboard removed from app.js');
   assert.match(html, /web\/studio\.js/, 'studio module loaded');
-  assert.match(studio, /function renderStoryboardVideo/, 'storyboard renderer exported');
+  assert.match(studio, /function renderAudioVisualizerVideo/, 'audio visualizer renderer exported');
   assert.match(studio, /function cuesFromScript/, 'script-to-caption aligner exported');
   // Noise reduction must NEVER run automatically on Audio-to-Video, Video-to-Audio, or loadVideoFile
   assert.doesNotMatch(html, /id="a2vCleanNoise"/, 'no automatic noise-reduction checkbox in Audio-to-Video');

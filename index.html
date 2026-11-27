@@ -152,16 +152,18 @@
       <p id="v2aStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
     </div>
 
-    <!-- GENERATE VIDEO PANEL (TEXT TO VIDEO & IMAGE TO VIDEO + MULTILINGUAL VOICE + EXTEND) -->
+    <!-- GENERATE VIDEO PANEL (TEXT TO VIDEO & IMAGE TO VIDEO + GOOGLE FLOW SCENE SOUND, MUSIC & MULTILINGUAL VOICE) -->
     <div class="card hidden" id="generateVideoPanel" role="region" aria-labelledby="genVideoHeading">
       <h2 id="genVideoHeading" tabindex="-1">Generate AI Video (Text to Video &amp; Image to Video)</h2>
-      <p style="color:var(--text2)">Describe your scene, choose aspect ratio and duration (up to 15 seconds per clip), and optionally add AI voice narration in any language. Your clip opens directly in the editor so you can extend it with more clips, merge, align captions, remove noise, add music, or record your own voice-over.</p>
+      <p style="color:var(--text2)">Describe your scene, pick an AI video model (or Auto Best Free), and include synchronized scene sound effects, AI background music, and multilingual voice narration — just like Google Flow. Your clip opens directly in the editor ready to extend, merge, align captions, or export.</p>
       <div class="grid grid-2">
         <div>
-          <label for="genVideoMode">Generation mode</label>
-          <select id="genVideoMode">
-            <option value="storyboard" selected>Instant AI Storyboard Video (Free, works up to 15s)</option>
-            <option value="cloud">Cloud AI Motion Video (Wan / Seedance / Kling)</option>
+          <label for="genVideoModel">AI video model</label>
+          <select id="genVideoModel">
+            <option value="auto" selected>Auto (Best Free AI Video)</option>
+            <option value="ltx-video">LTX-Video 0.9.8 13B Distilled (Text &amp; Image to Video)</option>
+            <option value="wan21-fast">Wan 2.1 CausVid 14B Fast (Image to Video)</option>
+            <option value="pollinations-wan">Pollinations Wan / Seedance</option>
           </select>
         </div>
         <div>
@@ -190,7 +192,48 @@
         <label for="genVideoPrompt">Visual scene prompt</label>
         <textarea id="genVideoPrompt" rows="3" placeholder="Example: Golden sunrise over Charminar in Hyderabad, warm cinematic camera movement, ultra-detailed"></textarea>
       </div>
-      <div class="grid grid-2 mt-16">
+      <div class="card mt-16" style="padding:12px; background:var(--surface2, rgba(124,92,255,0.06));">
+        <h3 style="margin-top:0; font-size:16px;">Native Scene Sound Effects &amp; Music (Google Flow Style)</h3>
+        <div class="grid grid-2">
+          <label style="display:flex; gap:10px; align-items:flex-start;">
+            <input type="checkbox" id="genVideoSceneAudio" checked>
+            <span>Generate synchronized scene sound effects (Foley / ambient audio)</span>
+          </label>
+          <div>
+            <label for="genVideoSfxModel">Scene SFX model</label>
+            <select id="genVideoSfxModel">
+              <option value="auto" selected>Auto (Best Free Synchronized Foley)</option>
+              <option value="mmaudio">MMAudio Video-to-Audio Synchronized Foley</option>
+              <option value="hunyuan-foley">HunyuanVideo-Foley Scene Audio</option>
+              <option value="stable-audio">Stable Audio Open 1.0 SFX</option>
+            </select>
+          </div>
+          <label style="display:flex; gap:10px; align-items:flex-start;">
+            <input type="checkbox" id="genVideoMusic" checked>
+            <span>Generate AI background music soundtrack</span>
+          </label>
+          <div>
+            <label for="genVideoMusicModel">AI music model</label>
+            <select id="genVideoMusicModel">
+              <option value="auto" selected>Auto (Best Free AI Music)</option>
+              <option value="stable-audio">Stable Audio Open 1.0 Instrumental</option>
+              <option value="ace-step">ACE-Step 3.5B Soundtrack</option>
+              <option value="musicgen">Meta MusicGen Instrumental</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-2 mt-8">
+          <div>
+            <label for="genVideoSfxPrompt">Optional scene sound prompt (leave blank to match video prompt)</label>
+            <input type="text" id="genVideoSfxPrompt" placeholder="Example: Gentle morning breeze, distant birds, footsteps">
+          </div>
+          <div>
+            <label for="genVideoMusicPrompt">Optional music mood prompt (leave blank for automatic score)</label>
+            <input type="text" id="genVideoMusicPrompt" placeholder="Example: Warm cinematic acoustic strings and soft piano">
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-3 mt-16">
         <div>
           <label for="genVideoVoiceLang">AI voice narration language</label>
           <select id="genVideoVoiceLang">
@@ -222,6 +265,15 @@
             <option value="male">Natural Male Voice</option>
           </select>
         </div>
+        <div>
+          <label for="genVideoTtsModel">Voice AI model</label>
+          <select id="genVideoTtsModel">
+            <option value="auto" selected>Auto (Best Multilingual Neural Voice)</option>
+            <option value="edge-neural">Edge Neural TTS v2 (20+ Languages)</option>
+            <option value="google-tts">Google Multilingual TTS (Keyless)</option>
+            <option value="qwen3-tts">Qwen3-TTS 1.7B Neural</option>
+          </select>
+        </div>
       </div>
       <div class="mt-16">
         <label for="genVideoNarration">Narration script (spoken by AI &amp; auto-aligned as captions)</label>
@@ -243,7 +295,7 @@
     <div class="card hidden" id="generateImagePanel" role="region" aria-labelledby="genImageHeading">
       <h2 id="genImageHeading" tabindex="-1">Generate Image, YouTube Thumbnail &amp; Logo</h2>
       <p style="color:var(--text2)">Create high-impact YouTube thumbnails, social media posts, brand logos, or scene artwork. Download as PNG or turn your image straight into a video.</p>
-      <div class="grid grid-2">
+      <div class="grid grid-3">
         <div>
           <label for="genImagePreset">Design type</label>
           <select id="genImagePreset">
@@ -260,6 +312,18 @@
             <option value="9:16">9:16 Shorts / Reels / Stories Cover (720×1280)</option>
             <option value="1:1">1:1 Logo / Instagram Square (1080×1080)</option>
             <option value="4:5">4:5 Instagram / LinkedIn Feed (864×1080)</option>
+          </select>
+        </div>
+        <div>
+          <label for="genImageModel">AI image model</label>
+          <select id="genImageModel">
+            <option value="auto" selected>Auto (Best Free AI Image)</option>
+            <option value="cloudflare-flux">Cloudflare FLUX.1-schnell</option>
+            <option value="hf-flux">Hugging Face FLUX.1-schnell</option>
+            <option value="z-image-turbo">Z-Image Turbo HD</option>
+            <option value="qwen-image">Qwen-Image (Best Text &amp; Logos)</option>
+            <option value="pollinations">Pollinations FLUX Free</option>
+            <option value="sdxl-cpu">SDXL-Turbo CPU Fallback</option>
           </select>
         </div>
       </div>
@@ -593,13 +657,15 @@
       </div>
       <div id="extendVideoBox" class="card hidden mt-16" role="region" aria-labelledby="extendVideoHeading">
         <h3 id="extendVideoHeading" tabindex="-1">Extend Video — Generate &amp; Merge Next Clip</h3>
-        <p style="color:var(--text2); font-size:14px;">VoiceCut captures the final frame of your current video, generates a continuation clip in the matching aspect ratio, and merges both clips together seamlessly.</p>
+        <p style="color:var(--text2); font-size:14px;">VoiceCut captures the final frame of your current video, generates an AI motion continuation clip in the matching aspect ratio with optional scene sound effects, music, and multilingual voice, and merges both clips seamlessly.</p>
         <div class="grid grid-2">
           <div>
-            <label for="extendVideoMode">Continuation mode</label>
-            <select id="extendVideoMode">
-              <option value="storyboard" selected>Instant AI Storyboard Continuation (Free)</option>
-              <option value="cloud">Cloud AI Motion Continuation (Image-to-Video)</option>
+            <label for="extendVideoModel">AI video model</label>
+            <select id="extendVideoModel">
+              <option value="auto" selected>Auto (Best Free AI Video)</option>
+              <option value="ltx-video">LTX-Video 0.9.8 13B Distilled</option>
+              <option value="wan21-fast">Wan 2.1 CausVid 14B Fast (Image-to-Video)</option>
+              <option value="pollinations-wan">Pollinations Wan / Seedance</option>
             </select>
           </div>
           <div>
@@ -621,6 +687,10 @@
               <option value="ta">Tamil (தமிழ்)</option>
               <option value="kn">Kannada (ಕನ್ನಡ)</option>
               <option value="ml">Malayalam (മലയാളം)</option>
+              <option value="mr">Marathi (मराठी)</option>
+              <option value="bn">Bengali (বাংলা)</option>
+              <option value="ur">Urdu (اردو)</option>
+              <option value="gu">Gujarati (ગુજરાતી)</option>
               <option value="es">Spanish (Español)</option>
               <option value="fr">French (Français)</option>
               <option value="ar">Arabic (العربية)</option>
@@ -630,6 +700,16 @@
             <label for="extendNarration">Optional narration for next clip</label>
             <input type="text" id="extendNarration" placeholder="What happens or is spoken next">
           </div>
+        </div>
+        <div class="flex gap-8 wrap mt-8">
+          <label style="display:flex; gap:8px; align-items:center;">
+            <input type="checkbox" id="extendSceneAudio" checked>
+            <span>Include synchronized scene sound effects</span>
+          </label>
+          <label style="display:flex; gap:8px; align-items:center;">
+            <input type="checkbox" id="extendMusic">
+            <span>Include AI background music</span>
+          </label>
         </div>
         <div class="mt-16">
           <label for="extendVideoPrompt">Describe what happens in the next clip</label>
@@ -744,9 +824,44 @@
       <h2 id="audioHeading">AUDIO - MUSIC TRACKS</h2>
       <p id="audioHelp" style="color:var(--text2)">Each music clip is independently editable. Changing one does not affect others.</p>
       <div id="musicTracksList" class="timeline" role="list" aria-label="Music tracks list"></div>
-      <button id="btnAddMusic2" class="mt-16" aria-label="Add Music, button. Adds new music track at current position">+ Add Music Track</button>
-      <button id="btnMergeAudio" class="mt-16" aria-label="Merge audio clips, button. Mixes all unmuted audio clips into one clip">Merge Audio Clips</button>
-      <button id="btnApplyVolumeAll" class="mt-16" aria-label="Use the selected song volume for all songs, button">Use This Volume for All Songs</button>
+      <div class="flex gap-8 wrap mt-16">
+        <button id="btnAddMusic2" aria-label="Add Music, button. Adds new music track at current position">+ Add Music Track</button>
+        <button id="btnOpenAiMusic" class="primary" aria-label="Generate AI Music Track, button">🎵 Generate AI Music</button>
+        <button id="btnMergeAudio" aria-label="Merge audio clips, button. Mixes all unmuted audio clips into one clip">Merge Audio Clips</button>
+        <button id="btnApplyVolumeAll" aria-label="Use the selected song volume for all songs, button">Use This Volume for All Songs</button>
+      </div>
+      <div id="aiMusicBox" class="card hidden mt-16" role="region" aria-labelledby="aiMusicHeading">
+        <h3 id="aiMusicHeading" tabindex="-1">Generate AI Background Music</h3>
+        <div class="grid grid-2">
+          <div>
+            <label for="aiMusicModel">AI music model</label>
+            <select id="aiMusicModel">
+              <option value="auto" selected>Auto (Best Free AI Music)</option>
+              <option value="stable-audio">Stable Audio Open 1.0 (Instrumental)</option>
+              <option value="ace-step">ACE-Step 3.5B (Melodic / Songs)</option>
+              <option value="musicgen">Meta MusicGen (Soundtrack)</option>
+            </select>
+          </div>
+          <div>
+            <label for="aiMusicDuration">Music length</label>
+            <select id="aiMusicDuration">
+              <option value="10">10 seconds</option>
+              <option value="15" selected>15 seconds</option>
+              <option value="30">30 seconds</option>
+              <option value="45">45 seconds</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-8">
+          <label for="aiMusicPrompt">Describe the music style or mood</label>
+          <input type="text" id="aiMusicPrompt" placeholder="Example: Warm cinematic Indian flute and soft ambient acoustic guitar">
+        </div>
+        <div class="flex gap-8 wrap mt-16">
+          <button id="btnRunAiMusic" class="primary">Generate Music &amp; Add to Timeline</button>
+          <button id="btnCancelAiMusic">Close</button>
+        </div>
+        <p id="aiMusicStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+      </div>
     </div>
 
     <!-- VOICE-OVER -->
@@ -760,7 +875,7 @@
       </div>
       <div id="aiVoiceoverBox" class="card hidden mt-16" role="region" aria-labelledby="aiVoHeading">
         <h3 id="aiVoHeading" tabindex="-1">Generate Multilingual AI Voice-over</h3>
-        <div class="grid grid-2">
+        <div class="grid grid-3">
           <div>
             <label for="aiVoLanguage">Language</label>
             <select id="aiVoLanguage">
@@ -789,6 +904,15 @@
             <select id="aiVoGender">
               <option value="female" selected>Natural Female Voice</option>
               <option value="male">Natural Male Voice</option>
+            </select>
+          </div>
+          <div>
+            <label for="aiVoModel">Voice AI model</label>
+            <select id="aiVoModel">
+              <option value="auto" selected>Auto (Best Multilingual Voice)</option>
+              <option value="edge-neural">Edge Neural TTS v2 (20+ Languages)</option>
+              <option value="google-tts">Google Multilingual TTS (Keyless)</option>
+              <option value="qwen3-tts">Qwen3-TTS 1.7B Neural</option>
             </select>
           </div>
         </div>
@@ -827,7 +951,40 @@
       <h2 id="sfxHeading">SOUND EFFECTS</h2>
       <p id="sfxHelp" style="color:var(--text2)">Sound effects play over the music. They never stop it.</p>
       <div id="sfxTracksList" class="timeline" role="list" aria-label="Sound effects list"></div>
-      <button id="btnAddSfx" class="mt-16" aria-label="Add sound effect, button. Opens your device audio files">+ Add Sound Effect</button>
+      <div class="flex gap-8 wrap mt-16">
+        <button id="btnAddSfx" aria-label="Add sound effect, button. Opens your device audio files">+ Add Sound Effect</button>
+        <button id="btnOpenAiSfx" class="primary" aria-label="Generate AI Scene Sound Effect, button">🔊 Generate AI Sound Effect</button>
+      </div>
+      <div id="aiSfxBox" class="card hidden mt-16" role="region" aria-labelledby="aiSfxHeading">
+        <h3 id="aiSfxHeading" tabindex="-1">Generate AI Scene Sound Effect</h3>
+        <div class="grid grid-2">
+          <div>
+            <label for="aiSfxModel">AI sound effect model</label>
+            <select id="aiSfxModel">
+              <option value="auto" selected>Auto (Best Free AI Sound Effect)</option>
+              <option value="mmaudio">MMAudio Scene Foley</option>
+              <option value="stable-audio">Stable Audio Open 1.0 SFX</option>
+            </select>
+          </div>
+          <div>
+            <label for="aiSfxDuration">Sound effect length</label>
+            <select id="aiSfxDuration">
+              <option value="4">4 seconds</option>
+              <option value="8" selected>8 seconds</option>
+              <option value="12">12 seconds</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-8">
+          <label for="aiSfxPrompt">Describe the sound effect</label>
+          <input type="text" id="aiSfxPrompt" placeholder="Example: Ocean waves crashing, thunder roll, camera shutter, or crowd applause">
+        </div>
+        <div class="flex gap-8 wrap mt-16">
+          <button id="btnRunAiSfx" class="primary">Generate SFX &amp; Add at Current Position</button>
+          <button id="btnCancelAiSfx">Close</button>
+        </div>
+        <p id="aiSfxStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
+      </div>
     </div>
 
     <!-- EFFECTS -->
