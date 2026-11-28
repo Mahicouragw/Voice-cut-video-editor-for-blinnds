@@ -8,6 +8,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {spawn,spawnSync}=require('node:child_process');
 const {createProviders,ServiceError}=require('./providers');
+const {createStudioPipeline}=require('./studio-pipeline');
 const Captions=require('../web/captions');
 const VERSION='2.0.0';
 const CAPTION_ORDER=['groq','deepgram','assemblyai','openai']; // Automatic preference: free tiers first.
@@ -59,7 +60,7 @@ function createApp(options={}) {
       res.set('Access-Control-Allow-Origin',req.headers.origin);res.set('Vary','Origin');
       res.set('Access-Control-Allow-Headers','Authorization, Content-Type, X-Upload-Consent');
       res.set('Access-Control-Allow-Methods','POST, GET, OPTIONS');
-      res.set('Access-Control-Expose-Headers','X-Processing-Method, X-Silence-Removed, X-Silence-Seconds, X-Silence-Threshold');
+      res.set('Access-Control-Expose-Headers','X-Processing-Method, X-Studio-Plan, X-Silence-Removed, X-Silence-Seconds, X-Silence-Threshold');
     }
     if(req.method==='OPTIONS') return res.sendStatus(204);
     next();
@@ -533,12 +534,275 @@ function createApp(options={}) {
         res.send(result.bytes);
         cleanup();return;
       }
+      if(kind==='studioPlan') {
+        const studio=createStudioPipeline({providers});
+        const {analysis,plan}=await studio.analyzeAndPlan({
+          prompt:body.prompt,
+          mode:body.mode||'text-to-video',
+          aspectRatio:body.aspectRatio||'16:9',
+          durationSec:body.duration||10,
+          voiceLanguage:body.voiceLanguage||'auto',
+          voiceGender:body.voiceGender||'auto',
+          voiceStyle:body.voiceStyle||'auto',
+          voicePreference:body.voicePreference||'auto',
+          musicPreference:body.musicPreference||'auto',
+          sfxPreference:body.sfxPreference||'auto',
+        },signal);
+        signal.throwIfAborted();
+        res.json({analysis,plan});
+        cleanup();return;
+      }
+      if(kind==='studioGenerate') {
+        if(body.imageDataUrl&&req.headers['x-upload-consent']!=='yes') throw new ServiceError(400,'CONSENT_REQUIRED','Explicit cloud-processing consent is required when uploading an image.');
+        if(!providers.generateVideo) throw new ServiceError(503,'KEY_NOT_CONFIGURED','Video generation is not available on this server.');
+        const studio=createStudioPipeline({providers});
+        const result=await studio.executeStudioJob({
+          input:{
+            prompt:body.prompt,
+            mode:body.mode||(body.imageDataUrl?'image-to-video':'text-to-video'),
+            aspectRatio:body.aspectRatio||'16:9',
+            durationSec:body.duration||10,
+            imageDataUrl:body.imageDataUrl||null,
+            voiceLanguage:body.voiceLanguage||'auto',
+            voiceGender:body.voiceGender||'auto',
+            voiceStyle:body.voiceStyle||'auto',
+            voicePreference:body.voicePreference||'auto',
+            musicPreference:body.musicPreference||'auto',
+            sfxPreference:body.sfxPreference||'auto',
+          },
+          workdir,
+        },signal);
+        signal.throwIfAborted();
+        const planHeader=Buffer.from(JSON.stringify({
+          title:result.analysis.title,
+          durationSec:result.durationSec,
+          sceneCount:result.plan.scenes.length,
+          narrationRequested:result.analysis.narrationRequested,
+          narrationLanguage:result.analysis.narrationLanguage,
+          narrationScript:result.analysis.narrationScript,
+          musicRequested:result.analysis.musicRequested,
+          sfxRequested:result.analysis.sfxRequested,
+          providersUsed:result.providersUsed,
+        }),'utf8').toString('base64');
+        res.set('Content-Type','video/mp4');
+        res.set('X-Processing-Method',result.providersUsed.join(' + ')||'AI-Studio');
+        res.set('X-Studio-Plan',planHeader);
+        res.send(result.bytes);
+        cleanup();return;
+      }
       throw new ServiceError(400,'UNKNOWN_JOB','Unknown request.');
     }catch(e){
       if(!closed&&!res.headersSent)res.status(e instanceof ServiceError?e.status:502).json({code:e.code||'PROCESSING_FAILED',error:e instanceof ServiceError?e.message:'Processing failed or timed out. No automatic paid retry was made.'});
       cleanup();
     }
   };
+  const studioJobs=new Map();
+  const pruneStudioJobs=()=>{
+    const now=Date.now();
+    for(const [id,st] of studioJobs) {
+      if(now-st.createdAt>lifetime) {
+        try{st.controller?.abort();}catch{}
+        if(st.workdir) fs.rmSync(st.workdir,{recursive:true,force:true});
+        studioJobs.delete(id);
+      }
+    }
+  };
+  app.post('/api/studio/jobs',authorized,jsonParser,(req,res)=>{
+    pruneStudioJobs();
+    if(active) return res.status(429).json({code:'BUSY',error:'Another job is running. Wait before trying again.'});
+    const body=req.body||{};
+    if(!String(body.prompt||'').trim()) return res.status(400).json({code:'EMPTY_PROMPT',error:'Describe the video you want to create first.'});
+    if(body.imageDataUrl&&req.headers['x-upload-consent']!=='yes') return res.status(400).json({code:'CONSENT_REQUIRED',error:'Explicit cloud-processing consent is required when uploading an image.'});
+    if(!providers.generateVideo) return res.status(503).json({code:'KEY_NOT_CONFIGURED',error:'Video generation is not available on this server.'});
+    if(publicMode) {
+      const ip=clientIp(req),now=Date.now();
+      const log=(ipAttempts.get(ip)||[]).filter(t=>now-t<86400000);
+      if(log.filter(t=>now-t<3600000).length>=perIpHour||log.length>=perIpDay) return res.status(429).json({code:'IP_QUOTA',error:'Too many AI requests from this address. Try again later.'});
+      log.push(now);ipAttempts.set(ip,log);
+      if(ipAttempts.size>10000) ipAttempts.clear();
+    }
+    attempts=attempts.filter(t=>Date.now()-t<3600000);
+    if(attempts.length>=jobsPerHour) return res.status(429).json({code:'HOURLY_LIMIT',error:'The server hourly AI request limit was reached. Wait before retrying.'});
+    attempts.push(Date.now());
+
+    const parentJob=body.resumeJobId?studioJobs.get(String(body.resumeJobId)):null;
+    const regenSceneIdx=Number.isInteger(body.regenerateSceneIndex)?body.regenerateSceneIndex:null;
+    const sceneCache=parentJob?.sceneCache instanceof Map?new Map(parentJob.sceneCache):new Map();
+
+    const jobId='studio_'+crypto.randomBytes(12).toString('hex');
+    const workdir=fs.mkdtempSync(path.join(root,'studio-job-'));
+    const controller=new AbortController();
+    active=true;
+    const jobState={
+      id:jobId,
+      createdAt:Date.now(),
+      status:'running',
+      stage:'analyzing',
+      stageLabel:'Analyzing Creative Prompt',
+      sceneIndex:0,
+      sceneCount:parentJob?.plan?.scenes?.length||1,
+      analysis:parentJob?.analysis||null,
+      plan:parentJob?.plan||null,
+      sceneCache,
+      completedSceneNumbers:[...sceneCache.keys()].map(i=>i+1),
+      providersUsed:[],
+      error:null,
+      videoBytes:null,
+      narrationBytes:null,
+      narrationMime:null,
+      durationSec:0,
+      workdir,
+      controller,
+    };
+    const timer=setTimeout(()=>{
+      if(jobState.status==='running') {
+        jobState.status='failed';
+        jobState.error='The processing deadline expired. No automatic paid retry was made.';
+        controller.abort();
+        fs.rmSync(workdir,{recursive:true,force:true});
+        jobState.workdir=null;
+        active=false;
+      }
+    },lifetime);
+    studioJobs.set(jobId,jobState);
+
+    const studio=createStudioPipeline({providers});
+    (async()=>{
+      try {
+        const out=await studio.executeStudioJob({
+          input:{
+            prompt:body.prompt,
+            mode:body.mode||(body.imageDataUrl?'image-to-video':'text-to-video'),
+            aspectRatio:body.aspectRatio||'16:9',
+            durationSec:body.duration||10,
+            imageDataUrl:body.imageDataUrl||null,
+            voiceLanguage:body.voiceLanguage||'auto',
+            voiceGender:body.voiceGender||'auto',
+            voiceStyle:body.voiceStyle||'auto',
+            voicePreference:body.voicePreference||'auto',
+            musicPreference:body.musicPreference||'auto',
+            sfxPreference:body.sfxPreference||'auto',
+          },
+          workdir,
+          existingAnalysis:parentJob?.analysis||null,
+          existingPlan:parentJob?.plan||null,
+          sceneCache,
+          regenerateSceneIndex:regenSceneIdx,
+          onProgress:(p)=>{
+            jobState.stage=p.stage||jobState.stage;
+            jobState.stageLabel=p.label||jobState.stageLabel;
+            if(p.analysis) jobState.analysis=p.analysis;
+            if(p.plan) jobState.plan=p.plan;
+            if(typeof p.sceneIndex==='number') jobState.sceneIndex=p.sceneIndex;
+            if(typeof p.sceneCount==='number') jobState.sceneCount=p.sceneCount;
+            jobState.completedSceneNumbers=[...sceneCache.keys()].map(i=>i+1);
+          },
+        },controller.signal);
+        clearTimeout(timer);
+        jobState.videoBytes=out.bytes;
+        jobState.narrationBytes=out.narrationAudioBytes;
+        jobState.narrationMime=out.narrationMime;
+        jobState.musicBytes=out.musicAudioBytes;
+        jobState.musicMime=out.musicMime;
+        jobState.sfxBytes=out.sfxAudioBytes;
+        jobState.sfxMime=out.sfxMime;
+        jobState.durationSec=out.durationSec;
+        jobState.providersUsed=out.providersUsed;
+        jobState.analysis=out.analysis;
+        jobState.plan=out.plan;
+        jobState.sceneCount=out.plan.scenes.length;
+        jobState.completedSceneNumbers=[...sceneCache.keys()].map(i=>i+1);
+        jobState.stage='ready';
+        jobState.stageLabel='Completed';
+        jobState.status='completed';
+      } catch(err) {
+        clearTimeout(timer);
+        jobState.completedSceneNumbers=[...sceneCache.keys()].map(i=>i+1);
+        jobState.status=controller.signal.aborted?'cancelled':'failed';
+        jobState.error=err instanceof ServiceError?err.message:(err?.message||'Video generation failed.');
+      } finally {
+        if(jobState.workdir) {
+          fs.rmSync(jobState.workdir,{recursive:true,force:true});
+          jobState.workdir=null;
+        }
+        active=false;
+      }
+    })();
+
+    res.status(202).json({jobId,status:'running',stage:jobState.stage,stageLabel:jobState.stageLabel});
+  });
+  app.get('/api/studio/jobs/:id',authorized,(req,res)=>{
+    pruneStudioJobs();
+    const st=studioJobs.get(req.params.id);
+    if(!st) return res.status(404).json({code:'NOT_FOUND',error:'Studio job not found or expired.'});
+    res.json({
+      jobId:st.id,
+      status:st.status,
+      stage:st.stage,
+      stageLabel:st.stageLabel,
+      sceneIndex:st.sceneIndex,
+      sceneCount:st.sceneCount,
+      completedSceneNumbers:st.completedSceneNumbers||[],
+      durationSec:st.durationSec,
+      providersUsed:st.providersUsed,
+      error:st.error,
+      hasNarrationAudio:Boolean(st.narrationBytes),
+      hasMusicAudio:Boolean(st.musicBytes),
+      hasSfxAudio:Boolean(st.sfxBytes),
+      analysis:st.analysis?{
+        title:st.analysis.title,
+        subject:st.analysis.subject,
+        aspectRatio:st.analysis.aspectRatio,
+        requestedDurationSec:st.analysis.requestedDurationSec,
+        narrationRequested:st.analysis.narrationRequested,
+        narrationLanguage:st.analysis.narrationLanguage,
+        voiceGender:st.analysis.voiceGender,
+        voiceStyle:st.analysis.voiceStyle,
+        narrationScript:st.analysis.narrationScript,
+        musicRequested:st.analysis.musicRequested,
+        sfxRequested:st.analysis.sfxRequested,
+      }:null,
+      scenes:st.plan?.scenes?.map(s=>({sceneNumber:s.sceneNumber,durationSec:s.durationSec,cameraMovement:s.cameraMovement}))||[],
+    });
+  });
+  app.get('/api/studio/jobs/:id/video',authorized,(req,res)=>{
+    pruneStudioJobs();
+    const st=studioJobs.get(req.params.id);
+    if(!st||!st.videoBytes) return res.status(404).json({code:'NOT_FOUND',error:'Generated video is not ready or has expired.'});
+    res.set('Content-Type','video/mp4');
+    res.set('X-Processing-Method',st.providersUsed.join(' + ')||'AI-Studio');
+    res.send(st.videoBytes);
+  });
+  app.get('/api/studio/jobs/:id/narration',authorized,(req,res)=>{
+    pruneStudioJobs();
+    const st=studioJobs.get(req.params.id);
+    if(!st||!st.narrationBytes) return res.status(404).json({code:'NOT_FOUND',error:'Narration preview is not available for this generation.'});
+    res.set('Content-Type',st.narrationMime||'audio/mpeg');
+    res.send(st.narrationBytes);
+  });
+  app.get('/api/studio/jobs/:id/music',authorized,(req,res)=>{
+    pruneStudioJobs();
+    const st=studioJobs.get(req.params.id);
+    if(!st||!st.musicBytes) return res.status(404).json({code:'NOT_FOUND',error:'Music stem is not available for this generation.'});
+    res.set('Content-Type',st.musicMime||'audio/wav');
+    res.send(st.musicBytes);
+  });
+  app.get('/api/studio/jobs/:id/sfx',authorized,(req,res)=>{
+    pruneStudioJobs();
+    const st=studioJobs.get(req.params.id);
+    if(!st||!st.sfxBytes) return res.status(404).json({code:'NOT_FOUND',error:'Sound effects stem is not available for this generation.'});
+    res.set('Content-Type',st.sfxMime||'audio/wav');
+    res.send(st.sfxBytes);
+  });
+  app.post('/api/studio/jobs/:id/cancel',authorized,(req,res)=>{
+    const st=studioJobs.get(req.params.id);
+    if(!st) return res.status(404).json({code:'NOT_FOUND',error:'Studio job not found.'});
+    st.status='cancelled';
+    try{st.controller?.abort();}catch{}
+    if(st.workdir){fs.rmSync(st.workdir,{recursive:true,force:true});st.workdir=null;}
+    active=false;
+    res.json({jobId:st.id,status:'cancelled'});
+  });
   app.post('/enhance',authorized,job('filter'));
   app.post('/api/captions',authorized,job('captions'));
   app.post('/api/isolate',authorized,job('isolation'));
@@ -550,6 +814,8 @@ function createApp(options={}) {
   app.post('/api/generate-music',authorized,jsonParser,jsonJob('genMusic'));
   app.post('/api/generate-sfx',authorized,jsonParser,jsonJob('genSfx'));
   app.post('/api/tts',authorized,jsonParser,jsonJob('tts'));
+  app.post('/api/studio/plan',authorized,jsonParser,jsonJob('studioPlan'));
+  app.post('/api/studio/generate',authorized,jsonParser,jsonJob('studioGenerate'));
   return app;
 }
 if(require.main===module){

@@ -1165,6 +1165,122 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+
+  // AI Video Creation Studio Workspace E2E: TalkBack labels, unified prompt, Image-to-Video upload,
+  // async multi-stage polling, Preview Video playback controls, Save to Library, Regenerate confirm, and Edit Video with audio tracks.
+  await page.goto('http://127.0.0.1:3099');
+  await page.locator('#homeGenerateVideo').click();
+  await page.locator('#studioScreen:not(.hidden)').waitFor();
+  assert.equal(await page.evaluate(()=>document.activeElement && document.activeElement.id), 'studioTitle', 'TalkBack focus lands on Studio heading');
+  assert.equal(await page.locator('#studioPromptInput').inputValue(), '', 'Prompt box starts empty with no prefilled examples');
+  assert.match(await page.locator('#studioPromptInput').getAttribute('placeholder'), /Describe the video you want to create\. Include the story, scenes, camera movements, narration, language, background music, sound effects/);
+
+  // Switch to Image to Video mode, upload an image, verify preview & remove, then switch back to Text to Video
+  await page.locator('#studioModeImageBtn').click();
+  assert.equal(await page.locator('#studioModeImageBtn').getAttribute('aria-checked'), 'true');
+  await page.locator('#studioImageUploadArea:not(.hidden)').waitFor();
+  const refImgPath = path.join(dir, 'studio-ref.jpg');
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=teal:s=320x180:d=0.1', '-frames:v', '1', '-y', refImgPath]);
+  await page.setInputFiles('#studioImageInput', refImgPath);
+  await page.locator('#studioImagePreviewWrap:not(.hidden)').waitFor();
+  await page.locator('#btnStudioRemoveImage').click();
+  assert.equal(await page.locator('#studioImagePreviewWrap.hidden').count(), 1);
+  await page.locator('#studioModeTextBtn').click();
+  assert.equal(await page.locator('#studioModeTextBtn').getAttribute('aria-checked'), 'true');
+
+  // Intercept /api/studio/jobs endpoints to verify full Studio generation, Preview, Save to Library, Regenerate confirm, and Edit Video
+  const sampleVideoBytes = fs.readFileSync(videoPath);
+  const sampleWavBytes = fs.readFileSync(audioPath);
+  let studioPollCount = 0;
+  await page.route('**/api/studio/jobs**', async (routeReq) => {
+    const u = routeReq.request().url();
+    const m = routeReq.request().method();
+    if (m === 'POST' && u.endsWith('/api/studio/jobs')) {
+      return routeReq.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ jobId: 'e2e_job_1', status: 'running', stage: 'analyzing', stageLabel: 'Analyzing Creative Prompt' }),
+      });
+    }
+    if (u.endsWith('/e2e_job_1/video')) {
+      return routeReq.fulfill({ status: 200, contentType: 'video/mp4', headers: { 'Access-Control-Allow-Origin': '*' }, body: sampleVideoBytes });
+    }
+    if (u.endsWith('/e2e_job_1/narration') || u.endsWith('/e2e_job_1/music') || u.endsWith('/e2e_job_1/sfx')) {
+      return routeReq.fulfill({ status: 200, contentType: 'audio/wav', headers: { 'Access-Control-Allow-Origin': '*' }, body: sampleWavBytes });
+    }
+    studioPollCount++;
+    if (studioPollCount === 1) {
+      return routeReq.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({
+          jobId: 'e2e_job_1',
+          status: 'running',
+          stage: 'visuals',
+          stageLabel: 'Generating AI Visuals (Scene 1 of 2)',
+          sceneIndex: 0,
+          sceneCount: 2,
+          completedSceneNumbers: [1],
+          analysis: { title: 'Telugu Sunrise Story', narrationRequested: true, narrationLanguage: 'te', narrationScript: 'ఈ ఉదయం సూర్యోదయం ఎంతో అందంగా ఉంది.', musicRequested: true, sfxRequested: true },
+        }),
+      });
+    }
+    return routeReq.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({
+        jobId: 'e2e_job_1',
+        status: 'completed',
+        stage: 'ready',
+        stageLabel: 'Completed',
+        durationSec: 15,
+        completedSceneNumbers: [1, 2],
+        hasNarrationAudio: true,
+        hasMusicAudio: true,
+        hasSfxAudio: true,
+        scenes: [{ index: 0, sceneNumber: 1, durationSec: 7.5 }, { index: 1, sceneNumber: 2, durationSec: 7.5 }],
+        analysis: { title: 'Telugu Sunrise Story', narrationRequested: true, narrationLanguage: 'te', narrationScript: 'ఈ ఉదయం సూర్యోదయం ఎంతో అందంగా ఉంది.', musicRequested: true, sfxRequested: true },
+      }),
+    });
+  });
+
+  await page.locator('#studioAspectRatio').selectOption('9:16');
+  await page.locator('#studioDuration').selectOption('15');
+  await page.locator('#studioPromptInput').fill('Create a 15 second vertical temple sunrise video with Telugu female narration, flute music, and morning birds.');
+  await page.locator('#btnStudioGenerate').click();
+  await page.locator('#studioResultCard:not(.hidden)').waitFor({ timeout: 20000 });
+  await page.locator('#studioNarrationPreviewBox:not(.hidden)').waitFor();
+  assert.match(await text('#studioNarrationTranscript'), /ఈ ఉదయం సూర్యోదయం/);
+  await page.locator('#studioRegenSceneWrap:not(.hidden)').waitFor();
+
+  // Verify accessible Preview Video Play/Pause button
+  await page.waitForFunction(() => document.querySelector('#studioPreviewVideo').readyState >= 1);
+  await page.locator('#btnStudioPlayPause').click();
+  await page.waitForFunction(() => !document.querySelector('#studioPreviewVideo').paused);
+  await page.locator('#btnStudioPlayPause').click();
+  await page.waitForFunction(() => document.querySelector('#studioPreviewVideo').paused);
+
+  // Regenerate confirmation dialog protects existing video before overwriting
+  await page.locator('#btnStudioRegenerate').click();
+  await page.waitForFunction(() => document.querySelector('#confirmDialog').open === true);
+  await page.locator('#btnConfirmCancel').click();
+
+  // Save to Library persists project in IndexedDB
+  await page.locator('#btnStudioSaveLibrary').click();
+  await page.waitForFunction(() => document.querySelector('#studioActionStatus').textContent.includes('Saved "Telugu Sunrise Story"'));
+
+  // Edit Video opens VoiceCut Editor with separate editable narration, music, and SFX tracks + aligned Telugu captions
+  await page.locator('#btnStudioEdit').click();
+  await page.locator('#editorScreen:not(.hidden)').waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => document.querySelectorAll('#timelineContainer [data-clip-id]').length >= 4, {}, { timeout: 15000 });
+  await page.unroute('**/api/studio/jobs**');
+  await showPanel('clips');
+  await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
+  await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+
   assert.deepEqual(errors,[]);
   console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity, merge videos, time steppers, music re-upload track numbers, export shapes, original orientation, rotated merge');
  } finally {await browser.close();server.kill();}

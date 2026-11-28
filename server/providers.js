@@ -38,12 +38,15 @@ const IMAGE_SIZES={
   '1:1':{width:1024,height:1024},
   '4:3':{width:1024,height:768},
   '4:5':{width:864,height:1080},
+  '21:9':{width:1344,height:576},
 };
 // Dimensions divisible by 32 within LTX-Video / Wan ZeroGPU limits so free HF_TOKEN stays inside the 60s ZeroGPU ceiling.
 const VIDEO_SIZES={
   '16:9':{width:768,height:448},
   '9:16':{width:448,height:768},
   '1:1':{width:640,height:640},
+  '4:5':{width:576,height:704},
+  '21:9':{width:832,height:352},
 };
 const EDGE_VOICES={
   en:{female:'en-IN-NeerjaNeural',male:'en-IN-PrabhatNeural'},
@@ -365,7 +368,8 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
       const cleanPrompt=String(prompt||'').trim().slice(0,1800);
       if(!cleanPrompt) throw new ServiceError(400,'EMPTY_PROMPT','Enter a description for the video scene you want to generate.');
       const dur=Math.max(2,Math.min(15,Math.round(Number(duration)||5)));
-      const ar=aspectRatio==='9:16'?'9:16':aspectRatio==='1:1'?'1:1':'16:9';
+      const ar=['16:9','9:16','1:1','4:5','21:9'].includes(aspectRatio)?aspectRatio:'16:9';
+      const providerAr=ar==='4:5'?'9:16':ar==='21:9'?'21:9':ar;
       const vDims=VIDEO_SIZES[ar]||VIDEO_SIZES['16:9'];
       const picked=String(model||'auto').toLowerCase();
 
@@ -373,6 +377,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
         if(!pollinationsKey) throw new ServiceError(503,'KEY_NOT_CONFIGURED','POLLINATIONS_API_KEY is not configured.');
         const pModel=imageDataUrl?'seedance':dur>10?'wan':'seedance';
         const clampedDur=pModel==='seedance'?Math.min(10,dur):dur;
+        const pAr=(ar==='9:16'||ar==='4:5')?'9:16':'16:9';
         if(imageDataUrl) {
           const chatRes=await fetchImpl('https://gen.pollinations.ai/v1/chat/completions',{
             method:'POST',
@@ -393,7 +398,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
           await requireSuccess(dl,'Pollinations Video Media');
           return {bytes:await readBounded(dl,100*1024*1024,signal),mime:'video/mp4',provider:`Pollinations ${pModel}`};
         }
-        const params=new URLSearchParams({model:pModel,duration:String(clampedDur),aspectRatio:ar==='1:1'?'16:9':ar});
+        const params=new URLSearchParams({model:pModel,duration:String(clampedDur),aspectRatio:pAr});
         const url=`https://gen.pollinations.ai/image/${encodeURIComponent(cleanPrompt)}?${params}`;
         const response=await fetchImpl(url,{headers:{Authorization:'Bearer '+pollinationsKey},signal,redirect:'follow'});
         await requireSuccess(response,'Pollinations Video');
@@ -408,7 +413,8 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
       const runFalVideo=async()=>{
         if(!falKey) throw new ServiceError(503,'KEY_NOT_CONFIGURED','FAL_KEY is not configured.');
         const endpoint=imageDataUrl?'fal-ai/wan-i2v':'fal-ai/wan-t2v';
-        const input=imageDataUrl?{prompt:cleanPrompt,image_url:imageDataUrl,aspect_ratio:ar}:{prompt:cleanPrompt,aspect_ratio:ar};
+        const falAr=['16:9','9:16','1:1'].includes(ar)?ar:ar==='4:5'?'9:16':'16:9';
+        const input=imageDataUrl?{prompt:cleanPrompt,image_url:imageDataUrl,aspect_ratio:falAr}:{prompt:cleanPrompt,aspect_ratio:falAr};
         const submit=await fetchImpl(`https://queue.fal.run/${endpoint}`,{
           method:'POST',
           headers:{Authorization:'Key '+falKey,'Content-Type':'application/json'},
@@ -442,10 +448,11 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
       const runReplicateVideo=async()=>{
         if(!replicateToken) throw new ServiceError(503,'KEY_NOT_CONFIGURED','REPLICATE_API_TOKEN is not configured.');
         const modelPath=imageDataUrl?'wavespeedai/wan-2.1-i2v-480p':'wavespeedai/wan-2.1-t2v-480p';
+        const repAr=['16:9','9:16','1:1'].includes(ar)?ar:ar==='4:5'?'9:16':'16:9';
         const createRes=await fetchImpl(`https://api.replicate.com/v1/models/${modelPath}/predictions`,{
           method:'POST',
           headers:{Authorization:'Bearer '+replicateToken,'Content-Type':'application/json'},
-          body:JSON.stringify({input:{prompt:cleanPrompt,aspect_ratio:ar,...(imageDataUrl?{image:imageDataUrl}:{})}}),
+          body:JSON.stringify({input:{prompt:cleanPrompt,aspect_ratio:repAr,...(imageDataUrl?{image:imageDataUrl}:{})}}),
           signal,redirect:'error',
         });
         await requireSuccess(createRes,'Replicate');
@@ -822,6 +829,88 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
         }
       }
       throw lastErr||new ServiceError(502,'TTS_UNAVAILABLE','Multilingual voice synthesis is temporarily unavailable. Please try again.');
+    },
+    async completeChat({systemPrompt,userPrompt,jsonMode=true},signal) {
+      const cleanUser=String(userPrompt||'').trim().slice(0,8000);
+      if(!cleanUser) throw new ServiceError(400,'EMPTY_PROMPT','Enter a creative prompt to analyze.');
+      const messages=[
+        ...(systemPrompt?[{role:'system',content:String(systemPrompt).slice(0,6000)}]:[]),
+        {role:'user',content:cleanUser},
+      ];
+      const runGroqLlm=async()=>{
+        if(!groqKey) throw new ServiceError(503,'KEY_NOT_CONFIGURED','GROQ_API_KEY is not configured.');
+        const response=await fetchImpl('https://api.groq.com/openai/v1/chat/completions',{
+          method:'POST',
+          headers:{Authorization:'Bearer '+groqKey,'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model:'llama-3.3-70b-versatile',
+            messages,
+            temperature:0.35,
+            max_tokens:3500,
+            ...(jsonMode?{response_format:{type:'json_object'}}:{}),
+          }),
+          signal,redirect:'error',
+        });
+        await requireSuccess(response,'Groq LLM');
+        const payload=await readJSON(response,2*1024*1024,signal,'Groq LLM');
+        const content=String(payload?.choices?.[0]?.message?.content||'').trim();
+        if(!content) throw new ServiceError(502,'EMPTY_LLM_RESPONSE','Groq LLM returned an empty response.');
+        return {text:content,provider:'Groq Llama-3.3-70B'};
+      };
+      const runOpenAiLlm=async()=>{
+        if(!openaiKey) throw new ServiceError(503,'KEY_NOT_CONFIGURED','OPENAI_API_KEY is not configured.');
+        const response=await fetchImpl('https://api.openai.com/v1/chat/completions',{
+          method:'POST',
+          headers:{Authorization:'Bearer '+openaiKey,'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model:'gpt-4o-mini',
+            messages,
+            temperature:0.35,
+            max_tokens:3500,
+            ...(jsonMode?{response_format:{type:'json_object'}}:{}),
+          }),
+          signal,redirect:'error',
+        });
+        await requireSuccess(response,'OpenAI LLM');
+        const payload=await readJSON(response,2*1024*1024,signal,'OpenAI LLM');
+        const content=String(payload?.choices?.[0]?.message?.content||'').trim();
+        if(!content) throw new ServiceError(502,'EMPTY_LLM_RESPONSE','OpenAI LLM returned an empty response.');
+        return {text:content,provider:'OpenAI GPT-4o-mini'};
+      };
+      const runHfLlm=async()=>{
+        if(!hfToken) throw new ServiceError(503,'KEY_NOT_CONFIGURED','HF_TOKEN is not configured.');
+        const response=await fetchImpl('https://router.huggingface.co/v1/chat/completions',{
+          method:'POST',
+          headers:{Authorization:'Bearer '+hfToken,'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model:'Qwen/Qwen2.5-72B-Instruct',
+            messages,
+            temperature:0.35,
+            max_tokens:3500,
+          }),
+          signal,redirect:'error',
+        });
+        await requireSuccess(response,'Hugging Face Router LLM');
+        const payload=await readJSON(response,2*1024*1024,signal,'Hugging Face Router LLM');
+        const content=String(payload?.choices?.[0]?.message?.content||'').trim();
+        if(!content) throw new ServiceError(502,'EMPTY_LLM_RESPONSE','Hugging Face Router LLM returned an empty response.');
+        return {text:content,provider:'HF Qwen2.5-72B'};
+      };
+      const chain=[];
+      if(groqKey) chain.push(runGroqLlm);
+      if(openaiKey) chain.push(runOpenAiLlm);
+      if(hfToken) chain.push(runHfLlm);
+      let lastErr=null;
+      for(const step of chain) {
+        try {
+          signal?.throwIfAborted();
+          return await step();
+        } catch(e) {
+          if(signal?.aborted) throw e;
+          lastErr=e;
+        }
+      }
+      throw lastErr||new ServiceError(503,'KEY_NOT_CONFIGURED','No LLM key configured for cloud prompt planning.');
     },
   };
 }

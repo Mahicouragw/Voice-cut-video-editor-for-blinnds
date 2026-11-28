@@ -59,19 +59,21 @@
   let captionRequestBusy = false;
   let mediaEpoch = 0;
   let currentView = 'home';
-  const VIEW_IDS = {home:'homeScreen',library:'libraryScreen',settings:'settingsScreen',editor:'editorScreen',none:'noProjectScreen'};
+  const VIEW_IDS = {home:'homeScreen',studio:'studioScreen',library:'libraryScreen',settings:'settingsScreen',editor:'editorScreen',none:'noProjectScreen'};
   const hasProject = () => !!project.videoUrl;
   function showView(name) {
     if (name === 'editor' && !hasProject()) name = 'none';
     currentView = name;
-    for (const [key,id] of Object.entries(VIEW_IDS)) $('#'+id).classList.toggle('hidden', key!==name);
+    for (const [key,id] of Object.entries(VIEW_IDS)) $('#'+id)?.classList.toggle('hidden', key!==name);
     $('#navEditor').classList.toggle('hidden', !hasProject());
     $$('#mainNav a').forEach(a => { a.getAttribute('data-route')===name ? a.setAttribute('aria-current','page') : a.removeAttribute('aria-current'); });
     document.querySelector('.header-actions').style.display = name==='editor' ? '' : 'none';
     if (name !== 'editor') pauseAllAudio();
+    if (name !== 'studio') { try { $('#studioPreviewVideo')?.pause(); $('#studioNarrationAudio')?.pause(); } catch {} }
     if (name === 'library') renderLibrary();
     if (name === 'home') renderHomeRecent();
-    $('#main-content').focus({preventScroll:true});
+    if (name === 'studio') { $('#studioTitle')?.focus({preventScroll:true}); }
+    else { $('#main-content').focus({preventScroll:true}); }
     window.scrollTo(0,0);
   }
   function route() {
@@ -4211,32 +4213,540 @@
     }
   }
 
+  // =========================================================================
+  // AI VIDEO CREATION STUDIO WORKSPACE (Unified Prompt, Multi-Scene, Accessible)
+  // =========================================================================
+  const STUDIO_STAGES = [
+    { key: 'analyzing', label: 'Analyzing Creative Prompt' },
+    { key: 'planning', label: 'Planning Video Scenes' },
+    { key: 'visuals', label: 'Generating AI Visuals' },
+    { key: 'narration', label: 'Generating Voice Narration', conditional: 'narrationRequested' },
+    { key: 'music', label: 'Generating Background Music', conditional: 'musicRequested' },
+    { key: 'sfx', label: 'Creating Sound Effects', conditional: 'sfxRequested' },
+    { key: 'syncing', label: 'Synchronizing Audio and Video' },
+    { key: 'assembling', label: 'Assembling Final Video' },
+    { key: 'exporting', label: 'Preparing Download' },
+  ];
+
+  const studioState = {
+    mode: 'text-to-video', // 'text-to-video' | 'image-to-video'
+    imageFile: null,
+    imageDataUrl: null,
+    imagePreviewUrl: null,
+    busy: false,
+    activeJobId: null,
+    lastFailedJobId: null,
+    pollAbort: null,
+    lastAnnouncedStage: '',
+    completed: null, // { jobId, videoBlob, videoUrl, narrationBlob, narrationUrl, musicBlob, sfxBlob, analysis, scenes, durationSec, prompt, aspectRatio }
+  };
+
+  function setStudioCreationMode(mode, quiet = false) {
+    studioState.mode = mode === 'image-to-video' ? 'image-to-video' : 'text-to-video';
+    const isImage = studioState.mode === 'image-to-video';
+    const txtBtn = $('#studioModeTextBtn');
+    const imgBtn = $('#studioModeImageBtn');
+    if (txtBtn) {
+      txtBtn.classList.toggle('active', !isImage);
+      txtBtn.setAttribute('aria-checked', !isImage ? 'true' : 'false');
+      txtBtn.setAttribute('aria-label', !isImage ? 'Text to Video mode, selected' : 'Text to Video mode');
+    }
+    if (imgBtn) {
+      imgBtn.classList.toggle('active', isImage);
+      imgBtn.setAttribute('aria-checked', isImage ? 'true' : 'false');
+      imgBtn.setAttribute('aria-label', isImage ? 'Image to Video mode, selected' : 'Image to Video mode');
+    }
+    $('#studioImageUploadArea')?.classList.toggle('hidden', !isImage);
+    if (!quiet) {
+      announce(isImage
+        ? 'Image to Video mode selected. Upload a reference image or describe how to animate it.'
+        : 'Text to Video mode selected.');
+    }
+  }
+
+  async function setStudioReferenceImage(file) {
+    if (!file) return;
+    if (studioState.imagePreviewUrl) URL.revokeObjectURL(studioState.imagePreviewUrl);
+    studioState.imageFile = file;
+    studioState.imageDataUrl = await fileToDataUrl(file);
+    studioState.imagePreviewUrl = URL.createObjectURL(file);
+    const imgEl = $('#studioImagePreview');
+    if (imgEl) imgEl.src = studioState.imagePreviewUrl;
+    const meta = $('#studioImageMeta');
+    if (meta) meta.textContent = `${file.name} (${Math.max(1, Math.round(file.size / 1024))} KB)`;
+    $('#studioImagePreviewWrap')?.classList.remove('hidden');
+    $('#btnStudioReplaceImage')?.classList.remove('hidden');
+    $('#btnStudioRemoveImage')?.classList.remove('hidden');
+    setStudioCreationMode('image-to-video', true);
+    announce(`Reference image ${file.name} selected for Image to Video.`);
+  }
+
+  function clearStudioReferenceImage() {
+    if (studioState.imagePreviewUrl) URL.revokeObjectURL(studioState.imagePreviewUrl);
+    studioState.imageFile = null;
+    studioState.imageDataUrl = null;
+    studioState.imagePreviewUrl = null;
+    const input = $('#studioImageInput');
+    if (input) input.value = '';
+    const imgEl = $('#studioImagePreview');
+    if (imgEl) imgEl.removeAttribute('src');
+    $('#studioImagePreviewWrap')?.classList.add('hidden');
+    $('#btnStudioReplaceImage')?.classList.add('hidden');
+    $('#btnStudioRemoveImage')?.classList.add('hidden');
+    announce('Reference image removed.');
+  }
+
+  function getSelectedStudioDuration() {
+    const sel = $('#studioDuration')?.value || '10';
+    if (sel === 'custom') {
+      const raw = Number($('#studioCustomDuration')?.value || 20);
+      return Math.max(4, Math.min(180, Math.round(Number.isFinite(raw) ? raw : 20)));
+    }
+    return Math.max(4, Math.min(180, Number(sel) || 10));
+  }
+
+  function renderStudioStageProgress(activeStageKey, stageLabel, analysis) {
+    const listEl = $('#studioStagesList');
+    const badgeEl = $('#studioCurrentStageBadge');
+    const textEl = $('#studioProgressText');
+    if (badgeEl) badgeEl.textContent = stageLabel || 'Processing';
+    if (textEl) textEl.textContent = stageLabel || 'Processing…';
+    if (!listEl) return;
+
+    const visibleStages = STUDIO_STAGES.filter(st => {
+      if (!st.conditional) return true;
+      if (!analysis) return false;
+      return Boolean(analysis[st.conditional]);
+    });
+
+    const activeIdx = visibleStages.findIndex(s => s.key === activeStageKey);
+    listEl.innerHTML = visibleStages.map((st, idx) => {
+      const state = activeStageKey === 'ready' || (activeIdx > idx)
+        ? 'done'
+        : (st.key === activeStageKey ? 'active' : 'pending');
+      const icon = state === 'done' ? '✓' : (state === 'active' ? '●' : '○');
+      const label = st.key === activeStageKey && stageLabel ? stageLabel : st.label;
+      return `<li class="studio-stage-item ${state === 'done' ? 'done' : state === 'active' ? 'active' : ''}" aria-current="${state === 'active' ? 'step' : 'false'}">
+        <span aria-hidden="true">${icon}</span>
+        <span>${escapeHTML(label)}</span>
+      </li>`;
+    }).join('');
+
+    if (stageLabel && studioState.lastAnnouncedStage !== stageLabel) {
+      studioState.lastAnnouncedStage = stageLabel;
+      announce(stageLabel);
+    }
+  }
+
+  async function fetchStudioAuthorizedBlob(endpointPath, signal) {
+    const backend = backendConfig();
+    if (!backend) throw new Error('SERVICE_UNAVAILABLE');
+    const headers = backend.key ? { Authorization: 'Bearer ' + backend.key } : {};
+    const resp = await fetch(new URL(endpointPath, backend.url), { headers, signal });
+    if (!resp.ok) return null;
+    return resp.blob();
+  }
+
+  async function fetchStudioAuthorizedJson(endpointPath, options = {}) {
+    const backend = backendConfig();
+    if (!backend) throw new Error('SERVICE_UNAVAILABLE');
+    const { method = 'GET', body = null, uploadConsent = false, signal = null } = options;
+    const headers = {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(backend.key ? { Authorization: 'Bearer ' + backend.key } : {}),
+      ...(uploadConsent ? { 'X-Upload-Consent': 'yes' } : {}),
+    };
+    const resp = await fetch(new URL(endpointPath, backend.url), {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+    if (!resp.ok) {
+      let msg = '';
+      try { const j = await resp.json(); msg = j?.error || ''; } catch {}
+      const err = new Error(msg || 'SERVICE_UNAVAILABLE');
+      err.status = resp.status;
+      throw err;
+    }
+    return resp.json();
+  }
+
+  function formatMmSs(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+  }
+
+  function updateStudioPreviewControls() {
+    const vid = $('#studioPreviewVideo');
+    if (!vid) return;
+    const dur = Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : (studioState.completed?.durationSec || 0);
+    const cur = vid.currentTime || 0;
+    const slider = $('#studioSeekSlider');
+    if (slider && dur > 0) slider.value = String(Math.min(100, (cur / dur) * 100));
+    const timeEl = $('#studioTimeDisplay');
+    if (timeEl) timeEl.textContent = `${formatMmSs(cur)} / ${formatMmSs(dur)}`;
+    const playBtn = $('#btnStudioPlayPause');
+    if (playBtn) {
+      const playing = !vid.paused && !vid.ended;
+      playBtn.textContent = playing ? '⏸ Pause' : '▶ Preview Video';
+      playBtn.setAttribute('aria-label', playing ? 'Pause video preview, button' : 'Preview Video, Play generated video, button');
+    }
+  }
+
+  async function startStudioVideoGeneration({ resumeJobId = null, regenerateSceneIndex = null } = {}) {
+    if (studioState.busy) {
+      announce('A video generation is already in progress. Wait or press Cancel Generation.', true);
+      return;
+    }
+    const prompt = ($('#studioPromptInput')?.value || '').trim();
+    if (!prompt) {
+      const msg = 'Describe your video in the creative prompt box first.';
+      announce(msg, true);
+      $('#studioPromptInput')?.focus();
+      return;
+    }
+    if (studioState.mode === 'image-to-video' && !studioState.imageDataUrl) {
+      const msg = 'Upload a reference image first, or switch Creation Mode to Text to Video.';
+      announce(msg, true);
+      $('#btnStudioUploadImage')?.focus();
+      return;
+    }
+    if (!Boolean($('#studioConsent')?.checked)) {
+      const msg = 'Enable AI processing permission in Advanced Settings to generate this video.';
+      announce(msg, true);
+      return;
+    }
+
+    const aspectRatio = $('#studioAspectRatio')?.value || '16:9';
+    const duration = getSelectedStudioDuration();
+    const voiceGender = $('#studioVoiceGender')?.value || 'auto';
+    const voiceStyle = $('#studioVoiceStyle')?.value || 'natural';
+    const voiceLanguage = $('#studioVoiceLanguage')?.value || 'auto';
+    const voicePreference = $('#studioNarrationPref')?.value || 'auto';
+    const musicPreference = $('#studioMusicPref')?.value || 'auto';
+    const sfxPreference = $('#studioSfxPref')?.value || 'auto';
+    const imageDataUrl = studioState.mode === 'image-to-video' ? studioState.imageDataUrl : null;
+
+    studioState.busy = true;
+    studioState.lastAnnouncedStage = '';
+    const abortCtrl = new AbortController();
+    studioState.pollAbort = abortCtrl;
+
+    $('#btnStudioGenerate').disabled = true;
+    $('#btnStudioCancel')?.classList.remove('hidden');
+    $('#btnStudioRetry')?.classList.add('hidden');
+    $('#studioProgressCard')?.classList.remove('hidden');
+    if ($('#studioActionStatus')) $('#studioActionStatus').textContent = '';
+
+    renderStudioStageProgress('analyzing', 'Analyzing Creative Prompt', null);
+
+    try {
+      const created = await fetchStudioAuthorizedJson('/api/studio/jobs', {
+        method: 'POST',
+        uploadConsent: Boolean(imageDataUrl),
+        signal: abortCtrl.signal,
+        body: {
+          prompt,
+          mode: studioState.mode,
+          aspectRatio,
+          duration,
+          imageDataUrl,
+          voiceGender,
+          voiceStyle,
+          voiceLanguage,
+          voicePreference,
+          musicPreference,
+          sfxPreference,
+          ...(resumeJobId ? { resumeJobId } : {}),
+          ...(Number.isInteger(regenerateSceneIndex) ? { regenerateSceneIndex } : {}),
+        },
+      });
+
+      const jobId = created.jobId;
+      studioState.activeJobId = jobId;
+
+      let statusData = null;
+      while (!abortCtrl.signal.aborted) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (abortCtrl.signal.aborted) break;
+        statusData = await fetchStudioAuthorizedJson(`/api/studio/jobs/${encodeURIComponent(jobId)}`, {
+          signal: abortCtrl.signal,
+        });
+        renderStudioStageProgress(statusData.stage, statusData.stageLabel, statusData.analysis);
+        if (statusData.status === 'completed' || statusData.status === 'failed' || statusData.status === 'cancelled') {
+          break;
+        }
+      }
+
+      if (abortCtrl.signal.aborted || statusData?.status === 'cancelled') {
+        const cancelMsg = 'Video generation cancelled. Your prompt and settings are preserved.';
+        if ($('#studioProgressText')) $('#studioProgressText').textContent = cancelMsg;
+        if ($('#studioCurrentStageBadge')) $('#studioCurrentStageBadge').textContent = 'Cancelled';
+        announce(cancelMsg, true);
+        return;
+      }
+
+      if (!statusData || statusData.status === 'failed') {
+        studioState.lastFailedJobId = jobId;
+        const completedCount = Array.isArray(statusData?.completedSceneNumbers) ? statusData.completedSceneNumbers.length : 0;
+        const preservedNote = completedCount > 0
+          ? ` (${completedCount} completed scene${completedCount > 1 ? 's' : ''} preserved for retry.)`
+          : '';
+        throw new Error((statusData?.error || 'AI generation failed.') + preservedNote);
+      }
+
+      renderStudioStageProgress('exporting', 'Preparing Download', statusData.analysis);
+      const videoBlob = await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/video`, abortCtrl.signal);
+      if (!videoBlob || videoBlob.size < 100) throw new Error('Generated video file could not be downloaded.');
+
+      const narrationBlob = statusData.hasNarrationAudio
+        ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/narration`, abortCtrl.signal)
+        : null;
+      const musicBlob = statusData.hasMusicAudio
+        ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/music`, abortCtrl.signal)
+        : null;
+      const sfxBlob = statusData.hasSfxAudio
+        ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/sfx`, abortCtrl.signal)
+        : null;
+
+      if (studioState.completed?.videoUrl) URL.revokeObjectURL(studioState.completed.videoUrl);
+      if (studioState.completed?.narrationUrl) URL.revokeObjectURL(studioState.completed.narrationUrl);
+
+      const videoUrl = URL.createObjectURL(videoBlob);
+      const narrationUrl = narrationBlob ? URL.createObjectURL(narrationBlob) : null;
+
+      studioState.completed = {
+        jobId,
+        videoBlob,
+        videoUrl,
+        narrationBlob,
+        narrationUrl,
+        musicBlob,
+        sfxBlob,
+        analysis: statusData.analysis,
+        scenes: statusData.scenes || [],
+        durationSec: statusData.durationSec || duration,
+        prompt,
+        aspectRatio,
+      };
+      studioState.lastFailedJobId = null;
+
+      renderStudioStageProgress('ready', 'Completed', statusData.analysis);
+      if ($('#studioCurrentStageBadge')) {
+        $('#studioCurrentStageBadge').textContent = 'Completed';
+        $('#studioCurrentStageBadge').className = 'badge success';
+      }
+
+      // Populate preview player
+      const vidEl = $('#studioPreviewVideo');
+      if (vidEl) {
+        vidEl.src = videoUrl;
+        vidEl.load();
+      }
+      const wrapper = $('#studioVideoWrapper');
+      if (wrapper) {
+        wrapper.style.aspectRatio = aspectRatio === '9:16' ? '9/16'
+          : aspectRatio === '1:1' ? '1/1'
+          : aspectRatio === '4:5' ? '4/5'
+          : aspectRatio === '21:9' ? '21/9' : '16/9';
+      }
+
+      // Narration preview (only when narration was requested & generated)
+      const narBox = $('#studioNarrationPreviewBox');
+      if (narrationUrl && statusData.analysis?.narrationScript) {
+        narBox?.classList.remove('hidden');
+        if ($('#studioNarrationTranscript')) {
+          $('#studioNarrationTranscript').textContent = statusData.analysis.narrationScript;
+        }
+        const narAudio = $('#studioNarrationAudio');
+        if (narAudio) narAudio.src = narrationUrl;
+      } else {
+        narBox?.classList.add('hidden');
+      }
+
+      // Scene-level regenerate options when multi-scene
+      const regenSelect = $('#studioRegenSceneSelect');
+      const regenWrap = $('#studioRegenSceneWrap');
+      if (regenSelect && Array.isArray(statusData.scenes) && statusData.scenes.length > 1) {
+        regenSelect.innerHTML = '<option value="all">Regenerate Complete Video</option>' +
+          statusData.scenes.map((sc, i) => `<option value="${i}">Regenerate Scene ${sc.sceneNumber} (${Math.round(sc.durationSec)}s)</option>`).join('');
+        regenWrap?.classList.remove('hidden');
+      } else {
+        regenWrap?.classList.add('hidden');
+      }
+
+      const sceneCount = statusData.scenes?.length || 1;
+      const summaryParts = [
+        `${Math.round(studioState.completed.durationSec)}s`,
+        aspectRatio,
+        sceneCount > 1 ? `${sceneCount} scenes` : '1 scene',
+        statusData.analysis?.narrationRequested ? `Voice (${statusData.analysis.narrationLanguage.toUpperCase()})` : null,
+        statusData.analysis?.musicRequested ? 'Music' : null,
+        statusData.analysis?.sfxRequested ? 'SFX' : null,
+      ].filter(Boolean);
+      if ($('#studioPlanSummaryBadge')) $('#studioPlanSummaryBadge').textContent = summaryParts.join(' • ');
+
+      $('#studioResultCard')?.classList.remove('hidden');
+      $('#studioPreviewHeading')?.focus({ preventScroll: false });
+      announce(`AI video ready. ${summaryParts.join(', ')}. Use Preview Video, Download Video, Edit Video, or Save to Library.`);
+    } catch (err) {
+      const msg = err.message === 'SERVICE_UNAVAILABLE'
+        ? 'Could not reach the AI generation service right now. Check your connection and press Retry Generation.'
+        : err.message;
+      if ($('#studioProgressText')) $('#studioProgressText').textContent = 'Generation stopped: ' + msg;
+      if ($('#studioCurrentStageBadge')) {
+        $('#studioCurrentStageBadge').textContent = 'Error';
+        $('#studioCurrentStageBadge').className = 'badge warning';
+      }
+      $('#btnStudioRetry')?.classList.remove('hidden');
+      announce('Video generation failed: ' + msg, true);
+    } finally {
+      studioState.busy = false;
+      studioState.activeJobId = null;
+      studioState.pollAbort = null;
+      $('#btnStudioGenerate').disabled = false;
+      $('#btnStudioCancel')?.classList.add('hidden');
+    }
+  }
+
+  async function cancelStudioVideoGeneration() {
+    const jobId = studioState.activeJobId;
+    studioState.pollAbort?.abort();
+    if (jobId) {
+      fetchStudioAuthorizedJson(`/api/studio/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).catch(() => {});
+    }
+  }
+
+  async function openCompletedStudioVideoInEditor() {
+    if (!studioState.completed?.videoBlob) {
+      announce('Generate a video first.', true);
+      return;
+    }
+    const comp = studioState.completed;
+    const safeTitle = (comp.analysis?.title || 'ai-studio-video').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) || 'ai-studio-video';
+    const outFile = new File([comp.videoBlob], `${safeTitle}.mp4`, { type: 'video/mp4' });
+    const hasStemTracks = Boolean(comp.narrationBlob || comp.musicBlob || comp.sfxBlob);
+    loadVideoFile(outFile, async () => {
+      project.name = comp.analysis?.title || 'AI Studio Video';
+      // Clear any previous project's audio tracks before attaching this Studio generation's stems
+      for (const node of audioNodes.values()) {
+        try { node.element.pause(); node.source.disconnect(); node.gain.disconnect(); } catch {}
+      }
+      audioNodes.clear();
+      project.clips = [];
+      if (hasStemTracks) {
+        // Mute baked video audio so individual voice-over, music, and SFX tracks can be adjusted independently!
+        project.originalAudio.muted = true;
+        project.originalAudio.volume = 0;
+        if ($('#origVolume')) $('#origVolume').value = '0';
+        if ($('#origVolVal')) $('#origVolVal').textContent = '0%';
+        if ($('#btnMuteOrig')) {
+          $('#btnMuteOrig').textContent = 'Unmute Original';
+          $('#btnMuteOrig').setAttribute('aria-pressed', 'true');
+        }
+        video.muted = true;
+        if (comp.narrationBlob) {
+          const voExt = (comp.narrationBlob.type || '').includes('wav') ? 'wav' : 'mp3';
+          const voFile = new File([comp.narrationBlob], `ai-narration.${voExt}`, { type: comp.narrationBlob.type || 'audio/mpeg' });
+          addAudioFile(voFile, 'voiceover', 0);
+        }
+        if (comp.musicBlob) {
+          const mExt = (comp.musicBlob.type || '').includes('wav') ? 'wav' : 'mp3';
+          const mFile = new File([comp.musicBlob], `ai-background-music.${mExt}`, { type: comp.musicBlob.type || 'audio/mpeg' });
+          addAudioFile(mFile, 'music', 0);
+        }
+        if (comp.sfxBlob) {
+          const sExt = (comp.sfxBlob.type || '').includes('wav') ? 'wav' : 'mp3';
+          const sFile = new File([comp.sfxBlob], `ai-sound-effects.${sExt}`, { type: comp.sfxBlob.type || 'audio/mpeg' });
+          addAudioFile(sFile, 'sfx', 0);
+        }
+      }
+      captionDefaults();
+      if (comp.analysis?.narrationRequested && comp.analysis?.narrationScript) {
+        const dur = project.duration || comp.durationSec || 10;
+        const cues = VoiceCutStudio.cuesFromScript(comp.analysis.narrationScript, dur);
+        if (cues.length) {
+          project.captions = cues;
+          project.captionSettings.burnIn = true;
+          project.captionSettings.preview = true;
+          renderCaptions();
+        }
+      }
+      announce('AI video opened in the VoiceCut editor with editable audio tracks and aligned captions.');
+    });
+  }
+
+  async function saveCompletedStudioVideoToLibrary() {
+    if (!studioState.completed?.videoBlob) {
+      announce('Generate a video first.', true);
+      return;
+    }
+    const comp = studioState.completed;
+    const statusEl = $('#studioActionStatus');
+    try {
+      const safeTitle = (comp.analysis?.title || 'AI Studio Video').trim();
+      const dur = Number(comp.durationSec) || 10;
+      const file = new File([comp.videoBlob], `${safeTitle.replace(/[^a-zA-Z0-9_-]+/g, '-') || 'ai-video'}.mp4`, { type: 'video/mp4' });
+      const cues = (comp.analysis?.narrationRequested && comp.analysis?.narrationScript)
+        ? VoiceCutStudio.cuesFromScript(comp.analysis.narrationScript, dur)
+        : [];
+      const libProject = {
+        id: 'proj_studio_' + Date.now(),
+        name: safeTitle,
+        videoFile: file,
+        videoUrl: null,
+        duration: dur,
+        trimStart: 0,
+        trimEnd: dur,
+        markStart: null,
+        markEnd: null,
+        crop: { preset: 'original', x: 0, y: 0, w: 100, h: 100 },
+        rotation: 0,
+        freezes: [],
+        captions: cues,
+        captionSettings: { preview: true, burnIn: true },
+        segments: [{ id: uid(), start: 0, end: dur, label: 'Full Video' }],
+        speedRanges: [],
+        originalAudio: { volume: 100, muted: false, fadeIn: 0, fadeOut: 0, noiseReduction: 'off' },
+        clips: [],
+        ducking: { enabled: false, level: 30, silenceWait: 0 },
+        playbackSpeed: 1,
+        skipAmount: 5,
+        resolution: '1080',
+        fps: 30,
+        format: 'mp4',
+        exportShape: 'original',
+        created: Date.now(),
+        modified: Date.now(),
+      };
+      await VoiceCutStorage.save(libProject);
+      renderHomeRecent();
+      const msg = `Saved "${safeTitle}" to your Library.`;
+      if (statusEl) statusEl.textContent = msg;
+      announce(msg);
+    } catch (e) {
+      const msg = 'Could not save to library: ' + e.message;
+      if (statusEl) statusEl.textContent = msg;
+      announce(msg, true);
+    }
+  }
+
   async function buildGeneratedClip({
-    model = 'auto',
     prompt,
     aspectRatio,
     durationSec,
     startImageFile,
     startImageEl,
-    includeSceneAudio = true,
-    sfxModel = 'auto',
-    sfxPrompt = '',
-    includeMusic = false,
-    musicModel = 'auto',
-    musicPrompt = '',
-    voiceLang = 'none',
-    voiceGender = 'female',
-    ttsModel = 'auto',
-    narrationText = '',
     consent,
     onStatus,
-    onProgress,
   }) {
     const cleanPrompt = String(prompt || '').trim();
-    if (!cleanPrompt) throw new Error('Enter a visual scene description first.');
-    if (!consent) throw new Error('Check the consent box to send your prompt to the AI generator.');
-    const targetSec = Math.max(4, Math.min(15, Number(durationSec) || 8));
-    const hasNarration = Boolean(narrationText && String(narrationText).trim() && voiceLang && voiceLang !== 'none');
+    if (!cleanPrompt) throw new Error('Enter a description for the video scene first.');
+    if (!consent) throw new Error('Allow AI processing permission to generate this clip.');
+    const targetSec = Math.max(4, Math.min(180, Number(durationSec) || 10));
 
     let imageDataUrl = null;
     if (startImageFile) imageDataUrl = await fileToDataUrl(startImageFile);
@@ -4248,94 +4758,45 @@
       imageDataUrl = c.toDataURL('image/jpeg', 0.88);
     }
 
-    const audioDesc = [
-      includeSceneAudio ? 'synchronized scene SFX' : '',
-      includeMusic ? 'AI music' : '',
-      hasNarration ? 'multilingual voice' : '',
-    ].filter(Boolean);
-    onStatus?.(audioDesc.length
-      ? `Generating AI video + ${audioDesc.join(' + ')}… This can take 45 to 120 seconds.`
-      : 'Generating AI motion video… This can take 30 to 90 seconds.');
-    onProgress?.(25);
-
-    const vidBlob = await requestServerJson('/api/generate-video', {
-      model: model || 'auto',
+    onStatus?.('Analyzing continuation prompt and generating AI scene…');
+    const vidBlob = await requestServerJson('/api/studio/generate', {
       prompt: cleanPrompt,
+      mode: imageDataUrl ? 'image-to-video' : 'text-to-video',
       aspectRatio,
       duration: targetSec,
       imageDataUrl,
-      includeSceneAudio: Boolean(includeSceneAudio),
-      sfxModel: sfxModel || 'auto',
-      sfxPrompt: String(sfxPrompt || '').trim(),
-      includeMusic: Boolean(includeMusic),
-      musicModel: musicModel || 'auto',
-      musicPrompt: String(musicPrompt || '').trim(),
-      voiceLanguage: hasNarration ? voiceLang : 'none',
-      voiceGender: voiceGender || 'female',
-      ttsModel: ttsModel || 'auto',
-      narrationText: hasNarration ? String(narrationText).trim() : '',
-    }, { timeoutMs: 360000, uploadConsent: Boolean(imageDataUrl) });
+    }, { timeoutMs: 420000, uploadConsent: Boolean(imageDataUrl) });
 
-    onProgress?.(92);
-    let actualDur = targetSec;
+    let planMeta = null;
+    try {
+      const rawHdr = lastResponseHeaders?.get?.('x-studio-plan');
+      if (rawHdr) planMeta = JSON.parse(atob(rawHdr));
+    } catch {}
+
+    let actualDur = planMeta?.durationSec || targetSec;
     try {
       const decoded = await decodeAudioFile(vidBlob);
       if (decoded?.duration > 0.5) actualDur = decoded.duration;
     } catch {}
-    const cues = hasNarration ? VoiceCutStudio.cuesFromScript(narrationText, actualDur) : [];
-    onProgress?.(100);
-    return { videoBlob: vidBlob, narration: null, cues, embeddedNarration: hasNarration };
+    const cues = (planMeta?.narrationRequested && planMeta?.narrationScript)
+      ? VoiceCutStudio.cuesFromScript(planMeta.narrationScript, actualDur)
+      : [];
+    return { videoBlob: vidBlob, narration: null, cues, embeddedNarration: Boolean(cues.length) };
   }
 
-  async function runGenerateVideoFlow() {
-    const statusEl = $('#genVideoStatus');
-    const prog = $('#genVideoProgress');
-    try {
-      prog.style.display = 'block'; prog.value = 5;
-      const model = $('#genVideoModel')?.value || 'auto';
-      const aspectRatio = $('#genVideoAspect')?.value || '16:9';
-      const durationSec = Number($('#genVideoDuration')?.value || 8);
-      const prompt = $('#genVideoPrompt')?.value || '';
-      const startImageFile = $('#genVideoStartImage')?.files?.[0] || null;
-      const includeSceneAudio = Boolean($('#genVideoSceneAudio')?.checked);
-      const sfxModel = $('#genVideoSfxModel')?.value || 'auto';
-      const sfxPrompt = ($('#genVideoSfxPrompt')?.value || '').trim();
-      const includeMusic = Boolean($('#genVideoMusic')?.checked);
-      const musicModel = $('#genVideoMusicModel')?.value || 'auto';
-      const musicPrompt = ($('#genVideoMusicPrompt')?.value || '').trim();
-      const voiceLang = $('#genVideoVoiceLang')?.value || 'none';
-      const voiceGender = $('#genVideoVoiceGender')?.value || 'female';
-      const ttsModel = $('#genVideoTtsModel')?.value || 'auto';
-      const narrationText = ($('#genVideoNarration')?.value || '').trim();
-      const consent = Boolean($('#genVideoConsent')?.checked);
-
-      announce('Generating AI video with synchronized audio. Please wait.');
-      const res = await buildGeneratedClip({
-        model, prompt, aspectRatio, durationSec, startImageFile,
-        includeSceneAudio, sfxModel, sfxPrompt,
-        includeMusic, musicModel, musicPrompt,
-        voiceLang, voiceGender, ttsModel, narrationText, consent,
-        onStatus: (t) => { statusEl.textContent = t; },
-        onProgress: (p) => { prog.value = p; },
-      });
-      const ext = (res.videoBlob.type || '').includes('mp4') ? 'mp4' : 'webm';
-      const outFile = new File([res.videoBlob], `ai-video-${Date.now()}.${ext}`, { type: res.videoBlob.type || 'video/mp4' });
-      closeHomeStudioPanels();
-      loadVideoFile(outFile, async () => {
-        captionDefaults();
-        if (res.cues?.length) {
-          project.captions = res.cues;
-          project.captionSettings.burnIn = true;
-          project.captionSettings.preview = true;
-        }
-        announce('AI video opened in the editor with synchronized sound. Captions are aligned on word boundaries. Noise reduction stays off unless you turn it on.');
-      });
-    } catch (e) {
-      const m = e.message === 'SERVICE_UNAVAILABLE'
-        ? 'Could not reach the AI service right now. Check your connection and try again in a moment.'
-        : 'Video generation stopped: ' + e.message;
-      statusEl.textContent = m; announce(m, true);
-    } finally { prog.style.display = 'none'; }
+  function openAiVideoStudioWorkspace(options = {}) {
+    closeHomeStudioPanels();
+    if (options.mode) setStudioCreationMode(options.mode, true);
+    if (options.imageFile) setStudioReferenceImage(options.imageFile);
+    if (options.aspectRatio && $('#studioAspectRatio')) {
+      if ([...$('#studioAspectRatio').options].some(o => o.value === options.aspectRatio)) {
+        $('#studioAspectRatio').value = options.aspectRatio;
+      }
+    }
+    if (options.prompt && $('#studioPromptInput') && !$('#studioPromptInput').value) {
+      $('#studioPromptInput').value = options.prompt;
+    }
+    location.hash = '#/studio' + hashQuery();
   }
 
   async function captureLastVideoFrameElement() {
@@ -4364,13 +4825,9 @@
     if (!prompt) { const m = 'Describe what happens in the next clip first.'; statusEl.textContent = m; announce(m, true); return; }
     try {
       const w = video.videoWidth || 1280, h = video.videoHeight || 720;
-      const aspectRatio = Math.abs(w - h) < 80 ? '1:1' : h > w ? '9:16' : '16:9';
-      const model = $('#extendVideoModel')?.value || 'auto';
-      const durationSec = Number($('#extendVideoDuration')?.value || 8);
-      const voiceLang = $('#extendVoiceLang')?.value || 'none';
-      const narrationText = ($('#extendNarration')?.value || '').trim();
-      const includeSceneAudio = Boolean($('#extendSceneAudio')?.checked);
-      const includeMusic = Boolean($('#extendMusic')?.checked);
+      const ratio = w / Math.max(1, h);
+      const aspectRatio = ratio > 2.0 ? '21:9' : ratio > 1.3 ? '16:9' : ratio < 0.65 ? '9:16' : ratio < 0.9 ? '4:5' : '1:1';
+      const durationSec = Number($('#extendVideoDuration')?.value || 10);
 
       statusEl.textContent = 'Capturing final frame of current clip…';
       announce('Extending video. Capturing last frame and generating continuation clip.');
@@ -4379,9 +4836,7 @@
       const existingCaptions = Array.isArray(project.captions) ? project.captions.slice() : [];
 
       const nextClip = await buildGeneratedClip({
-        model, prompt, aspectRatio, durationSec, startImageEl: lastFrameImg,
-        includeSceneAudio, includeMusic,
-        voiceLang, voiceGender: 'female', narrationText, consent: true,
+        prompt, aspectRatio, durationSec, startImageEl: lastFrameImg, consent: true,
         onStatus: (t) => { statusEl.textContent = t; },
       });
       const nextFile = new File([nextClip.videoBlob], `continuation-${Date.now()}.mp4`, { type: 'video/mp4' });
@@ -4678,9 +5133,94 @@
     $('#btnCloseVideoToAudio')?.addEventListener('click', closeHomeStudioPanels);
     $('#btnRunVideoToAudio')?.addEventListener('click', ()=>extractAudioFromVideoBlob($('#v2aVideoInput')?.files?.[0], false, $('#v2aStatus')));
 
-    $('#homeGenerateVideo')?.addEventListener('click', ()=>openHomeStudioPanel('#generateVideoPanel', '#genVideoHeading'));
-    $('#btnCloseGenerateVideo')?.addEventListener('click', closeHomeStudioPanels);
-    $('#btnRunGenerateVideo')?.addEventListener('click', runGenerateVideoFlow);
+    $('#homeGenerateVideo')?.addEventListener('click', ()=>openAiVideoStudioWorkspace());
+    $('#btnStudioBackHome')?.addEventListener('click', ()=>{ location.hash='#/home'+hashQuery(); });
+
+    // AI Video Creation Studio Workspace events
+    $('#studioModeTextBtn')?.addEventListener('click', ()=>setStudioCreationMode('text-to-video'));
+    $('#studioModeImageBtn')?.addEventListener('click', ()=>setStudioCreationMode('image-to-video'));
+    $('#btnStudioUploadImage')?.addEventListener('click', ()=>$('#studioImageInput')?.click());
+    $('#btnStudioReplaceImage')?.addEventListener('click', ()=>$('#studioImageInput')?.click());
+    $('#btnStudioRemoveImage')?.addEventListener('click', clearStudioReferenceImage);
+    $('#studioImageInput')?.addEventListener('change', (e)=>{
+      const f = e.target.files?.[0];
+      if (f) setStudioReferenceImage(f);
+    });
+    $('#studioDuration')?.addEventListener('change', (e)=>{
+      const isCustom = e.target.value === 'custom';
+      $('#studioCustomDurationWrap')?.classList.toggle('hidden', !isCustom);
+      if (isCustom) $('#studioCustomDuration')?.focus();
+    });
+    $('#btnStudioGenerate')?.addEventListener('click', ()=>startStudioVideoGeneration());
+    $('#btnStudioCancel')?.addEventListener('click', cancelStudioVideoGeneration);
+    $('#btnStudioRetry')?.addEventListener('click', ()=>{
+      startStudioVideoGeneration({ resumeJobId: studioState.lastFailedJobId || null });
+    });
+
+    // Studio Preview Player controls
+    const studioVid = $('#studioPreviewVideo');
+    if (studioVid) {
+      studioVid.addEventListener('loadedmetadata', updateStudioPreviewControls);
+      studioVid.addEventListener('timeupdate', updateStudioPreviewControls);
+      studioVid.addEventListener('play', updateStudioPreviewControls);
+      studioVid.addEventListener('pause', updateStudioPreviewControls);
+      studioVid.addEventListener('ended', updateStudioPreviewControls);
+    }
+    $('#btnStudioPlayPause')?.addEventListener('click', ()=>{
+      const vid = $('#studioPreviewVideo');
+      if (!vid || !vid.src) { announce('No generated video to play yet.', true); return; }
+      if (vid.paused || vid.ended) vid.play().catch(()=>{});
+      else vid.pause();
+    });
+    $('#studioSeekSlider')?.addEventListener('input', (e)=>{
+      const vid = $('#studioPreviewVideo');
+      if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 0) return;
+      vid.currentTime = (Number(e.target.value) / 100) * vid.duration;
+      updateStudioPreviewControls();
+    });
+    $('#studioVolumeSlider')?.addEventListener('input', (e)=>{
+      const vid = $('#studioPreviewVideo');
+      if (!vid) return;
+      vid.volume = Math.max(0, Math.min(1, Number(e.target.value) / 100));
+      vid.muted = vid.volume === 0;
+    });
+    $('#btnStudioFullscreen')?.addEventListener('click', ()=>{
+      const wrap = $('#studioVideoWrapper') || $('#studioPreviewVideo');
+      if (!wrap) return;
+      if (document.fullscreenElement) document.exitFullscreen?.();
+      else wrap.requestFullscreen?.().catch(()=>{});
+    });
+
+    // Studio Result Actions: Download, Edit, Save to Library, Regenerate (with confirmation!)
+    $('#btnStudioDownload')?.addEventListener('click', ()=>{
+      if (!studioState.completed?.videoBlob) { announce('Generate a video first.', true); return; }
+      const safe = (studioState.completed.analysis?.title || 'voicecut-ai-video').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) || 'voicecut-ai-video';
+      deliverFileToUser(studioState.completed.videoBlob, `${safe}.mp4`, 'mp4', $('#studioActionStatus'), 'MP4 video');
+    });
+    $('#btnStudioEdit')?.addEventListener('click', openCompletedStudioVideoInEditor);
+    $('#btnStudioSaveLibrary')?.addEventListener('click', saveCompletedStudioVideoToLibrary);
+    $('#btnStudioRegenerate')?.addEventListener('click', ()=>{
+      if (!studioState.completed) {
+        startStudioVideoGeneration();
+        return;
+      }
+      const selVal = $('#studioRegenSceneSelect')?.value || 'all';
+      const isSingleScene = selVal !== 'all' && Number.isInteger(Number(selVal));
+      const sceneNum = isSingleScene ? Number(selVal) + 1 : null;
+      const confirmText = isSingleScene
+        ? `Regenerate Scene ${sceneNum} and update the video? Your other completed scenes will be preserved.`
+        : 'Regenerating will replace your current generated video preview. Continue?';
+      showConfirm(confirmText, ()=>{
+        if (isSingleScene) {
+          startStudioVideoGeneration({
+            resumeJobId: studioState.completed.jobId,
+            regenerateSceneIndex: Number(selVal),
+          });
+        } else {
+          startStudioVideoGeneration();
+        }
+      });
+    });
 
     $('#homeGenerateImage')?.addEventListener('click', ()=>openHomeStudioPanel('#generateImagePanel', '#genImageHeading'));
     $('#btnCloseGenerateImage')?.addEventListener('click', closeHomeStudioPanels);
@@ -4698,14 +5238,15 @@
     $('#btnAnimateGenImage')?.addEventListener('click', ()=>{
       if (!lastGeneratedPngBlob) return;
       const aspect=$('#genImageAspect')?.value||'16:9';
-      const prompt=$('#genImagePrompt')?.value||'Gentle cinematic camera movement';
+      const prompt=$('#genImagePrompt')?.value||'';
       const file=new File([lastGeneratedPngBlob], 'generated-frame.png', {type:'image/png'});
-      const dt=typeof DataTransfer==='function'?new DataTransfer():null;
-      if (dt && $('#genVideoStartImage')) { dt.items.add(file); $('#genVideoStartImage').files=dt.files; }
-      if ($('#genVideoAspect') && ['16:9','9:16','1:1'].includes(aspect)) $('#genVideoAspect').value=aspect;
-      if ($('#genVideoPrompt') && !$('#genVideoPrompt').value) $('#genVideoPrompt').value=prompt;
-      openHomeStudioPanel('#generateVideoPanel', '#genVideoHeading');
-      announce('Image loaded into Generate Video. Choose duration and voice narration, then press Generate Video.');
+      openAiVideoStudioWorkspace({
+        mode: 'image-to-video',
+        imageFile: file,
+        aspectRatio: aspect,
+        prompt,
+      });
+      announce('Image loaded into AI Video Studio in Image to Video mode. Describe your video and press Generate AI Video.');
     });
 
     // Editor Extend Video, Merge Another Clip, Extract Audio, AI Voice-over, AI Music & AI SFX

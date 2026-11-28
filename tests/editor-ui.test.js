@@ -343,23 +343,42 @@ test('caption overlay CSS and renderer protect word boundaries and Indic scripts
   assert.match(cap,/function inspectCues/,'pre-export subtitle inspector exported');
 });
 
-test('home screen and editor offer Audio to Video, Video to Audio, Generate Video (with Model Pickers, Scene SFX & Music, no Instant Storyboard), Extend Video, and Image/Thumbnail/Logo Studio',()=>{
+test('home screen, AI Video Studio workspace, and editor offer unified prompt video creation, multi-scene durations up to 2 minutes, 5 aspect ratios, and all Creative Studio tools',()=>{
   const html = fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
   const studio = fs.readFileSync(path.join(__dirname,'../web/studio.js'),'utf8');
   const app = fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
   for (const id of [
     'homeAudioToVideo','homeVideoToAudio','homeGenerateVideo','homeGenerateImage',
-    'audioToVideoPanel','videoToAudioPanel','generateVideoPanel','generateImagePanel',
-    'genVideoModel','genVideoSceneAudio','genVideoSfxModel','genVideoMusic','genVideoMusicModel','genVideoTtsModel',
-    'genImageModel','extendVideoModel','aiVoModel','btnOpenAiMusic','aiMusicModel','btnOpenAiSfx','aiSfxModel',
+    'audioToVideoPanel','videoToAudioPanel','generateImagePanel',
+    'studioScreen','studioModeTextBtn','studioModeImageBtn','btnStudioUploadImage','studioPromptInput',
+    'studioAspectRatio','studioDuration','studioCustomDuration','studioVoiceGender','studioVoiceStyle',
+    'btnStudioGenerate','btnStudioCancel','btnStudioRetry','studioProgressCard','studioResultCard',
+    'studioPreviewVideo','btnStudioPlayPause','studioSeekSlider','studioVolumeSlider','btnStudioFullscreen',
+    'btnStudioDownload','btnStudioEdit','btnStudioSaveLibrary','btnStudioRegenerate',
+    'genImageModel','aiVoModel','btnOpenAiMusic','aiMusicModel','btnOpenAiSfx','aiSfxModel',
     'btnExtendVideo','btnAppendVideoFile','btnExtractVideoAudio','btnOpenAiVoiceover',
   ]) {
     assert.match(html, new RegExp(`id="${id}"`), 'missing UI element '+id);
   }
-  for (const d of ['5','8','10','15']) {
+  // Exact unified prompt box label & placeholder, with NO separate narration/sound/music prompt inputs in Video Generate AI
+  assert.match(html, /<label[^>]*for="studioPromptInput"[^>]*>Describe Your Video<\/label>/, 'unified prompt label');
+  assert.match(
+    html,
+    /Describe the video you want to create\. Include the story, scenes, camera movements, narration, language, background music, sound effects, atmosphere, and any other creative instructions\./,
+    'exact unified prompt placeholder'
+  );
+  assert.doesNotMatch(html, /id="genVideoNarration"/, 'separate narration script box removed from Video Generate AI');
+  assert.doesNotMatch(html, /id="genVideoSfxPrompt"/, 'separate sound prompt box removed from Video Generate AI');
+  assert.doesNotMatch(html, /id="genVideoMusicPrompt"/, 'separate music prompt box removed from Video Generate AI');
+  assert.doesNotMatch(html, /id="genVideoPrompt"/, 'old duplicate video prompt box removed');
+  assert.match(html, /AI Model:\s*Auto/, 'AI Model: Auto displayed clearly');
+
+  for (const d of ['6','10','15','30','60','90']) {
     assert.match(html, new RegExp(`<option value="${d}"[^>]*>${d} seconds</option>`), 'duration '+d+'s offered');
   }
-  for (const ar of ['16:9','9:16','1:1']) {
+  assert.match(html, /<option value="120"[^>]*>2 minutes<\/option>/, '2-minute duration offered');
+  assert.match(html, /<option value="custom"[^>]*>Custom duration<\/option>/, 'custom duration offered');
+  for (const ar of ['16:9','9:16','1:1','4:5','21:9']) {
     assert.ok(html.includes(`value="${ar}"`), 'aspect ratio '+ar+' offered');
   }
   // Instant Storyboard must be completely removed
