@@ -381,6 +381,14 @@ test('home screen, AI Video Studio workspace, and editor offer unified prompt vi
   for (const ar of ['16:9','9:16','1:1','4:5','21:9']) {
     assert.ok(html.includes(`value="${ar}"`), 'aspect ratio '+ar+' offered');
   }
+  // Voice Style defaults to Auto (From Prompt), removes Natural, and offers rich expressive narration tones
+  const voiceStyleSelect = html.match(/<select[^>]*id="studioVoiceStyle"[^>]*>([\s\S]*?)<\/select>/)?.[1] || '';
+  assert.match(voiceStyleSelect, /<option value="auto" selected>Auto \(From Prompt\)<\/option>/, 'Voice Style defaults to Auto');
+  assert.doesNotMatch(voiceStyleSelect, /value="natural"/i, 'Natural removed from Voice Style');
+  for (const st of ['cinematic','epic','intense','serious','sad','emotional','professional','documentary','storytelling','calm','excited']) {
+    assert.match(voiceStyleSelect, new RegExp(`value="${st}"`), 'voice style '+st+' offered');
+  }
+  assert.match(studio, /function analyzeCreativePromptLocally/, 'local prompt analyzer & fallback planner exported');
   // Instant Storyboard must be completely removed
   assert.doesNotMatch(html, /Instant AI Storyboard/i, 'Instant Storyboard removed from HTML');
   assert.doesNotMatch(app, /Storyboard/i, 'Storyboard removed from app.js');

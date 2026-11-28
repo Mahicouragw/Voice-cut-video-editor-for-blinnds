@@ -348,6 +348,203 @@
     return new Blob(chunks, { type: rec.mimeType || 'video/webm' });
   }
 
+  // Client-side prompt analyzer (shared fallback when older backend lacks /api/studio/jobs)
+  const CLIENT_LANG_RULES = [
+    { code: 'te', words: /\b(telugu|తెలుగు)\b/i, script: /[\u0C00-\u0C7F]/ },
+    { code: 'hi', words: /\b(hindi|हिन्दी|हिंदी)\b/i, script: /[\u0900-\u097F]/ },
+    { code: 'ta', words: /\b(tamil|தமிழ்)\b/i, script: /[\u0B80-\u0BFF]/ },
+    { code: 'kn', words: /\b(kannada|ಕನ್ನಡ)\b/i, script: /[\u0C80-\u0CFF]/ },
+    { code: 'ml', words: /\b(malayalam|മലയാളം)\b/i, script: /[\u0D00-\u0D7F]/ },
+    { code: 'mr', words: /\b(marathi|मराठी)\b/i, script: null },
+    { code: 'bn', words: /\b(bengali|bangla|বাংলা)\b/i, script: /[\u0980-\u09FF]/ },
+    { code: 'gu', words: /\b(gujarati|ગુજરાતી)\b/i, script: /[\u0A80-\u0AFF]/ },
+    { code: 'ur', words: /\b(urdu|اردو)\b/i, script: null },
+    { code: 'es', words: /\b(spanish|español)\b/i, script: null },
+    { code: 'fr', words: /\b(french|français)\b/i, script: null },
+    { code: 'de', words: /\b(german|deutsch)\b/i, script: null },
+    { code: 'ar', words: /\b(arabic|العربية)\b/i, script: /[\u0600-\u06FF]/ },
+    { code: 'zh', words: /\b(chinese|mandarin|中文)\b/i, script: /[\u4E00-\u9FFF]/ },
+    { code: 'ja', words: /\b(japanese|日本語)\b/i, script: /[\u3040-\u30FF]/ },
+    { code: 'ko', words: /\b(korean|한국어)\b/i, script: /[\uAC00-\uD7AF]/ },
+  ];
+
+  function analyzeCreativePromptLocally({
+    prompt = '',
+    mode = 'text-to-video',
+    aspectRatio = '16:9',
+    durationSec = 10,
+    voiceLanguage = 'auto',
+    voiceGender = 'auto',
+    voiceStyle = 'auto',
+    voicePreference = 'auto',
+    musicPreference = 'auto',
+    sfxPreference = 'auto',
+  } = {}) {
+    const text = String(prompt || '').trim();
+    const dur = Math.max(4, Math.min(180, Math.round(Number(durationSec) || 10)));
+
+    let lang = voiceLanguage && voiceLanguage !== 'auto' && voiceLanguage !== 'none' ? voiceLanguage : '';
+    if (!lang) {
+      for (const r of CLIENT_LANG_RULES) { if (r.words && r.words.test(text)) { lang = r.code; break; } }
+    }
+    if (!lang) {
+      for (const r of CLIENT_LANG_RULES) { if (r.script && r.script.test(text)) { lang = r.code; break; } }
+    }
+    if (!lang) lang = 'en';
+
+    let gender = voiceGender && voiceGender !== 'auto' ? voiceGender : '';
+    if (!gender) {
+      if (/\b(male|man|boy|gentleman|deep voice|baritone)\b|పురుష|पुरुष|ஆண்/i.test(text)) gender = 'male';
+      else gender = 'female';
+    }
+
+    let style = voiceStyle && voiceStyle !== 'auto' ? voiceStyle : '';
+    if (!style) {
+      if (/\b(epic|heroic|legendary|grand|trailer|blockbuster)\b/i.test(text)) style = 'epic';
+      else if (/\b(intense|urgent|fierce|powerful|thrilling|suspense|dramatic)\b/i.test(text)) style = 'intense';
+      else if (/\b(sad|sadness|sorrow|somber|melanchol(?:y|ic)|grief|tragic|heartbreak)\b/i.test(text)) style = 'sad';
+      else if (/\b(serious|grave|solemn|stern|authoritative)\b/i.test(text)) style = 'serious';
+      else if (/\b(emotional|heartfelt|devotional|worship|touching|moving)\b/i.test(text)) style = 'emotional';
+      else if (/\b(cinematic|film|movie)\b/i.test(text)) style = 'cinematic';
+      else if (/\b(documentary|educational|informative|history)\b/i.test(text)) style = 'documentary';
+      else if (/\b(professional|corporate|clear|news|presenter)\b/i.test(text)) style = 'professional';
+      else if (/\b(storytelling|story|narrative|fable)\b/i.test(text)) style = 'storytelling';
+      else if (/\b(calm|peaceful|serene|meditative|gentle|soothing)\b/i.test(text)) style = 'calm';
+      else if (/\b(excited|energetic|inspiring|motivational|uplifting)\b/i.test(text)) style = 'excited';
+      else style = 'auto';
+    }
+
+    const noNarration = voicePreference === 'off'
+      || /\b(no\s+(?:voice|narration|voiceover|voice-over|speech|dialogue|talking)|without\s+(?:voice|narration|voiceover|voice-over|speech|talking)|silent\s+video|visuals?\s+only|instrumental\s+only|mute\s+voice)\b/i.test(text);
+    const narrationRequested = !noNarration && (
+      voicePreference === 'on'
+      || /\b(narrat(?:e|ion|or)|voice[-\s]?over|voice\s+narration|male\s+voice|female\s+voice|speak(?:ing)?|explaining|explain\s+about|tell(?:ing)?\s+the\s+story|say(?:ing)?|monologue|dialogue|commentary)\b/i.test(text)
+      || /(?:వివరిస్తూ|వాయిస్|కథనం|చెబుతూ|आवाज़|वर्णन|कहानी|குரல்|விவரிப்பு)/i.test(text)
+    );
+
+    const noMusic = musicPreference === 'off'
+      || /\b(no\s+(?:background\s+)?music|without\s+(?:background\s+)?music|music[-\s]?free|no\s+soundtrack|no\s+bgm)\b/i.test(text);
+    const musicRequested = !noMusic && (
+      musicPreference === 'on'
+      || /\b(music|soundtrack|score|bgm|orchestral|instrumental|melody|piano|flute|strings|violin|guitar|ambient\s+music|worship\s+video|devotional\s+music|peaceful\s+atmospheric\s+music|background\s+score)\b/i.test(text)
+    );
+
+    const noSfx = sfxPreference === 'off'
+      || /\b(no\s+(?:sound\s+effects?|sfx|foley|ambient\s+sounds?)|without\s+(?:sound\s+effects?|sfx|ambient\s+sounds?)|completely\s+silent)\b/i.test(text);
+    const sfxRequested = !noSfx && (
+      sfxPreference === 'on'
+      || /\b(sound\s+effects?|sfx|foley|ambient\s+sound|natural\s+sound|environmental\s+sound|birds?|wind|breeze|rain|thunder|waves?|ocean|water|river|waterfall|footsteps|fire|crowd|traffic)\b/i.test(text)
+    );
+
+    const cleanSubject = text
+      .replace(/\b(add|include|with|featuring)\s+[^.;!\n]*?\b(narration|voice[-\s]?over|voice|background\s+music|sound\s+effects?|sfx)\b[^.;!\n]*([.;!]|$)/gi, ' ')
+      .replace(/\b(no|without)\s+(?:background\s+)?(?:music|narration|voice[-\s]?over|sound\s+effects?)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || text;
+
+    let narrationScript = '';
+    if (narrationRequested) {
+      const quoted = /["“”]([^"“”]{6,600})["“”]/.exec(text);
+      const langRule = CLIENT_LANG_RULES.find(l => l.code === lang);
+      if (quoted && (!langRule?.script || langRule.script.test(quoted[1]))) {
+        narrationScript = quoted[1].trim();
+      } else if (lang === 'te') {
+        const teLines = [
+          'ప్రకృతి అందాలను మరియు అద్భుతమైన దృశ్యాలను ఇప్పుడు మనం చూస్తున్నాము.',
+          'ప్రతి దృశ్యం ప్రశాంతతను, సహజమైన జీవన సౌందర్యాన్ని కళ్ళకు కట్టినట్లు చూపిస్తుంది.',
+          'ఈ మధురమైన వాతావరణం మనసుకు ఎంతో ఆనందాన్ని మరియు నూతన ఉత్సాహాన్ని అందిస్తుంది.',
+          'ఈ అందమైన ప్రయాణంలో ప్రతి క్షణం ఒక మరపురాని అనుభూతిగా నిలిచిపోతుంది.',
+        ];
+        narrationScript = teLines.slice(0, Math.max(1, Math.min(teLines.length, Math.round(dur / 6)))).join(' ');
+      } else if (lang === 'hi') {
+        const hiLines = [
+          'आइए इस सुंदर दृश्य और इसके शांत वातावरण का अनुभव करें।',
+          'हर पल अपनी प्राकृतिक सुंदरता और गहरी भावनाओं के साथ जीवंत हो उठता है।',
+          'यह यात्रा मन को सुकून और नई प्रेरणा से भर देती है।',
+        ];
+        narrationScript = hiLines.slice(0, Math.max(1, Math.min(hiLines.length, Math.round(dur / 6)))).join(' ');
+      } else {
+        const topic = cleanSubject
+          .replace(/^(create|make|generate|produce|build)\s+(a|an|the)?\s*(\d+\s*(?:second|sec|s|minute|min)s?\s*)?/i, '')
+          .replace(/\b(video|clip|film|footage)\s+(about|of|showing|on)\s+/i, '')
+          .trim().slice(0, 140) || 'this story';
+        const enByStyle = {
+          epic: [
+            `Across vast horizons, the legend of ${topic} rises with unstoppable power.`,
+            `Every shadow and every spark builds toward a defining moment of destiny.`,
+            `Witness a breathtaking journey forged in courage and awe.`,
+          ],
+          intense: [
+            `Every second counts as ${topic} unfolds with gripping intensity.`,
+            `Tension sharpens in every movement, driving straight toward the turning point.`,
+            `Nothing holds back when the moment arrives.`,
+          ],
+          sad: [
+            `In quiet reflection, memories of ${topic} linger softly in the stillness.`,
+            `Each fleeting frame carries a gentle ache of time passing by.`,
+            `Even in sorrow, beauty remains quietly unbroken.`,
+          ],
+          serious: [
+            `Here is a focused look at ${topic}, where every detail carries weight and meaning.`,
+            `Step by step, the reality of the moment comes clearly into view.`,
+          ],
+          emotional: [
+            `Feel the heartfelt story of ${topic}, where light and emotion meet in harmony.`,
+            `Every moment speaks gently to the spirit, leaving a lasting impression.`,
+          ],
+        };
+        const pool = enByStyle[style] || [
+          `Experience ${topic}, captured with rich atmosphere and cinematic detail.`,
+          `Each scene unfolds smoothly, revealing the depth and beauty of the moment.`,
+          `Every detail comes together in a vivid, memorable visual story.`,
+          `Stay with this journey as light, motion, and sound unite seamlessly.`,
+        ];
+        narrationScript = pool.slice(0, Math.max(1, Math.min(pool.length, Math.round(dur / 6)))).join(' ');
+      }
+    }
+
+    const idealClipSec = dur <= 10 ? dur : 8;
+    const sceneCount = mode === 'image-to-video' && dur <= 12 && !/\b(multiple\s+scenes|next\s+scene|sequence)\b/i.test(text)
+      ? 1
+      : Math.max(1, Math.min(12, Math.ceil(dur / idealClipSec)));
+    const perSceneSec = Number((dur / sceneCount).toFixed(2));
+    const cameraArcs = [
+      'establishing wide cinematic shot, smooth push-in camera motion',
+      'fluid tracking medium shot following the main subject',
+      'intimate close-up shot with shallow depth of field',
+      'sweeping elevated camera glide revealing surrounding atmosphere',
+    ];
+    const scenes = Array.from({ length: sceneCount }, (_, i) => ({
+      index: i,
+      sceneNumber: i + 1,
+      durationSec: perSceneSec,
+      providerDurationSec: Math.max(5, Math.min(12, Math.ceil(perSceneSec))),
+      cameraMovement: cameraArcs[i % cameraArcs.length],
+      visualPrompt: sceneCount === 1
+        ? `${cleanSubject}, ${cameraArcs[0]}, cinematic lighting, photorealistic`
+        : `Scene ${i + 1} of ${sceneCount}: ${cleanSubject}. ${cameraArcs[i % cameraArcs.length]}, cohesive cinematic lighting`,
+    }));
+
+    return {
+      analysis: {
+        title: cleanSubject.split(/\s+/).slice(0, 5).join(' ').slice(0, 48) || 'AI Studio Video',
+        mode,
+        aspectRatio,
+        requestedDurationSec: dur,
+        narrationRequested,
+        narrationLanguage: lang,
+        voiceGender: gender,
+        voiceStyle: style,
+        narrationScript,
+        musicRequested,
+        musicPrompt: musicRequested ? `Instrumental cinematic background score matching: ${cleanSubject.slice(0, 180)}` : '',
+        sfxRequested,
+        sfxPrompt: sfxRequested ? `Realistic environmental sound effects for: ${cleanSubject.slice(0, 180)}` : '',
+      },
+      scenes,
+    };
+  }
+
   const api = {
     ASPECT_RATIOS,
     dimensionsForAspect,
@@ -355,6 +552,7 @@
     cuesFromScript,
     drawStudioFrame,
     renderAudioVisualizerVideo,
+    analyzeCreativePromptLocally,
   };
   root.VoiceCutStudio = api;
   if (typeof module !== 'undefined') module.exports = api;

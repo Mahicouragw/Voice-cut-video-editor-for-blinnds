@@ -427,6 +427,7 @@ function createApp(options={}) {
               text:String(body.narrationText).trim(),
               language:body.voiceLanguage||'en',
               gender:body.voiceGender||'female',
+              style:body.voiceStyle||'auto',
               model:body.ttsModel||'auto',
             },signal);
             signal.throwIfAborted();
@@ -526,6 +527,7 @@ function createApp(options={}) {
           text:body.text,
           language:body.language,
           gender:body.gender,
+          style:body.style||'auto',
           model:body.model||'auto',
         },signal);
         signal.throwIfAborted();
@@ -637,8 +639,8 @@ function createApp(options={}) {
       id:jobId,
       createdAt:Date.now(),
       status:'running',
-      stage:'analyzing',
-      stageLabel:'Analyzing Creative Prompt',
+      stage:'planning',
+      stageLabel:'Planning Video Scenes',
       sceneIndex:0,
       sceneCount:parentJob?.plan?.scenes?.length||1,
       analysis:parentJob?.analysis||null,

@@ -131,12 +131,18 @@ class PromptAnalyzer {
     }
     let style = voiceStyle && voiceStyle !== 'auto' ? voiceStyle : null;
     if (!style) {
-      if (/\b(documentary|educational|informative)\b/i.test(text)) style = 'documentary';
-      else if (/\b(emotional|heartfelt|devotional|worship|touching)\b/i.test(text)) style = 'emotional';
-      else if (/\b(cinematic|epic|dramatic|trailer)\b/i.test(text)) style = 'cinematic';
-      else if (/\b(professional|corporate|clear|news)\b/i.test(text)) style = 'professional';
-      else if (/\b(storytelling|story|narrative)\b/i.test(text)) style = 'storytelling';
-      else style = 'natural';
+      if (/\b(epic|heroic|legendary|grand|trailer|blockbuster)\b/i.test(text)) style = 'epic';
+      else if (/\b(intense|urgent|fierce|powerful|thrilling|suspense|dramatic)\b/i.test(text)) style = 'intense';
+      else if (/\b(sad|sadness|sorrow|somber|melanchol(?:y|ic)|grief|tragic|heartbreak)\b/i.test(text)) style = 'sad';
+      else if (/\b(serious|grave|solemn|stern|authoritative)\b/i.test(text)) style = 'serious';
+      else if (/\b(emotional|heartfelt|devotional|worship|touching|moving)\b/i.test(text)) style = 'emotional';
+      else if (/\b(cinematic|film|movie)\b/i.test(text)) style = 'cinematic';
+      else if (/\b(documentary|educational|informative|history)\b/i.test(text)) style = 'documentary';
+      else if (/\b(professional|corporate|clear|news|presenter)\b/i.test(text)) style = 'professional';
+      else if (/\b(storytelling|story|narrative|fable)\b/i.test(text)) style = 'storytelling';
+      else if (/\b(calm|peaceful|serene|meditative|gentle|soothing)\b/i.test(text)) style = 'calm';
+      else if (/\b(excited|energetic|inspiring|motivational|uplifting)\b/i.test(text)) style = 'excited';
+      else style = 'auto';
     }
     return { gender, style };
   }
@@ -285,8 +291,8 @@ class PromptAnalyzer {
           '  "narrationRequested": boolean,',
           '  "narrationLanguage": "two-letter ISO code such as en, te, hi, ta, kn, ml, es, fr, ar, zh, ja, ko",',
           '  "voiceGender": "female" | "male",',
-          '  "voiceStyle": "natural" | "cinematic" | "professional" | "emotional" | "documentary" | "storytelling",',
-          '  "narrationScript": "If narrationRequested is true, write expressive, natural spoken narration STRICTLY in narrationLanguage script (for te use authentic Telugu script తెలుగు, for hi use Devanagari हिन्दी, for ta use Tamil தமிழ், etc. NEVER translate requested Telugu/Hindi/Tamil narration into English). Roughly ' + wordsTarget + ' words matching ' + clampedDuration + ' seconds. Empty string if narrationRequested is false.",',
+          '  "voiceStyle": "auto" | "cinematic" | "epic" | "intense" | "serious" | "sad" | "emotional" | "professional" | "documentary" | "storytelling" | "calm" | "excited",',
+          '  "narrationScript": "If narrationRequested is true, write expressive spoken narration matching voiceStyle STRICTLY in narrationLanguage script (for te use authentic Telugu script తెలుగు, for hi use Devanagari हिन्दी, for ta use Tamil தமிழ், etc. NEVER translate requested Telugu/Hindi/Tamil narration into English). Roughly ' + wordsTarget + ' words matching ' + clampedDuration + ' seconds. Empty string if narrationRequested is false.",',
           '  "musicRequested": boolean,',
           '  "musicPrompt": "If musicRequested is true, detailed instrumental soundtrack description (genre, mood, tempo, instruments, atmosphere, no vocals). Empty string if false.",',
           '  "sfxRequested": boolean,',
@@ -309,13 +315,22 @@ class PromptAnalyzer {
           '- If the user asks for Telugu narration, narrationLanguage MUST be "te" and narrationScript MUST be written in Telugu Unicode script (తెలుగు), NEVER English.',
         ].join('\n');
 
-        const llmRes = await this.providers.completeChat({
-          systemPrompt: sys,
-          userPrompt: `User Creative Prompt:\n${cleanPrompt}\n\nMode: ${mode}\nAspect Ratio: ${aspectRatio}\nRequested Duration: ${clampedDuration} seconds\nDetected Language Hint: ${detectedLang.code} (${detectedLang.name})`,
-          jsonMode: true,
-        }, signal);
-        llmPlan = extractJsonObject(llmRes.text);
-        llmPlan._plannerProvider = llmRes.provider;
+        const llmCtrl = new AbortController();
+        const llmTimer = setTimeout(() => llmCtrl.abort(), 10000);
+        const onParentAbort = () => llmCtrl.abort();
+        signal?.addEventListener('abort', onParentAbort, { once: true });
+        try {
+          const llmRes = await this.providers.completeChat({
+            systemPrompt: sys,
+            userPrompt: `User Creative Prompt:\n${cleanPrompt}\n\nMode: ${mode}\nAspect Ratio: ${aspectRatio}\nRequested Duration: ${clampedDuration} seconds\nDetected Language Hint: ${detectedLang.code} (${detectedLang.name})`,
+            jsonMode: true,
+          }, llmCtrl.signal);
+          llmPlan = extractJsonObject(llmRes.text);
+          llmPlan._plannerProvider = llmRes.provider;
+        } finally {
+          clearTimeout(llmTimer);
+          signal?.removeEventListener('abort', onParentAbort);
+        }
       } catch (e) {
         if (signal?.aborted) throw e;
         llmPlan = null;
@@ -599,6 +614,7 @@ class VoiceGenerationService {
       text: analysis.narrationScript,
       language: analysis.narrationLanguage || 'en',
       gender: analysis.voiceGender || 'female',
+      style: analysis.voiceStyle || 'auto',
       model: 'auto',
     }, signal);
     if (!res?.bytes || res.bytes.length < 100) return null;
@@ -1072,7 +1088,6 @@ function createStudioPipeline({ providers, ffmpegPath, ffprobePath } = {}) {
     async executeStudioJob({ input, workdir, existingAnalysis = null, existingPlan = null, sceneCache = null, regenerateSceneIndex = null, onProgress }, signal) {
       let analysis = existingAnalysis;
       if (!analysis) {
-        onProgress?.({ stage: 'analyzing', label: 'Analyzing Creative Prompt' });
         analysis = await promptAnalyzer.analyze(input, signal);
         signal?.throwIfAborted();
       }

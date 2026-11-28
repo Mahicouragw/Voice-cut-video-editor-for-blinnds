@@ -36,3 +36,24 @@ test('cuesFromScript splits English and Telugu narration into word-boundary-safe
   const cueWords = cues.flatMap(c => c.text.split(/\s+/));
   assert.deepEqual(cueWords, origWords);
 });
+
+test('analyzeCreativePromptLocally detects language, narration intent, and Auto voice styles (epic, sad, intense, serious) for 15s+ plans', () => {
+  const plan15 = Studio.analyzeCreativePromptLocally({
+    prompt: 'Create a 15 second epic mountain sunrise trailer with male voiceover narration and orchestral music.',
+    durationSec: 15,
+    aspectRatio: '16:9',
+  });
+  assert.equal(plan15.analysis.narrationRequested, true);
+  assert.equal(plan15.analysis.voiceStyle, 'epic');
+  assert.equal(plan15.analysis.voiceGender, 'male');
+  assert.equal(plan15.analysis.musicRequested, true);
+  assert.equal(plan15.scenes.length, 2);
+
+  const sadPlan = Studio.analyzeCreativePromptLocally({
+    prompt: 'Create a 10 second sad rainy street memory video with gentle narration, no music.',
+    durationSec: 10,
+  });
+  assert.equal(sadPlan.analysis.voiceStyle, 'sad');
+  assert.equal(sadPlan.analysis.musicRequested, false);
+});
+
