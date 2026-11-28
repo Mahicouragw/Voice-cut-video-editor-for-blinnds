@@ -3,10 +3,11 @@ const assert = require('node:assert/strict');
 require('../web/captions.js');
 const Studio = require('../web/studio.js');
 
-test('dimensionsForAspect produces even-numbered dimensions for 16:9, 9:16, 1:1, and 4:5', () => {
+test('dimensionsForAspect produces even-numbered dimensions for 16:9, 9:16, 1:1, 4:5, and 21:9', () => {
   assert.deepEqual(Studio.dimensionsForAspect('16:9'), { width: 1280, height: 720 });
   assert.deepEqual(Studio.dimensionsForAspect('9:16'), { width: 720, height: 1280 });
   assert.deepEqual(Studio.dimensionsForAspect('1:1'), { width: 1080, height: 1080 });
+  assert.deepEqual(Studio.dimensionsForAspect('21:9'), { width: 1344, height: 576 });
   const scaled = Studio.dimensionsForAspect('4:5', 768);
   assert.equal(scaled.width % 2, 0);
   assert.equal(scaled.height, 768);

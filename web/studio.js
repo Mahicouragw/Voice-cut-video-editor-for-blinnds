@@ -16,6 +16,7 @@
     '1:1':  { width: 1080, height: 1080, label: 'Square 1:1 (Instagram, Logo, Feed)' },
     '4:3':  { width: 1024, height: 768, label: 'Standard 4:3 (Classic)' },
     '4:5':  { width: 864, height: 1080, label: 'Vertical 4:5 (Social Feed)' },
+    '21:9': { width: 1344, height: 576, label: 'Cinematic Widescreen 21:9' },
   };
 
   function dimensionsForAspect(aspectRatio, maxSide) {

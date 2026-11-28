@@ -30,6 +30,7 @@
 
 <nav class="primary-nav" aria-label="Main navigation" id="mainNav">
   <a href="#/home" data-route="home">HOME</a>
+  <a href="#/studio" data-route="studio" id="navStudio">VIDEO GENERATE AI</a>
   <a href="#/library" data-route="library">LIBRARY</a>
   <a href="#/settings" data-route="settings">SETTINGS</a>
   <a href="#/editor" data-route="editor" id="navEditor" class="hidden">EDITOR</a>
@@ -65,9 +66,9 @@
         <span class="icon" aria-hidden="true">🔊</span>
         <span><strong>Video to Audio</strong><br><small style="font-weight:400; color:var(--text2)">Save sound as WAV audio</small></span>
       </button>
-      <button id="homeGenerateVideo" class="primary" aria-label="Generate Video, button. Create AI videos from text or an image with voice narration in any language">
+      <button id="homeGenerateVideo" class="primary" aria-label="Video Generate AI, button. Open the AI Video Studio workspace to create AI videos from text or an image">
         <span class="icon" aria-hidden="true">✨</span>
-        <span><strong>Generate Video</strong><br><small style="font-weight:400; color:var(--text2)">Text or Image to Video + Voice</small></span>
+        <span><strong>Video Generate AI</strong><br><small style="font-weight:400; color:var(--text2)">AI Video Creation Studio</small></span>
       </button>
       <button id="homeGenerateImage" aria-label="Generate Image, Thumbnail, and Logo, button. Create AI images, YouTube thumbnails, social graphics, and logos">
         <span class="icon" aria-hidden="true">🖼️</span>
@@ -152,145 +153,6 @@
       <p id="v2aStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
     </div>
 
-    <!-- GENERATE VIDEO PANEL (TEXT TO VIDEO & IMAGE TO VIDEO + GOOGLE FLOW SCENE SOUND, MUSIC & MULTILINGUAL VOICE) -->
-    <div class="card hidden" id="generateVideoPanel" role="region" aria-labelledby="genVideoHeading">
-      <h2 id="genVideoHeading" tabindex="-1">Generate AI Video (Text to Video &amp; Image to Video)</h2>
-      <p style="color:var(--text2)">Describe your scene, pick an AI video model (or Auto Best Free), and include synchronized scene sound effects, AI background music, and multilingual voice narration — just like Google Flow. Your clip opens directly in the editor ready to extend, merge, align captions, or export.</p>
-      <div class="grid grid-2">
-        <div>
-          <label for="genVideoModel">AI video model</label>
-          <select id="genVideoModel">
-            <option value="auto" selected>Auto (Best Free AI Video)</option>
-            <option value="ltx-video">LTX-Video 0.9.8 13B Distilled (Text &amp; Image to Video)</option>
-            <option value="wan21-fast">Wan 2.1 CausVid 14B Fast (Image to Video)</option>
-            <option value="pollinations-wan">Pollinations Wan / Seedance</option>
-          </select>
-        </div>
-        <div>
-          <label for="genVideoAspect">Aspect ratio</label>
-          <select id="genVideoAspect">
-            <option value="16:9" selected>16:9 Landscape (YouTube)</option>
-            <option value="9:16">9:16 Vertical (Shorts, Reels, TikTok)</option>
-            <option value="1:1">1:1 Square (Instagram, Feed)</option>
-          </select>
-        </div>
-        <div>
-          <label for="genVideoDuration">Clip duration</label>
-          <select id="genVideoDuration">
-            <option value="5">5 seconds</option>
-            <option value="8" selected>8 seconds</option>
-            <option value="10">10 seconds</option>
-            <option value="15">15 seconds</option>
-          </select>
-        </div>
-        <div>
-          <label for="genVideoStartImage">Optional starting image (Image to Video)</label>
-          <input type="file" id="genVideoStartImage" accept="image/*,.png,.jpg,.jpeg,.webp">
-        </div>
-      </div>
-      <div class="mt-16">
-        <label for="genVideoPrompt">Visual scene prompt</label>
-        <textarea id="genVideoPrompt" rows="3" placeholder="Example: Golden sunrise over Charminar in Hyderabad, warm cinematic camera movement, ultra-detailed"></textarea>
-      </div>
-      <div class="card mt-16" style="padding:12px; background:var(--surface2, rgba(124,92,255,0.06));">
-        <h3 style="margin-top:0; font-size:16px;">Native Scene Sound Effects &amp; Music (Google Flow Style)</h3>
-        <div class="grid grid-2">
-          <label style="display:flex; gap:10px; align-items:flex-start;">
-            <input type="checkbox" id="genVideoSceneAudio" checked>
-            <span>Generate synchronized scene sound effects (Foley / ambient audio)</span>
-          </label>
-          <div>
-            <label for="genVideoSfxModel">Scene SFX model</label>
-            <select id="genVideoSfxModel">
-              <option value="auto" selected>Auto (Best Free Synchronized Foley)</option>
-              <option value="mmaudio">MMAudio Video-to-Audio Synchronized Foley</option>
-              <option value="hunyuan-foley">HunyuanVideo-Foley Scene Audio</option>
-              <option value="stable-audio">Stable Audio Open 1.0 SFX</option>
-            </select>
-          </div>
-          <label style="display:flex; gap:10px; align-items:flex-start;">
-            <input type="checkbox" id="genVideoMusic" checked>
-            <span>Generate AI background music soundtrack</span>
-          </label>
-          <div>
-            <label for="genVideoMusicModel">AI music model</label>
-            <select id="genVideoMusicModel">
-              <option value="auto" selected>Auto (Best Free AI Music)</option>
-              <option value="stable-audio">Stable Audio Open 1.0 Instrumental</option>
-              <option value="ace-step">ACE-Step 3.5B Soundtrack</option>
-              <option value="musicgen">Meta MusicGen Instrumental</option>
-            </select>
-          </div>
-        </div>
-        <div class="grid grid-2 mt-8">
-          <div>
-            <label for="genVideoSfxPrompt">Optional scene sound prompt (leave blank to match video prompt)</label>
-            <input type="text" id="genVideoSfxPrompt" placeholder="Example: Gentle morning breeze, distant birds, footsteps">
-          </div>
-          <div>
-            <label for="genVideoMusicPrompt">Optional music mood prompt (leave blank for automatic score)</label>
-            <input type="text" id="genVideoMusicPrompt" placeholder="Example: Warm cinematic acoustic strings and soft piano">
-          </div>
-        </div>
-      </div>
-      <div class="grid grid-3 mt-16">
-        <div>
-          <label for="genVideoVoiceLang">AI voice narration language</label>
-          <select id="genVideoVoiceLang">
-            <option value="none">No AI voice narration</option>
-            <option value="en" selected>English</option>
-            <option value="te">Telugu (తెలుగు)</option>
-            <option value="hi">Hindi (हिन्दी)</option>
-            <option value="ta">Tamil (தமிழ்)</option>
-            <option value="kn">Kannada (ಕನ್ನಡ)</option>
-            <option value="ml">Malayalam (മലയാളം)</option>
-            <option value="mr">Marathi (मराठी)</option>
-            <option value="bn">Bengali (বাংলা)</option>
-            <option value="ur">Urdu (اردو)</option>
-            <option value="gu">Gujarati (ગુજરાતી)</option>
-            <option value="es">Spanish (Español)</option>
-            <option value="fr">French (Français)</option>
-            <option value="de">German (Deutsch)</option>
-            <option value="ar">Arabic (العربية)</option>
-            <option value="zh">Chinese (中文)</option>
-            <option value="ja">Japanese (日本語)</option>
-            <option value="ko">Korean (한국어)</option>
-            <option value="pt">Portuguese (Português)</option>
-          </select>
-        </div>
-        <div>
-          <label for="genVideoVoiceGender">Voice style</label>
-          <select id="genVideoVoiceGender">
-            <option value="female" selected>Natural Female Voice</option>
-            <option value="male">Natural Male Voice</option>
-          </select>
-        </div>
-        <div>
-          <label for="genVideoTtsModel">Voice AI model</label>
-          <select id="genVideoTtsModel">
-            <option value="auto" selected>Auto (Best Multilingual Neural Voice)</option>
-            <option value="edge-neural">Edge Neural TTS v2 (20+ Languages)</option>
-            <option value="google-tts">Google Multilingual TTS (Keyless)</option>
-            <option value="qwen3-tts">Qwen3-TTS 1.7B Neural</option>
-          </select>
-        </div>
-      </div>
-      <div class="mt-16">
-        <label for="genVideoNarration">Narration script (spoken by AI &amp; auto-aligned as captions)</label>
-        <textarea id="genVideoNarration" rows="2" placeholder="Optional: Type what the narrator should say in your chosen language"></textarea>
-      </div>
-      <label class="mt-16" style="display:flex; gap:10px; align-items:flex-start;">
-        <input type="checkbox" id="genVideoConsent" checked>
-        <span>Send my prompt (and optional reference image) to the AI service to generate this clip.</span>
-      </label>
-      <div class="flex gap-8 wrap mt-16">
-        <button id="btnRunGenerateVideo" class="primary">Generate Video &amp; Open in Editor</button>
-        <button id="btnCloseGenerateVideo">Close</button>
-      </div>
-      <progress id="genVideoProgress" max="100" value="0" style="width:100%; display:none; margin-top:8px;" aria-label="Video generation progress"></progress>
-      <p id="genVideoStatus" role="status" style="font-size:14px; margin:8px 0 0;"></p>
-    </div>
-
     <!-- GENERATE IMAGE, YOUTUBE THUMBNAIL & LOGO PANEL -->
     <div class="card hidden" id="generateImagePanel" role="region" aria-labelledby="genImageHeading">
       <h2 id="genImageHeading" tabindex="-1">Generate Image, YouTube Thumbnail &amp; Logo</h2>
@@ -366,6 +228,247 @@
         <div><span class="kbd">A</span> Add audio</div>
         <div><span class="kbd">V</span> Add voice-over</div>
         <div><span class="kbd">M</span> Mute selected</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI VIDEO CREATION STUDIO WORKSPACE -->
+  <section id="studioScreen" class="hidden" aria-labelledby="studioTitle">
+    <div class="studio-workspace">
+      <div class="studio-header">
+        <div>
+          <h1 id="studioTitle" tabindex="-1">AI Video Studio</h1>
+          <p class="studio-subtitle">Describe your complete creative vision in natural language. VoiceCut analyzes your prompt and generates genuine AI visuals, voice narration, background music, and environmental sound effects synchronized into a complete MP4 video.</p>
+        </div>
+        <button id="btnStudioBackHome" aria-label="Back to Home screen, button">← Back to Home</button>
+      </div>
+
+      <!-- 1. Creation Mode -->
+      <div class="card studio-card" role="region" aria-labelledby="studioModeHeading">
+        <h2 id="studioModeHeading" class="studio-section-title">Creation Mode</h2>
+        <div class="studio-mode-tabs" role="radiogroup" aria-labelledby="studioModeHeading">
+          <button type="button" id="studioModeTextBtn" role="radio" aria-checked="true" class="studio-mode-btn active" aria-label="Text to Video mode, selected">
+            <span aria-hidden="true">🎬</span>
+            <span><strong>Text to Video</strong><br><small>Create scenes directly from your description</small></span>
+          </button>
+          <button type="button" id="studioModeImageBtn" role="radio" aria-checked="false" class="studio-mode-btn" aria-label="Image to Video mode">
+            <span aria-hidden="true">🖼️</span>
+            <span><strong>Image to Video</strong><br><small>Animate an uploaded reference image</small></span>
+          </button>
+        </div>
+
+        <!-- Image Upload Area (shown when Image to Video is selected) -->
+        <div id="studioImageUploadArea" class="studio-upload-box hidden mt-16" role="region" aria-labelledby="studioImageUploadLabel">
+          <div class="flex gap-12 wrap items-center">
+            <div>
+              <h3 id="studioImageUploadLabel" style="margin:0 0 4px; font-size:16px;">Reference Image</h3>
+              <p style="margin:0; font-size:14px; color:var(--text2);">Upload an image from your device to animate while preserving its subject and visual style.</p>
+            </div>
+            <div class="flex gap-8 wrap">
+              <button type="button" id="btnStudioUploadImage" class="primary" aria-label="Upload Image, button. Opens device file picker to choose a reference image">Upload Image</button>
+              <button type="button" id="btnStudioReplaceImage" class="hidden" aria-label="Replace selected reference image, button">Replace Image</button>
+              <button type="button" id="btnStudioRemoveImage" class="danger hidden" aria-label="Remove selected reference image, button">Remove Image</button>
+            </div>
+          </div>
+          <input type="file" id="studioImageInput" accept="image/*,.png,.jpg,.jpeg,.webp" class="sr-only" tabindex="-1" aria-hidden="true">
+          <div id="studioImagePreviewWrap" class="studio-image-preview hidden mt-16">
+            <img id="studioImagePreview" alt="Selected reference image preview">
+            <p id="studioImageMeta" class="clip-meta" style="margin:8px 0 0;"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. One Unified Creative Prompt Box -->
+      <div class="card studio-card" role="region" aria-labelledby="studioPromptLabel">
+        <label id="studioPromptLabel" for="studioPromptInput" class="studio-prompt-label">Describe Your Video</label>
+        <textarea id="studioPromptInput" rows="5" class="studio-prompt-textarea" placeholder="Describe the video you want to create. Include the story, scenes, camera movements, narration, language, background music, sound effects, atmosphere, and any other creative instructions."></textarea>
+        <p class="studio-hint" id="studioPromptHint">Mention narration, language (such as Telugu, English, Hindi, Tamil, Kannada, or Malayalam), music mood, or natural sounds right inside your description. Nothing is forced unless appropriate to your instructions.</p>
+      </div>
+
+      <!-- 3. Video & Optional Voice Settings -->
+      <div class="card studio-card" role="region" aria-labelledby="studioSettingsHeading">
+        <h2 id="studioSettingsHeading" class="studio-section-title">Video Settings</h2>
+        <div class="grid grid-3">
+          <div>
+            <label for="studioAspectRatio">Aspect Ratio</label>
+            <select id="studioAspectRatio" aria-label="Aspect Ratio, select">
+              <option value="16:9" selected>16:9 — YouTube and landscape videos</option>
+              <option value="9:16">9:16 — Reels, Shorts and vertical videos</option>
+              <option value="1:1">1:1 — Square videos</option>
+              <option value="4:5">4:5 — Portrait social media videos</option>
+              <option value="21:9">21:9 — Cinematic widescreen</option>
+            </select>
+          </div>
+          <div>
+            <label for="studioDuration">Duration</label>
+            <select id="studioDuration" aria-label="Video Duration, select">
+              <option value="6">6 seconds</option>
+              <option value="10" selected>10 seconds</option>
+              <option value="15">15 seconds</option>
+              <option value="30">30 seconds</option>
+              <option value="60">60 seconds</option>
+              <option value="90">90 seconds</option>
+              <option value="120">2 minutes</option>
+              <option value="custom">Custom duration</option>
+            </select>
+            <div id="studioCustomDurationWrap" class="hidden mt-8">
+              <label for="studioCustomDuration">Custom duration in seconds (4 to 180)</label>
+              <input type="number" id="studioCustomDuration" min="4" max="180" step="1" value="20" aria-label="Custom duration in seconds">
+            </div>
+          </div>
+          <div>
+            <span class="studio-static-label" id="studioModelLabel">AI Model</span>
+            <div class="studio-auto-badge" role="status" aria-labelledby="studioModelLabel">
+              <span class="studio-dot" aria-hidden="true"></span>
+              <strong>AI Model: Auto</strong>
+            </div>
+            <small style="display:block; margin-top:6px; color:var(--text2);">Automatically selects compatible AI video, voice, music, and sound engines.</small>
+          </div>
+        </div>
+
+        <div class="grid grid-3 mt-16" role="group" aria-label="Optional Voice Settings">
+          <div>
+            <label for="studioVoiceGender">Optional Voice Selection</label>
+            <select id="studioVoiceGender" aria-label="Optional Voice Selection, select">
+              <option value="auto" selected>Auto Voice</option>
+              <option value="female">Female Voice</option>
+              <option value="male">Male Voice</option>
+            </select>
+          </div>
+          <div>
+            <label for="studioVoiceStyle">Optional Voice Delivery Style</label>
+            <select id="studioVoiceStyle" aria-label="Optional Voice Delivery Style, select">
+              <option value="natural" selected>Natural</option>
+              <option value="cinematic">Cinematic</option>
+              <option value="professional">Professional</option>
+              <option value="emotional">Emotional</option>
+              <option value="documentary">Documentary</option>
+              <option value="storytelling">Storytelling</option>
+            </select>
+          </div>
+          <div>
+            <label for="studioVoiceLanguage">Narration Language Detection</label>
+            <select id="studioVoiceLanguage" aria-label="Narration Language Detection, select">
+              <option value="auto" selected>Auto Detect from Prompt</option>
+              <option value="te">Telugu (తెలుగు)</option>
+              <option value="en">English</option>
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="ta">Tamil (தமிழ்)</option>
+              <option value="kn">Kannada (ಕನ್ನಡ)</option>
+              <option value="ml">Malayalam (മലയാളം)</option>
+              <option value="mr">Marathi (मराठी)</option>
+              <option value="bn">Bengali (বাংলা)</option>
+              <option value="gu">Gujarati (ગુજરાતી)</option>
+              <option value="ur">Urdu (اردو)</option>
+              <option value="es">Spanish (Español)</option>
+              <option value="fr">French (Français)</option>
+              <option value="de">German (Deutsch)</option>
+              <option value="ar">Arabic (العربية)</option>
+              <option value="zh">Chinese (中文)</option>
+              <option value="ja">Japanese (日本語)</option>
+              <option value="ko">Korean (한국어)</option>
+            </select>
+          </div>
+        </div>
+
+        <details id="studioAdvancedDetails" class="studio-advanced mt-16">
+          <summary>Advanced Settings</summary>
+          <div class="grid grid-3 mt-16">
+            <div>
+              <label for="studioNarrationPref">Voice Narration</label>
+              <select id="studioNarrationPref">
+                <option value="auto" selected>Decide from Prompt (Default)</option>
+                <option value="on">Always Generate Narration</option>
+                <option value="off">No Narration</option>
+              </select>
+            </div>
+            <div>
+              <label for="studioMusicPref">Background Music</label>
+              <select id="studioMusicPref">
+                <option value="auto" selected>Decide from Prompt (Default)</option>
+                <option value="on">Always Generate Music</option>
+                <option value="off">No Background Music</option>
+              </select>
+            </div>
+            <div>
+              <label for="studioSfxPref">Environmental Sound Effects</label>
+              <select id="studioSfxPref">
+                <option value="auto" selected>Decide from Prompt (Default)</option>
+                <option value="on">Always Generate Sound Effects</option>
+                <option value="off">No Sound Effects</option>
+              </select>
+            </div>
+          </div>
+          <label class="mt-16" style="display:flex; gap:10px; align-items:flex-start;">
+            <input type="checkbox" id="studioConsent" checked>
+            <span>Allow sending my creative prompt and optional reference image to connected AI generation services.</span>
+          </label>
+        </details>
+
+        <div class="flex gap-12 wrap mt-16 items-center">
+          <button type="button" id="btnStudioGenerate" class="primary studio-generate-btn" aria-label="Generate AI Video, button">✨ Generate AI Video</button>
+          <button type="button" id="btnStudioCancel" class="danger hidden" aria-label="Cancel Generation, button">Cancel Generation</button>
+          <button type="button" id="btnStudioRetry" class="hidden" aria-label="Retry failed generation keeping completed scenes, button">↻ Retry Generation</button>
+        </div>
+      </div>
+
+      <!-- 4. Accessible Generation Progress Interface -->
+      <div id="studioProgressCard" class="card studio-card hidden" role="region" aria-labelledby="studioProgressHeading">
+        <div class="flex items-center" style="justify-content:space-between; gap:12px; flex-wrap:wrap;">
+          <h2 id="studioProgressHeading" class="studio-section-title" style="margin:0;">Generation Progress</h2>
+          <span id="studioCurrentStageBadge" class="badge warning" role="status">Analyzing Creative Prompt</span>
+        </div>
+        <p id="studioProgressText" role="status" aria-live="polite" style="margin:10px 0 12px; font-weight:600;">Analyzing Creative Prompt…</p>
+        <ul id="studioStagesList" class="studio-stage-list" aria-label="Generation stages"></ul>
+      </div>
+
+      <!-- 5. Video Preview & Studio Action Controls -->
+      <div id="studioResultCard" class="card studio-card hidden" role="region" aria-labelledby="studioPreviewHeading">
+        <div class="flex items-center" style="justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+          <h2 id="studioPreviewHeading" class="studio-section-title" style="margin:0;" tabindex="-1">Video Preview</h2>
+          <span id="studioPlanSummaryBadge" class="badge success">Ready</span>
+        </div>
+
+        <div class="video-wrapper studio-video-wrapper" id="studioVideoWrapper">
+          <video id="studioPreviewVideo" playsinline preload="metadata" aria-label="Generated AI video preview player"></video>
+        </div>
+
+        <!-- Accessible Playback Controls -->
+        <div class="playback-bar" role="toolbar" aria-label="Generated video playback controls">
+          <button type="button" id="btnStudioPlayPause" class="primary" aria-label="Preview Video, Play generated video, button">▶ Preview Video</button>
+          <div style="flex:1; min-width:180px; display:flex; align-items:center; gap:8px;">
+            <label for="studioSeekSlider" class="sr-only">Seek video playback position</label>
+            <input type="range" id="studioSeekSlider" min="0" max="100" step="0.1" value="0" aria-label="Video playback progress bar">
+          </div>
+          <span id="studioTimeDisplay" class="time-display" aria-live="off" style="min-width:120px; text-align:center;">00:00 / 00:00</span>
+          <div style="display:flex; align-items:center; gap:6px; min-width:140px;">
+            <label for="studioVolumeSlider" style="font-size:13px; font-weight:600;">Vol</label>
+            <input type="range" id="studioVolumeSlider" min="0" max="100" value="100" aria-label="Preview volume percentage">
+          </div>
+          <button type="button" id="btnStudioFullscreen" aria-label="Fullscreen playback, button">⛶ Fullscreen</button>
+        </div>
+
+        <!-- Narration Preview (post-generation only, never a separate input box!) -->
+        <div id="studioNarrationPreviewBox" class="studio-narration-preview hidden mt-16" role="region" aria-labelledby="studioNarrationPreviewTitle">
+          <h3 id="studioNarrationPreviewTitle" style="margin:0 0 6px; font-size:15px;">Generated Voice Narration Preview</h3>
+          <p id="studioNarrationTranscript" style="margin:0 0 8px; color:var(--text2); font-size:14px;"></p>
+          <audio id="studioNarrationAudio" controls style="width:100%;" aria-label="Generated voice narration audio preview"></audio>
+        </div>
+
+        <!-- Primary Action Buttons -->
+        <div class="flex gap-8 wrap mt-16" role="group" aria-label="Completed video actions">
+          <button type="button" id="btnStudioDownload" class="primary" aria-label="Download Video as MP4, button">⬇ Download Video (MP4)</button>
+          <button type="button" id="btnStudioEdit" aria-label="Edit Video in VoiceCut Editor with audio tracks, button">✂ Edit Video</button>
+          <button type="button" id="btnStudioSaveLibrary" aria-label="Save to Library, button">💾 Save to Library</button>
+          <button type="button" id="btnStudioRegenerate" aria-label="Regenerate Video, button">↻ Regenerate</button>
+          <div id="studioRegenSceneWrap" class="flex gap-8 items-center hidden">
+            <label for="studioRegenSceneSelect" class="sr-only">Select individual scene to regenerate</label>
+            <select id="studioRegenSceneSelect" aria-label="Choose full video or individual scene to regenerate" style="width:auto; min-width:190px;">
+              <option value="all">Full Video</option>
+            </select>
+          </div>
+        </div>
+        <p id="studioActionStatus" role="status" style="font-size:14px; margin:10px 0 0;"></p>
       </div>
     </div>
   </section>
@@ -657,63 +760,25 @@
       </div>
       <div id="extendVideoBox" class="card hidden mt-16" role="region" aria-labelledby="extendVideoHeading">
         <h3 id="extendVideoHeading" tabindex="-1">Extend Video — Generate &amp; Merge Next Clip</h3>
-        <p style="color:var(--text2); font-size:14px;">VoiceCut captures the final frame of your current video, generates an AI motion continuation clip in the matching aspect ratio with optional scene sound effects, music, and multilingual voice, and merges both clips seamlessly.</p>
+        <p style="color:var(--text2); font-size:14px;">VoiceCut captures the final frame of your current video, analyzes your continuation instructions, generates a matching AI video continuation clip with requested narration, music, and sound effects, and merges both clips seamlessly.</p>
         <div class="grid grid-2">
           <div>
-            <label for="extendVideoModel">AI video model</label>
-            <select id="extendVideoModel">
-              <option value="auto" selected>Auto (Best Free AI Video)</option>
-              <option value="ltx-video">LTX-Video 0.9.8 13B Distilled</option>
-              <option value="wan21-fast">Wan 2.1 CausVid 14B Fast (Image-to-Video)</option>
-              <option value="pollinations-wan">Pollinations Wan / Seedance</option>
-            </select>
-          </div>
-          <div>
-            <label for="extendVideoDuration">Next clip length</label>
+            <label for="extendVideoDuration">Next clip duration</label>
             <select id="extendVideoDuration">
-              <option value="5">5 seconds</option>
-              <option value="8" selected>8 seconds</option>
-              <option value="10">10 seconds</option>
+              <option value="6">6 seconds</option>
+              <option value="10" selected>10 seconds</option>
               <option value="15">15 seconds</option>
+              <option value="30">30 seconds</option>
             </select>
           </div>
           <div>
-            <label for="extendVoiceLang">Narration language for next clip</label>
-            <select id="extendVoiceLang">
-              <option value="none">No new voice narration</option>
-              <option value="en" selected>English</option>
-              <option value="te">Telugu (తెలుగు)</option>
-              <option value="hi">Hindi (हिन्दी)</option>
-              <option value="ta">Tamil (தமிழ்)</option>
-              <option value="kn">Kannada (ಕನ್ನಡ)</option>
-              <option value="ml">Malayalam (മലയാളം)</option>
-              <option value="mr">Marathi (मराठी)</option>
-              <option value="bn">Bengali (বাংলা)</option>
-              <option value="ur">Urdu (اردو)</option>
-              <option value="gu">Gujarati (ગુજરાતી)</option>
-              <option value="es">Spanish (Español)</option>
-              <option value="fr">French (Français)</option>
-              <option value="ar">Arabic (العربية)</option>
-            </select>
+            <span class="studio-static-label">AI Model</span>
+            <div class="studio-auto-badge"><span class="studio-dot" aria-hidden="true"></span><strong>AI Model: Auto</strong></div>
           </div>
-          <div>
-            <label for="extendNarration">Optional narration for next clip</label>
-            <input type="text" id="extendNarration" placeholder="What happens or is spoken next">
-          </div>
-        </div>
-        <div class="flex gap-8 wrap mt-8">
-          <label style="display:flex; gap:8px; align-items:center;">
-            <input type="checkbox" id="extendSceneAudio" checked>
-            <span>Include synchronized scene sound effects</span>
-          </label>
-          <label style="display:flex; gap:8px; align-items:center;">
-            <input type="checkbox" id="extendMusic">
-            <span>Include AI background music</span>
-          </label>
         </div>
         <div class="mt-16">
-          <label for="extendVideoPrompt">Describe what happens in the next clip</label>
-          <input type="text" id="extendVideoPrompt" placeholder="Example: Camera zooms forward into the market street at dusk">
+          <label for="extendVideoPrompt">Describe what happens next</label>
+          <textarea id="extendVideoPrompt" rows="3" placeholder="Describe the continuation scene, camera motion, narration, language, music, or sound effects."></textarea>
         </div>
         <div class="flex gap-8 wrap mt-16">
           <button id="btnRunExtendVideo" class="primary">Generate &amp; Merge Next Clip</button>
