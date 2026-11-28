@@ -4635,7 +4635,12 @@
         if (sceneFiles.length === 1) {
           videoBlob = sceneFiles[0];
         } else {
-          videoBlob = await VoiceCutMerge.mergeMp4Files(sceneFiles, () => {});
+          const mergeRes = await VoiceCutMerge.mergeMp4Files(sceneFiles, {
+            isCancelled: () => abortCtrl.signal.aborted,
+            onProgress: () => {},
+          });
+          videoBlob = mergeRes?.file || mergeRes;
+          if (mergeRes?.durationSec) finalDurationSec = mergeRes.durationSec;
         }
         renderStudioStageProgress('exporting', 'Preparing Download', finalAnalysis);
       }
@@ -4998,10 +5003,12 @@
       });
       const nextFile = new File([nextClip.videoBlob], `continuation-${Date.now()}.mp4`, { type: 'video/mp4' });
       statusEl.textContent = 'Merging original clip and continuation clip seamlessly…';
-      const mergedBlob = await VoiceCutMerge.mergeMp4Files([project.videoFile, nextFile], (frac, txt) => {
-        statusEl.textContent = `${txt} (${Math.round(frac * 100)}%)`;
+      const mergeRes = await VoiceCutMerge.mergeMp4Files([project.videoFile, nextFile], {
+        onProgress: (frac, txt) => {
+          statusEl.textContent = `${txt} (${Math.round(frac * 100)}%)`;
+        },
       });
-      const mergedFile = new File([mergedBlob], (project.name || 'extended-video') + '.mp4', { type: 'video/mp4' });
+      const mergedFile = new File([mergeRes.file || mergeRes], (project.name || 'extended-video') + '.mp4', { type: 'video/mp4' });
       $('#extendVideoBox')?.classList.add('hidden');
       loadVideoFile(mergedFile, async () => {
         captionDefaults();
@@ -5036,10 +5043,12 @@
       statusEl.textContent = 'Merging clips seamlessly…';
       announce('Merging selected clip at the end of your current video.');
       const existingCaptions = Array.isArray(project.captions) ? project.captions.slice() : [];
-      const mergedBlob = await VoiceCutMerge.mergeMp4Files([project.videoFile, secondFile], (frac, txt) => {
-        statusEl.textContent = `${txt} (${Math.round(frac * 100)}%)`;
+      const mergeRes2 = await VoiceCutMerge.mergeMp4Files([project.videoFile, secondFile], {
+        onProgress: (frac, txt) => {
+          statusEl.textContent = `${txt} (${Math.round(frac * 100)}%)`;
+        },
       });
-      const mergedFile = new File([mergedBlob], (project.name || 'merged-video') + '.mp4', { type: 'video/mp4' });
+      const mergedFile = new File([mergeRes2.file || mergeRes2], (project.name || 'merged-video') + '.mp4', { type: 'video/mp4' });
       loadVideoFile(mergedFile, async () => {
         captionDefaults();
         if (existingCaptions.length) project.captions = existingCaptions;
