@@ -1283,9 +1283,7 @@ const path = require('node:path');
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
 
   // Verify resilient direct fallback when /api/studio/jobs returns 404 (e.g. rolling backend deploy) for 15-second video with Auto Epic narration
-  await page.locator('#btnHome').click();
-  await page.locator('#homeScreen:not(.hidden)').waitFor();
-  await page.locator('#homeGenerateVideo').click();
+  await page.locator('#navStudio').click();
   await page.locator('#studioScreen:not(.hidden)').waitFor();
   await page.route('**/api/studio/jobs**', async (routeReq) => {
     return routeReq.fulfill({ status: 404, contentType: 'text/html', headers: { 'Access-Control-Allow-Origin': '*' }, body: 'Cannot POST /api/studio/jobs' });
