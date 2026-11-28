@@ -338,12 +338,18 @@
           <div>
             <label for="studioVoiceStyle">Optional Voice Delivery Style</label>
             <select id="studioVoiceStyle" aria-label="Optional Voice Delivery Style, select">
-              <option value="natural" selected>Natural</option>
+              <option value="auto" selected>Auto (From Prompt)</option>
               <option value="cinematic">Cinematic</option>
-              <option value="professional">Professional</option>
+              <option value="epic">Epic</option>
+              <option value="intense">Intense</option>
+              <option value="serious">Serious</option>
+              <option value="sad">Sad / Somber</option>
               <option value="emotional">Emotional</option>
+              <option value="professional">Professional</option>
               <option value="documentary">Documentary</option>
               <option value="storytelling">Storytelling</option>
+              <option value="calm">Calm / Peaceful</option>
+              <option value="excited">Energetic / Inspiring</option>
             </select>
           </div>
           <div>
@@ -416,9 +422,9 @@
       <div id="studioProgressCard" class="card studio-card hidden" role="region" aria-labelledby="studioProgressHeading">
         <div class="flex items-center" style="justify-content:space-between; gap:12px; flex-wrap:wrap;">
           <h2 id="studioProgressHeading" class="studio-section-title" style="margin:0;">Generation Progress</h2>
-          <span id="studioCurrentStageBadge" class="badge warning" role="status">Analyzing Creative Prompt</span>
+          <span id="studioCurrentStageBadge" class="badge warning" role="status">Starting AI Video Generation</span>
         </div>
-        <p id="studioProgressText" role="status" aria-live="polite" style="margin:10px 0 12px; font-weight:600;">Analyzing Creative Prompt…</p>
+        <p id="studioProgressText" role="status" aria-live="polite" style="margin:10px 0 12px; font-weight:600;">Starting AI Video Generation…</p>
         <ul id="studioStagesList" class="studio-stage-list" aria-label="Generation stages"></ul>
       </div>
 

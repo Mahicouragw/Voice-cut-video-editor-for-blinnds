@@ -100,6 +100,32 @@ test('PromptAnalyzer & ScenePlanner cover English narration, genuine Telugu narr
   assert.equal(pureVisual.sfxRequested, true);
   assert.equal(pureVisual.aspectRatio, '21:9');
 
+  // Auto Voice Style inference from prompt keywords (Epic, Sad, Intense, Serious, Calm)
+  const epicPrompt = await pipeline.promptAnalyzer.analyze({
+    prompt: 'Create a 15 second epic heroic warrior battle trailer with male voiceover narration.',
+    durationSec: 15,
+  });
+  assert.equal(epicPrompt.voiceStyle, 'epic');
+  assert.equal(epicPrompt.voiceGender, 'male');
+
+  const sadPrompt = await pipeline.promptAnalyzer.analyze({
+    prompt: 'Create a 15 second melancholic sad rainy window memory video with gentle voice narration.',
+    durationSec: 15,
+  });
+  assert.equal(sadPrompt.voiceStyle, 'sad');
+
+  const intensePrompt = await pipeline.promptAnalyzer.analyze({
+    prompt: 'Create a 15 second intense urgent thriller chase scene with dramatic voiceover.',
+    durationSec: 15,
+  });
+  assert.equal(intensePrompt.voiceStyle, 'intense');
+
+  const seriousPrompt = await pipeline.promptAnalyzer.analyze({
+    prompt: 'Create a 15 second serious authoritative investigative report video with narration.',
+    durationSec: 15,
+  });
+  assert.equal(seriousPrompt.voiceStyle, 'serious');
+
   // Test 7 & 8: 30s and 60s multi-scene planning (never restricts to a single 6s clip)
   const plan30 = pipeline.scenePlanner.plan({ ...enAnalysis, requestedDurationSec: 30, targetSceneCount: 3 });
   assert.equal(plan30.scenes.length, 3);
@@ -172,6 +198,7 @@ test('Studio full pipeline executes Text-to-Video (9:16 & 16:9), Image-to-Video,
       assert.ok(job.scenes.length >= 3, '30s video uses genuine multi-scene generation');
       assert.equal(calls.video.length, job.scenes.length, 'each scene calls AI video generation');
       assert.equal(calls.tts[0].language, 'te');
+      assert.ok(calls.tts[0].style, 'voiceStyle forwarded to TTS synthesizer');
 
       const vidRes = await fetch(`${baseUrl}/api/studio/jobs/${jobId}/video`, {
         headers: { Authorization: 'Bearer ' + KEY },

@@ -5,7 +5,7 @@ RUN curl -fsSL -o /usr/local/bin/deep_filter https://github.com/Rikorose/DeepFil
 WORKDIR /app/server
 COPY server/package*.json server/.npmrc ./
 RUN npm ci --omit=dev --ignore-scripts
-COPY server/server.js server/providers.js ./
+COPY server/server.js server/providers.js server/studio-pipeline.js ./
 COPY web/captions.js /app/web/captions.js
 USER node
 ENV PORT=3001

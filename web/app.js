@@ -4217,7 +4217,6 @@
   // AI VIDEO CREATION STUDIO WORKSPACE (Unified Prompt, Multi-Scene, Accessible)
   // =========================================================================
   const STUDIO_STAGES = [
-    { key: 'analyzing', label: 'Analyzing Creative Prompt' },
     { key: 'planning', label: 'Planning Video Scenes' },
     { key: 'visuals', label: 'Generating AI Visuals' },
     { key: 'narration', label: 'Generating Voice Narration', conditional: 'narrationRequested' },
@@ -4236,6 +4235,7 @@
     busy: false,
     activeJobId: null,
     lastFailedJobId: null,
+    localSceneCache: new Map(),
     pollAbort: null,
     lastAnnouncedStage: '',
     completed: null, // { jobId, videoBlob, videoUrl, narrationBlob, narrationUrl, musicBlob, sfxBlob, analysis, scenes, durationSec, prompt, aspectRatio }
@@ -4423,12 +4423,16 @@
     const aspectRatio = $('#studioAspectRatio')?.value || '16:9';
     const duration = getSelectedStudioDuration();
     const voiceGender = $('#studioVoiceGender')?.value || 'auto';
-    const voiceStyle = $('#studioVoiceStyle')?.value || 'natural';
+    const voiceStyle = $('#studioVoiceStyle')?.value || 'auto';
     const voiceLanguage = $('#studioVoiceLanguage')?.value || 'auto';
     const voicePreference = $('#studioNarrationPref')?.value || 'auto';
     const musicPreference = $('#studioMusicPref')?.value || 'auto';
     const sfxPreference = $('#studioSfxPref')?.value || 'auto';
     const imageDataUrl = studioState.mode === 'image-to-video' ? studioState.imageDataUrl : null;
+
+    if (!resumeJobId && regenerateSceneIndex === null) {
+      studioState.localSceneCache.clear();
+    }
 
     studioState.busy = true;
     studioState.lastAnnouncedStage = '';
@@ -4441,76 +4445,200 @@
     $('#studioProgressCard')?.classList.remove('hidden');
     if ($('#studioActionStatus')) $('#studioActionStatus').textContent = '';
 
-    renderStudioStageProgress('analyzing', 'Analyzing Creative Prompt', null);
+    const localPreviewPlan = VoiceCutStudio.analyzeCreativePromptLocally({
+      prompt,
+      mode: studioState.mode,
+      aspectRatio,
+      durationSec: duration,
+      voiceLanguage,
+      voiceGender,
+      voiceStyle,
+      voicePreference,
+      musicPreference,
+      sfxPreference,
+    });
+    renderStudioStageProgress('planning', 'Planning Video Scenes', localPreviewPlan.analysis);
 
     try {
-      const created = await fetchStudioAuthorizedJson('/api/studio/jobs', {
-        method: 'POST',
-        uploadConsent: Boolean(imageDataUrl),
-        signal: abortCtrl.signal,
-        body: {
-          prompt,
-          mode: studioState.mode,
-          aspectRatio,
-          duration,
-          imageDataUrl,
-          voiceGender,
-          voiceStyle,
-          voiceLanguage,
-          voicePreference,
-          musicPreference,
-          sfxPreference,
-          ...(resumeJobId ? { resumeJobId } : {}),
-          ...(Number.isInteger(regenerateSceneIndex) ? { regenerateSceneIndex } : {}),
-        },
-      });
+      let videoBlob = null;
+      let narrationBlob = null;
+      let musicBlob = null;
+      let sfxBlob = null;
+      let finalAnalysis = localPreviewPlan.analysis;
+      let finalScenes = localPreviewPlan.scenes;
+      let finalDurationSec = duration;
+      let finalJobId = 'local_' + Date.now();
+      let usedLegacyPipeline = false;
 
-      const jobId = created.jobId;
-      studioState.activeJobId = jobId;
-
-      let statusData = null;
-      while (!abortCtrl.signal.aborted) {
-        await new Promise((r) => setTimeout(r, 1500));
-        if (abortCtrl.signal.aborted) break;
-        statusData = await fetchStudioAuthorizedJson(`/api/studio/jobs/${encodeURIComponent(jobId)}`, {
+      let created = null;
+      try {
+        created = await fetchStudioAuthorizedJson('/api/studio/jobs', {
+          method: 'POST',
+          uploadConsent: Boolean(imageDataUrl),
           signal: abortCtrl.signal,
+          body: {
+            prompt,
+            mode: studioState.mode,
+            aspectRatio,
+            duration,
+            imageDataUrl,
+            voiceGender,
+            voiceStyle,
+            voiceLanguage,
+            voicePreference,
+            musicPreference,
+            sfxPreference,
+            ...(resumeJobId && !String(resumeJobId).startsWith('local_') ? { resumeJobId } : {}),
+            ...(Number.isInteger(regenerateSceneIndex) ? { regenerateSceneIndex } : {}),
+          },
         });
-        renderStudioStageProgress(statusData.stage, statusData.stageLabel, statusData.analysis);
-        if (statusData.status === 'completed' || statusData.status === 'failed' || statusData.status === 'cancelled') {
-          break;
+      } catch (jobStartErr) {
+        if (abortCtrl.signal.aborted) throw jobStartErr;
+        if (jobStartErr.status === 404 || jobStartErr.status === 405 || jobStartErr.message === 'SERVICE_UNAVAILABLE') {
+          usedLegacyPipeline = true;
+        } else {
+          throw jobStartErr;
         }
       }
 
-      if (abortCtrl.signal.aborted || statusData?.status === 'cancelled') {
-        const cancelMsg = 'Video generation cancelled. Your prompt and settings are preserved.';
-        if ($('#studioProgressText')) $('#studioProgressText').textContent = cancelMsg;
-        if ($('#studioCurrentStageBadge')) $('#studioCurrentStageBadge').textContent = 'Cancelled';
-        announce(cancelMsg, true);
-        return;
+      if (!usedLegacyPipeline && created?.jobId) {
+        const jobId = created.jobId;
+        finalJobId = jobId;
+        studioState.activeJobId = jobId;
+
+        let statusData = null;
+        while (!abortCtrl.signal.aborted) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (abortCtrl.signal.aborted) break;
+          statusData = await fetchStudioAuthorizedJson(`/api/studio/jobs/${encodeURIComponent(jobId)}`, {
+            signal: abortCtrl.signal,
+          });
+          renderStudioStageProgress(statusData.stage, statusData.stageLabel, statusData.analysis || finalAnalysis);
+          if (statusData.status === 'completed' || statusData.status === 'failed' || statusData.status === 'cancelled') {
+            break;
+          }
+        }
+
+        if (abortCtrl.signal.aborted || statusData?.status === 'cancelled') {
+          const cancelMsg = 'Video generation cancelled. Your prompt and settings are preserved.';
+          if ($('#studioProgressText')) $('#studioProgressText').textContent = cancelMsg;
+          if ($('#studioCurrentStageBadge')) $('#studioCurrentStageBadge').textContent = 'Cancelled';
+          announce(cancelMsg, true);
+          return;
+        }
+
+        if (!statusData || statusData.status === 'failed') {
+          studioState.lastFailedJobId = jobId;
+          const completedCount = Array.isArray(statusData?.completedSceneNumbers) ? statusData.completedSceneNumbers.length : 0;
+          const preservedNote = completedCount > 0
+            ? ` (${completedCount} completed scene${completedCount > 1 ? 's' : ''} preserved for retry.)`
+            : '';
+          throw new Error((statusData?.error || 'AI generation failed.') + preservedNote);
+        }
+
+        finalAnalysis = statusData.analysis || finalAnalysis;
+        finalScenes = statusData.scenes || finalScenes;
+        finalDurationSec = statusData.durationSec || duration;
+
+        renderStudioStageProgress('exporting', 'Preparing Download', finalAnalysis);
+        videoBlob = await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/video`, abortCtrl.signal);
+        if (!videoBlob || videoBlob.size < 100) throw new Error('Generated video file could not be downloaded.');
+
+        narrationBlob = statusData.hasNarrationAudio
+          ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/narration`, abortCtrl.signal)
+          : null;
+        musicBlob = statusData.hasMusicAudio
+          ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/music`, abortCtrl.signal)
+          : null;
+        sfxBlob = statusData.hasSfxAudio
+          ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/sfx`, abortCtrl.signal)
+          : null;
+      } else {
+        // Resilient direct pipeline using /api/generate-video + /api/tts + /api/generate-music + VoiceCutMerge
+        // Works seamlessly even when the backend container has not yet updated to /api/studio/jobs!
+        const scenes = localPreviewPlan.scenes;
+        const sceneFiles = [];
+
+        for (let i = 0; i < scenes.length; i++) {
+          if (abortCtrl.signal.aborted) break;
+          const sc = scenes[i];
+          const cachedBlob = studioState.localSceneCache.get(i);
+          if (cachedBlob && (regenerateSceneIndex === null || regenerateSceneIndex !== i)) {
+            sceneFiles.push(new File([cachedBlob], `scene-${i + 1}.mp4`, { type: 'video/mp4' }));
+            continue;
+          }
+          renderStudioStageProgress(
+            'visuals',
+            scenes.length > 1 ? `Generating AI Visuals (Scene ${i + 1} of ${scenes.length})` : 'Generating AI Visuals',
+            finalAnalysis
+          );
+          const isSingle = scenes.length === 1;
+          const clipBlob = await requestServerJson('/api/generate-video', {
+            model: 'auto',
+            prompt: sc.visualPrompt,
+            aspectRatio: ['16:9', '9:16', '1:1'].includes(aspectRatio) ? aspectRatio : (aspectRatio === '4:5' ? '9:16' : '16:9'),
+            duration: sc.providerDurationSec,
+            imageDataUrl: i === 0 ? imageDataUrl : null,
+            includeSceneAudio: isSingle ? Boolean(finalAnalysis.sfxRequested) : Boolean(finalAnalysis.sfxRequested && i === 0),
+            sfxPrompt: finalAnalysis.sfxPrompt || '',
+            includeMusic: isSingle ? Boolean(finalAnalysis.musicRequested) : false,
+            musicPrompt: finalAnalysis.musicPrompt || '',
+            voiceLanguage: isSingle && finalAnalysis.narrationRequested ? finalAnalysis.narrationLanguage : 'none',
+            voiceGender: finalAnalysis.voiceGender || 'female',
+            voiceStyle: finalAnalysis.voiceStyle || 'auto',
+            narrationText: isSingle && finalAnalysis.narrationRequested ? finalAnalysis.narrationScript : '',
+          }, { timeoutMs: 360000, uploadConsent: Boolean(i === 0 && imageDataUrl) });
+
+          if (!(clipBlob instanceof Blob) || clipBlob.size < 100) {
+            studioState.lastFailedJobId = finalJobId;
+            throw new Error(`Scene ${i + 1} returned empty video data.`);
+          }
+          studioState.localSceneCache.set(i, clipBlob);
+          sceneFiles.push(new File([clipBlob], `scene-${i + 1}.mp4`, { type: 'video/mp4' }));
+        }
+
+        if (abortCtrl.signal.aborted) {
+          const cancelMsg = 'Video generation cancelled. Your prompt and settings are preserved.';
+          if ($('#studioProgressText')) $('#studioProgressText').textContent = cancelMsg;
+          if ($('#studioCurrentStageBadge')) $('#studioCurrentStageBadge').textContent = 'Cancelled';
+          announce(cancelMsg, true);
+          return;
+        }
+
+        if (finalAnalysis.narrationRequested && finalAnalysis.narrationScript) {
+          renderStudioStageProgress('narration', 'Generating Voice Narration', finalAnalysis);
+          try {
+            const ttsBlob = await requestServerJson('/api/tts', {
+              text: finalAnalysis.narrationScript,
+              language: finalAnalysis.narrationLanguage,
+              gender: finalAnalysis.voiceGender,
+              style: finalAnalysis.voiceStyle,
+              model: 'auto',
+            }, { timeoutMs: 90000 });
+            if (ttsBlob instanceof Blob && ttsBlob.size > 100) narrationBlob = ttsBlob;
+          } catch {}
+        }
+
+        if (scenes.length > 1 && finalAnalysis.musicRequested) {
+          renderStudioStageProgress('music', 'Generating Background Music', finalAnalysis);
+          try {
+            const mBlob = await requestServerJson('/api/generate-music', {
+              prompt: finalAnalysis.musicPrompt,
+              duration: Math.min(45, duration),
+              model: 'auto',
+            }, { timeoutMs: 120000 });
+            if (mBlob instanceof Blob && mBlob.size > 100) musicBlob = mBlob;
+          } catch {}
+        }
+
+        renderStudioStageProgress('assembling', 'Assembling Final Video', finalAnalysis);
+        if (sceneFiles.length === 1) {
+          videoBlob = sceneFiles[0];
+        } else {
+          videoBlob = await VoiceCutMerge.mergeMp4Files(sceneFiles, () => {});
+        }
+        renderStudioStageProgress('exporting', 'Preparing Download', finalAnalysis);
       }
-
-      if (!statusData || statusData.status === 'failed') {
-        studioState.lastFailedJobId = jobId;
-        const completedCount = Array.isArray(statusData?.completedSceneNumbers) ? statusData.completedSceneNumbers.length : 0;
-        const preservedNote = completedCount > 0
-          ? ` (${completedCount} completed scene${completedCount > 1 ? 's' : ''} preserved for retry.)`
-          : '';
-        throw new Error((statusData?.error || 'AI generation failed.') + preservedNote);
-      }
-
-      renderStudioStageProgress('exporting', 'Preparing Download', statusData.analysis);
-      const videoBlob = await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/video`, abortCtrl.signal);
-      if (!videoBlob || videoBlob.size < 100) throw new Error('Generated video file could not be downloaded.');
-
-      const narrationBlob = statusData.hasNarrationAudio
-        ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/narration`, abortCtrl.signal)
-        : null;
-      const musicBlob = statusData.hasMusicAudio
-        ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/music`, abortCtrl.signal)
-        : null;
-      const sfxBlob = statusData.hasSfxAudio
-        ? await fetchStudioAuthorizedBlob(`/api/studio/jobs/${encodeURIComponent(jobId)}/sfx`, abortCtrl.signal)
-        : null;
 
       if (studioState.completed?.videoUrl) URL.revokeObjectURL(studioState.completed.videoUrl);
       if (studioState.completed?.narrationUrl) URL.revokeObjectURL(studioState.completed.narrationUrl);
@@ -4519,22 +4647,22 @@
       const narrationUrl = narrationBlob ? URL.createObjectURL(narrationBlob) : null;
 
       studioState.completed = {
-        jobId,
+        jobId: finalJobId,
         videoBlob,
         videoUrl,
         narrationBlob,
         narrationUrl,
         musicBlob,
         sfxBlob,
-        analysis: statusData.analysis,
-        scenes: statusData.scenes || [],
-        durationSec: statusData.durationSec || duration,
+        analysis: finalAnalysis,
+        scenes: finalScenes || [],
+        durationSec: finalDurationSec || duration,
         prompt,
         aspectRatio,
       };
       studioState.lastFailedJobId = null;
 
-      renderStudioStageProgress('ready', 'Completed', statusData.analysis);
+      renderStudioStageProgress('ready', 'Completed', finalAnalysis);
       if ($('#studioCurrentStageBadge')) {
         $('#studioCurrentStageBadge').textContent = 'Completed';
         $('#studioCurrentStageBadge').className = 'badge success';
@@ -4556,10 +4684,10 @@
 
       // Narration preview (only when narration was requested & generated)
       const narBox = $('#studioNarrationPreviewBox');
-      if (narrationUrl && statusData.analysis?.narrationScript) {
+      if (narrationUrl && finalAnalysis?.narrationScript) {
         narBox?.classList.remove('hidden');
         if ($('#studioNarrationTranscript')) {
-          $('#studioNarrationTranscript').textContent = statusData.analysis.narrationScript;
+          $('#studioNarrationTranscript').textContent = finalAnalysis.narrationScript;
         }
         const narAudio = $('#studioNarrationAudio');
         if (narAudio) narAudio.src = narrationUrl;
@@ -4570,22 +4698,22 @@
       // Scene-level regenerate options when multi-scene
       const regenSelect = $('#studioRegenSceneSelect');
       const regenWrap = $('#studioRegenSceneWrap');
-      if (regenSelect && Array.isArray(statusData.scenes) && statusData.scenes.length > 1) {
+      if (regenSelect && Array.isArray(finalScenes) && finalScenes.length > 1) {
         regenSelect.innerHTML = '<option value="all">Regenerate Complete Video</option>' +
-          statusData.scenes.map((sc, i) => `<option value="${i}">Regenerate Scene ${sc.sceneNumber} (${Math.round(sc.durationSec)}s)</option>`).join('');
+          finalScenes.map((sc, i) => `<option value="${i}">Regenerate Scene ${sc.sceneNumber} (${Math.round(sc.durationSec)}s)</option>`).join('');
         regenWrap?.classList.remove('hidden');
       } else {
         regenWrap?.classList.add('hidden');
       }
 
-      const sceneCount = statusData.scenes?.length || 1;
+      const sceneCount = finalScenes?.length || 1;
       const summaryParts = [
         `${Math.round(studioState.completed.durationSec)}s`,
         aspectRatio,
         sceneCount > 1 ? `${sceneCount} scenes` : '1 scene',
-        statusData.analysis?.narrationRequested ? `Voice (${statusData.analysis.narrationLanguage.toUpperCase()})` : null,
-        statusData.analysis?.musicRequested ? 'Music' : null,
-        statusData.analysis?.sfxRequested ? 'SFX' : null,
+        finalAnalysis?.narrationRequested ? `Voice (${finalAnalysis.narrationLanguage.toUpperCase()})` : null,
+        finalAnalysis?.musicRequested ? 'Music' : null,
+        finalAnalysis?.sfxRequested ? 'SFX' : null,
       ].filter(Boolean);
       if ($('#studioPlanSummaryBadge')) $('#studioPlanSummaryBadge').textContent = summaryParts.join(' • ');
 
@@ -4758,16 +4886,45 @@
       imageDataUrl = c.toDataURL('image/jpeg', 0.88);
     }
 
-    onStatus?.('Analyzing continuation prompt and generating AI scene…');
-    const vidBlob = await requestServerJson('/api/studio/generate', {
+    onStatus?.('Generating AI continuation scene…');
+    const localPlan = VoiceCutStudio.analyzeCreativePromptLocally({
       prompt: cleanPrompt,
       mode: imageDataUrl ? 'image-to-video' : 'text-to-video',
       aspectRatio,
-      duration: targetSec,
-      imageDataUrl,
-    }, { timeoutMs: 420000, uploadConsent: Boolean(imageDataUrl) });
+      durationSec: targetSec,
+    });
+    let vidBlob = null;
+    try {
+      vidBlob = await requestServerJson('/api/studio/generate', {
+        prompt: cleanPrompt,
+        mode: imageDataUrl ? 'image-to-video' : 'text-to-video',
+        aspectRatio,
+        duration: targetSec,
+        imageDataUrl,
+      }, { timeoutMs: 420000, uploadConsent: Boolean(imageDataUrl) });
+    } catch (e) {
+      if (e.status === 404 || e.status === 405 || e.message === 'SERVICE_UNAVAILABLE') {
+        vidBlob = await requestServerJson('/api/generate-video', {
+          model: 'auto',
+          prompt: localPlan.scenes[0].visualPrompt,
+          aspectRatio: ['16:9', '9:16', '1:1'].includes(aspectRatio) ? aspectRatio : '16:9',
+          duration: Math.min(15, targetSec),
+          imageDataUrl,
+          includeSceneAudio: Boolean(localPlan.analysis.sfxRequested),
+          sfxPrompt: localPlan.analysis.sfxPrompt || '',
+          includeMusic: Boolean(localPlan.analysis.musicRequested),
+          musicPrompt: localPlan.analysis.musicPrompt || '',
+          voiceLanguage: localPlan.analysis.narrationRequested ? localPlan.analysis.narrationLanguage : 'none',
+          voiceGender: localPlan.analysis.voiceGender || 'female',
+          voiceStyle: localPlan.analysis.voiceStyle || 'auto',
+          narrationText: localPlan.analysis.narrationRequested ? localPlan.analysis.narrationScript : '',
+        }, { timeoutMs: 360000, uploadConsent: Boolean(imageDataUrl) });
+      } else {
+        throw e;
+      }
+    }
 
-    let planMeta = null;
+    let planMeta = localPlan.analysis;
     try {
       const rawHdr = lastResponseHeaders?.get?.('x-studio-plan');
       if (rawHdr) planMeta = JSON.parse(atob(rawHdr));

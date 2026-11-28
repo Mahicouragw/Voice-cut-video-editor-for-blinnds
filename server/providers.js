@@ -75,6 +75,24 @@ const EDGE_VOICES={
 const QWEN_TTS_LANGS={
   en:'English',zh:'Chinese',ja:'Japanese',ko:'Korean',fr:'French',de:'German',es:'Spanish',pt:'Portuguese',ru:'Russian',
 };
+const VOICE_DELIVERY_PROSODY={
+  auto:{rate:'+0%',pitch:'+0Hz',volume:'+0%',instruct:''},
+  cinematic:{rate:'-6%',pitch:'-2Hz',volume:'+4%',instruct:'Speak in a rich, cinematic, resonant narrator tone with deliberate dramatic pacing.'},
+  epic:{rate:'-8%',pitch:'-4Hz',volume:'+8%',instruct:'Speak in a powerful, epic, heroic movie-trailer narrator voice with commanding gravity.'},
+  intense:{rate:'+4%',pitch:'-2Hz',volume:'+8%',instruct:'Speak with intense, urgent, gripping energy and focused conviction.'},
+  serious:{rate:'-5%',pitch:'-3Hz',volume:'+2%',instruct:'Speak in a serious, authoritative, composed tone.'},
+  sad:{rate:'-12%',pitch:'-4Hz',volume:'-4%',instruct:'Speak in a gentle, somber, melancholic, softly emotional voice.'},
+  emotional:{rate:'-7%',pitch:'-1Hz',volume:'+2%',instruct:'Speak with warm, heartfelt, deeply moving emotion and empathy.'},
+  professional:{rate:'+0%',pitch:'+0Hz',volume:'+2%',instruct:'Speak in a crisp, clear, polished, professional presenter voice.'},
+  documentary:{rate:'-4%',pitch:'-2Hz',volume:'+2%',instruct:'Speak in a thoughtful, authoritative documentary narrator style.'},
+  storytelling:{rate:'-4%',pitch:'+1Hz',volume:'+2%',instruct:'Speak in an engaging, expressive, warm storytelling voice.'},
+  calm:{rate:'-10%',pitch:'-2Hz',volume:'-3%',instruct:'Speak in a calm, peaceful, soothing, meditative voice.'},
+  excited:{rate:'+7%',pitch:'+3Hz',volume:'+6%',instruct:'Speak in an inspiring, uplifting, enthusiastic, energetic voice.'},
+};
+function pickVoiceProsody(style='auto') {
+  const key=String(style||'auto').toLowerCase().trim();
+  return VOICE_DELIVERY_PROSODY[key]||VOICE_DELIVERY_PROSODY.auto;
+}
 function pickEdgeVoice(language,gender='female') {
   const code=String(language||'en').toLowerCase().slice(0,2);
   const entry=EDGE_VOICES[code]||EDGE_VOICES.en;
@@ -715,20 +733,21 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
       }
       throw lastErr||new ServiceError(503,'PROVIDER_QUOTA','Free AI music models are busy right now. Retry in a moment.');
     },
-    async synthesizeSpeech({text,language='en',gender='female',model='auto'},signal) {
+    async synthesizeSpeech({text,language='en',gender='female',style='auto',model='auto'},signal) {
       const clean=String(text||'').trim().slice(0,2500);
       if(!clean) throw new ServiceError(400,'EMPTY_TEXT','Enter narration text to speak.');
       const langCode=String(language||'en').toLowerCase().slice(0,2);
       const voice=pickEdgeVoice(langCode,gender);
+      const prosody=pickVoiceProsody(style);
       const picked=String(model||'auto').toLowerCase();
 
-      // 1. Free keyless Microsoft Edge Neural TTS v2 (msedge-tts >= 2.1.1 with v2 Sec-MS-GEC token; supports Telugu, Hindi, Tamil, English + 20+ languages).
+      // 1. Free keyless Microsoft Edge Neural TTS v2 (msedge-tts >= 2.1.1 with v2 Sec-MS-GEC token; supports Telugu, Hindi, Tamil, English + 20+ languages + prosody pitch/rate/volume).
       const runEdgeNeural=async()=>{
         const ttsLib=edgeTtsImpl||require('msedge-tts');
         const tts=new ttsLib.MsEdgeTTS();
         await tts.setMetadata(voice,ttsLib.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
         signal?.throwIfAborted();
-        const streamRes=await tts.toStream(clean);
+        const streamRes=await tts.toStream(clean,{rate:prosody.rate,pitch:prosody.pitch,volume:prosody.volume});
         const audioStream=streamRes.audioStream;
         const chunks=[];let total=0;
         try {
@@ -774,7 +793,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
         return {bytes:combined,mime:'audio/mpeg',voice:`google-${langCode}`,provider:'Google Translate TTS'};
       };
 
-      // 3. Free Hugging Face Qwen3-TTS 1.7B Space (supports Auto + major global languages).
+      // 3. Free Hugging Face Qwen3-TTS 1.7B Space (supports Auto + major global languages + expressive style instruct).
       const runQwen3Tts=async()=>{
         const {Client}=await loadGradioClient();
         const opts=hfToken?{token:hfToken}:{};
@@ -785,7 +804,7 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
           text:clean,
           language:qLang,
           speaker,
-          instruct:'',
+          instruct:prosody.instruct||'',
           model_size:'1.7B',
         });
         const mediaUrl=extractGradioMediaUrl(res?.data);
@@ -914,4 +933,4 @@ function createProviders({openaiKey,elevenKey,groqKey,deepgramKey,assemblyKey,cf
     },
   };
 }
-module.exports={createProviders,ServiceError,readBounded,pickEdgeVoice,IMAGE_SIZES,VIDEO_SIZES};
+module.exports={createProviders,ServiceError,readBounded,pickEdgeVoice,pickVoiceProsody,VOICE_DELIVERY_PROSODY,IMAGE_SIZES,VIDEO_SIZES};

@@ -1173,6 +1173,7 @@ const path = require('node:path');
   await page.locator('#studioScreen:not(.hidden)').waitFor();
   assert.equal(await page.evaluate(()=>document.activeElement && document.activeElement.id), 'studioTitle', 'TalkBack focus lands on Studio heading');
   assert.equal(await page.locator('#studioPromptInput').inputValue(), '', 'Prompt box starts empty with no prefilled examples');
+  assert.equal(await page.locator('#studioVoiceStyle').inputValue(), 'auto', 'Voice Style defaults to Auto');
   assert.match(await page.locator('#studioPromptInput').getAttribute('placeholder'), /Describe the video you want to create\. Include the story, scenes, camera movements, narration, language, background music, sound effects/);
 
   // Switch to Image to Video mode, upload an image, verify preview & remove, then switch back to Text to Video
@@ -1280,6 +1281,35 @@ const path = require('node:path');
   await showPanel('clips');
   await page.locator('#btnDeleteProject').click();await page.locator('#btnConfirmApply').click();
   await page.waitForFunction(()=>document.querySelector('#statusText').textContent==='Project deleted.');
+
+  // Verify resilient direct fallback when /api/studio/jobs returns 404 (e.g. rolling backend deploy) for 15-second video with Auto Epic narration
+  await page.locator('#btnHome').click();
+  await page.locator('#homeScreen:not(.hidden)').waitFor();
+  await page.locator('#homeGenerateVideo').click();
+  await page.locator('#studioScreen:not(.hidden)').waitFor();
+  await page.route('**/api/studio/jobs**', async (routeReq) => {
+    return routeReq.fulfill({ status: 404, contentType: 'text/html', headers: { 'Access-Control-Allow-Origin': '*' }, body: 'Cannot POST /api/studio/jobs' });
+  });
+  let directVidCount = 0;
+  let directTtsBody = null;
+  await page.route('**/api/generate-video', async (routeReq) => {
+    directVidCount++;
+    return routeReq.fulfill({ status: 200, contentType: 'video/mp4', headers: { 'Access-Control-Allow-Origin': '*' }, body: sampleVideoBytes });
+  });
+  await page.route('**/api/tts', async (routeReq) => {
+    directTtsBody = JSON.parse(routeReq.request().postData() || '{}');
+    return routeReq.fulfill({ status: 200, contentType: 'audio/mpeg', headers: { 'Access-Control-Allow-Origin': '*' }, body: sampleWavBytes });
+  });
+  await page.locator('#studioDuration').selectOption('15');
+  await page.locator('#studioVoiceStyle').selectOption('auto');
+  await page.locator('#studioPromptInput').fill('Create a 15 second epic mountain sunrise trailer with male voiceover narration.');
+  await page.locator('#btnStudioGenerate').click();
+  await page.locator('#studioResultCard:not(.hidden)').waitFor({ timeout: 25000 });
+  assert.equal(directVidCount, 2, '15s fallback generates 2 stitched AI video scenes without failing on 404');
+  assert.equal(directTtsBody?.style, 'epic', 'Auto voiceStyle detected epic from prompt and forwarded to /api/tts');
+  await page.unroute('**/api/studio/jobs**');
+  await page.unroute('**/api/generate-video');
+  await page.unroute('**/api/tts');
 
   assert.deepEqual(errors,[]);
   console.log('PASS: home/library/settings router, no-project editor guard, rename/reopen, reload/project restore, prefs, in-app back/forward, section navigation, delete+undo, microphone recording with preview+apply, Voice Focus and Ultra NR, typed delete-range, on-device neural cleanup with scan, mocked cloud captions with consent and friendly Retry, mocked isolation then local-NN denoise auto-selection, reviewed SRT/VTT, caption overlay, crop/rotate/freeze export verification, plain export with burn-in, cancel, keyboard, filename escaping, delete storage, caption counter/prev/next/read-all with language warning, notifications pref plus hidden-tab bridge, silence gap preview plus removal with progress, buried-voice rescue notify on failure, clip reverse, audio merge with undo, video reverse download, marked-range split/delete/keep, noise/voice balance sliders, camera video recording, text size, large-file on-device routing, on-device silence cut, large-file captions, 30-minute part-based cleanup, retained duration displays, chunked app file transfer, clarity plus ultra finish, simple editor panels, voice changer, video looks, smart ducking, talkback cursor, ducking levels, ducking wait, sound effects, retained export, record rescue, mic fallback, audio-only export, mp4 h264 direct, mvhd durations, voice filter dsp, clip export audio, vo record effect, processing opt-in, speed ranges, speed position buttons, export ended guard, export audio fidelity, merge videos, time steppers, music re-upload track numbers, export shapes, original orientation, rotated merge');
